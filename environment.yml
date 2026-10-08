@@ -1,0 +1,18 @@
+name: em-pipe
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy
+  - scipy
+  - pandas
+  - pyyaml
+  - tifffile
+  - scikit-image
+  - pywavelets
+  - matplotlib
+  - pytest
+  - pip
+  - pip:
+      - opencv-python-headless
+      - tensorstore
