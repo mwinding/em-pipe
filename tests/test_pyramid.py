@@ -52,7 +52,7 @@ def read(root, scale):
 
 
 def markers(root, scale):
-    return sorted(p.name for p in (root.parent / "done").glob(f"s{scale}_*"))
+    return sorted(p.name for p in (root.parent / "test" / "done").glob(f"s{scale}_*"))
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 1), (2, 2, 2), (3, 5, 7), (6, 9, 4), (5, 1, 11)])
@@ -98,7 +98,7 @@ def test_task_takes_strided_shards(volume):
 
 
 def marker_times(root):
-    return {p.name: p.stat().st_mtime for p in (root.parent / "done").iterdir()}
+    return {p.name: p.stat().st_mtime for p in (root.parent / "test" / "done").iterdir()}
 
 
 def test_skip_done_and_overwrite(volume):
@@ -111,7 +111,7 @@ def test_skip_done_and_overwrite(volume):
     assert (read(root, 1) == 7).all()
 
     boxes = omezarr.shard_boxes(expected.shape, SHARD)
-    (root.parent / "done" / "s1_000002").unlink()
+    (root.parent / "test" / "done" / "s1_000002").unlink()
     run(cfg, 1)                                # only the shard without a marker is redone
     got = read(root, 1)
     for i, box in enumerate(boxes):
@@ -143,7 +143,7 @@ def test_rewritten_source_shard_redoes_dependent_shards(volume):
 def test_recreated_volume_invalidates_markers(volume):
     cfg, root, _ = volume((20, 40, 36))
     run(cfg, 1)
-    stamp = (root.parent / "done" / "s1_000000").stat().st_mtime
+    stamp = (root.parent / "test" / "done" / "s1_000000").stat().st_mtime
     _, _, data = volume((20, 40, 36), seed=5)   # render init again, new s0
     assert (root / "s1" / "zarr.json").stat().st_mtime > stamp
     run(cfg, 1)
@@ -156,7 +156,7 @@ def test_requires_previous_scale_complete(volume):
     assert pyramid.main(args + ["2"]) == 1     # s1 not built yet
     assert markers(root, 2) == []
     run(cfg, 1)
-    os.remove(root.parent / "done" / "s1_000001")
+    os.remove(root.parent / "test" / "done" / "s1_000001")
     assert pyramid.main(args + ["2"]) == 1     # s1 incomplete
     run(cfg, 1)
     assert pyramid.main(args + ["2"]) == 0
@@ -170,7 +170,7 @@ def test_task_checks_only_the_shards_it_reads(volume):
     # reads s1 grid (2, 2, 0..1) = shards 16, 17; s2 shard 0 reads s1 grid (0..1, 0..1, 0..1).
     cfg, root, data = volume((37, 70, 53))
     run(cfg, 1)
-    os.remove(root.parent / "done" / "s1_000016")
+    os.remove(root.parent / "test" / "done" / "s1_000016")
     task = ["run", "--scale", "2", "--config", str(cfg), "--num-tasks", "4", "--task-id"]
     assert pyramid.main(task + ["3"]) == 1
     for t in (0, 1, 2):

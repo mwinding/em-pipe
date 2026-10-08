@@ -1,14 +1,16 @@
 """Render: apply every correction once and write the volume's scale 0 as OME-Zarr.
 
 ``init`` (single job) freezes the output: per selected (z, tile) the composite transform
-tile pixel -> aligned (``align ∘ stitch``) and the intensity levels go to ``render/tiles.csv``
+tile pixel -> aligned (``align ∘ stitch``) and the intensity levels go to ``tiles.csv``
 (columns z, tile, file, index, height, width, a, b, tx, c, d, ty, lo, hi); the canvas, voxel
 size, source slices of every output plane and the pixel-affecting settings go to
-``render/render.json``; and the empty multiscale volume is created. ``run`` (array over
+``render.json``; and the empty multiscale volume is created. These files and the done markers
+live in the volume's own work folder ``render/<name without .ome.zarr>/`` (``volume_paths``),
+so several renders, e.g. a 32 nm overview and a full-resolution region, can share an output_dir. ``run`` (array over
 z-slabs of ``render.slab`` planes = one shard) renders slabs from that frozen plan only, so a
 config edit between init and run cannot mix geometries; re-running init detects changed
 inputs or settings via the digest in render.json. A finished slab leaves
-``render/done/slab_{k:06d}`` holding that digest; markers of any other plan do not count.
+``<work folder>/done/slab_{k:06d}`` holding that digest; markers of any other plan do not count.
 
 Geometry: output pixel (row i, col j) at downsample f is the mean of the aligned pixels
 ``origin_xy + (f*j, f*i) + [0, f)``. Pixel centres sit at integer coordinates (as in OpenCV).
@@ -55,6 +57,14 @@ DEFAULTS = {
         "threads": 8,               # tiles rendered concurrently (does not change the output)
     }
 }
+
+
+def volume_paths(cfg):
+    """(volume, work folder) for render.name: output_dir/render/<name> and output_dir/render/<stem>/,
+    which holds this volume's render.json, tiles.csv and done/ markers."""
+    name = str((cfg.get("render") or {}).get("name") or DEFAULTS["render"]["name"])
+    rdir = step_dir(cfg, "render")
+    return rdir / name, rdir / name.removesuffix(".zarr").removesuffix(".ome")
 
 
 # ----- init -----------------------------------------------------------------------------
@@ -217,8 +227,9 @@ def init(cfg, overwrite=False):
     digest.update(plan.to_csv(index=False).encode())
     meta["digest"] = digest.hexdigest()
 
-    rdir = step_dir(cfg, "render")
-    meta_path, root = rdir / "render.json", rdir / s["name"]
+    root, wdir = volume_paths(cfg)
+    wdir.mkdir(parents=True, exist_ok=True)
+    meta_path = wdir / "render.json"
     old = json.loads(meta_path.read_text()) if meta_path.exists() else {}
     if old and not overwrite:
         if old.get("digest") == meta["digest"] and (root / "zarr.json").exists():
@@ -227,16 +238,13 @@ def init(cfg, overwrite=False):
         log.error("render inputs or settings changed since %s was written: re-run init with "
                   "--overwrite to re-create %s (deletes everything rendered so far)", meta_path, root)
         return 1
-    if old.get("volume", s["name"]) != s["name"] and (rdir / old["volume"]).exists():
-        log.warning("%s (previous render.name) is left in place but no longer tracked by render.json "
-                    "or done/ markers: delete it if it is not needed", rdir / old["volume"])
     # render.json goes last: it marks a complete init.
     meta_path.unlink(missing_ok=True)
-    shutil.rmtree(rdir / "done", ignore_errors=True)
+    shutil.rmtree(wdir / "done", ignore_errors=True)
     shutil.rmtree(root, ignore_errors=True)
     omezarr.create(root, meta["shape"], meta["voxel_nm"], num_scales=s["num_scales"], chunk=s["chunk"],
                    shard=meta["shard"], compression=s["compression"], name=cfg.get("name") or "volume")
-    atomic_write(rdir / "tiles.csv", lambda p: plan.to_csv(p, index=False))
+    atomic_write(wdir / "tiles.csv", lambda p: plan.to_csv(p, index=False))
     atomic_write(meta_path, lambda p: Path(p).write_text(json.dumps(meta, indent=1)))
     n_slabs = math.ceil(meta["shape"][0] / s["slab"])
     log.info("created %s: shape %s (z, y, x), voxel %s nm, origin %s, %d slices -> %d planes in %d slabs "
@@ -414,12 +422,12 @@ def _done(marker, digest):
 
 def run(cfg, task_id, num_tasks, overwrite=False):
     """Render this task's slabs (strided) that have no done marker for the current plan yet."""
-    rdir = step_dir(cfg, "render")
-    meta_path = rdir / "render.json"
+    root, wdir = volume_paths(cfg)
+    meta_path = wdir / "render.json"
     if not meta_path.exists():
         raise FileNotFoundError(f"{meta_path} not found: run `pipeline.render init` first")
     meta = json.loads(meta_path.read_text())
-    arr = omezarr.open_scale(rdir / meta["volume"], 0)
+    arr = omezarr.open_scale(root, 0)
     slab = int(meta["settings"]["slab"])
     if omezarr.shard_shape(arr)[0] != slab:
         raise ValueError(f"render.slab {slab} != shard z {omezarr.shard_shape(arr)[0]} of {meta['volume']}: "
@@ -427,12 +435,12 @@ def run(cfg, task_id, num_tasks, overwrite=False):
     n, H, W = meta["shape"]
     sy = omezarr.shard_shape(arr)[1]
     mine = my_chunks(list(range(math.ceil(n / slab))), task_id, num_tasks)
-    marker = {k: rdir / "done" / f"slab_{k:06d}" for k in mine}
+    marker = {k: wdir / "done" / f"slab_{k:06d}" for k in mine}
     todo = [k for k in mine if overwrite or not _done(marker[k], meta["digest"])]
     log.info("task %d/%d: %d of my %d slabs to render", task_id, num_tasks, len(todo), len(mine))
     if not todo:
         return 0
-    plan = pd.read_csv(rdir / "tiles.csv", dtype={"tile": str, "file": str})
+    plan = pd.read_csv(wdir / "tiles.csv", dtype={"tile": str, "file": str})
     if plan[["lo", "hi"]].isna().any(axis=None):
         log.warning("some tile slices have no intensity levels: using their own p0.5/p99.5")
     with ThreadPoolExecutor(max(1, int(cfg["render"]["threads"]))) as pool:

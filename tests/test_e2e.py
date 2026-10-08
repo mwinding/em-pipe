@@ -169,7 +169,7 @@ def test_align_recovers_drift(main_run):
 
 def test_render_matches_truth_without_tile_seams(main_run):
     truth, out = main_run
-    meta = json.loads((out / "render" / "render.json").read_text())
+    meta = json.loads((out / "render" / "volume" / "render.json").read_text())
     s0 = read_scales(out)[0]
     assert s0.shape == tuple(meta["shape"]) and s0.shape[0] == N
     sl = pd.read_csv(out / "check" / "slices.csv", dtype={"tile": str})
@@ -202,7 +202,7 @@ def test_render_matches_truth_without_tile_seams(main_run):
 
 def test_missing_tile_area_filled_by_neighbours(main_run):
     truth, out = main_run
-    meta = json.loads((out / "render" / "render.json").read_text())
+    meta = json.loads((out / "render" / "volume" / "render.json").read_text())
     s0 = read_scales(out)[0]
     for z, t in enumerate(truth.timestamps):
         if t.day != 24:   # tile 1-1 is the excluded copy on day 1 only
@@ -224,7 +224,7 @@ def test_pyramid_scales_are_means_of_s0(main_run):
         np.testing.assert_array_equal(scales[s], pyramid.downsample(scales[s - 1]))
         n_shards = len(omezarr.shard_boxes(scales[s].shape, omezarr.shard_shape(
             omezarr.open_scale(out / "render" / "volume.ome.zarr", s))))
-        assert len(list((out / "render" / "done").glob(f"s{s}_*"))) == n_shards
+        assert len(list((out / "render" / "volume" / "done").glob(f"s{s}_*"))) == n_shards
 
 
 # ----- second run: destreak and zcorrect inside render -----------------------------------------
@@ -252,7 +252,7 @@ def test_zcorrect_positions_drive_the_planes(corrected_run):
     p = pos["position_nm"].to_numpy()
     assert p[0] == 0 and (np.diff(p) > 0).all()
     assert p[-1] == pytest.approx(8.0 * (n - 1), rel=0.02)   # mean spacing is held at nominal
-    meta = json.loads((out / "render" / "render.json").read_text())
+    meta = json.loads((out / "render" / "volume" / "render.json").read_text())
     assert meta["zcorrected"] and meta["voxel_nm"] == [8.0, 8.0, 8.0]
     assert len(meta["planes"]) == int(np.floor((p[-1] - p[0]) / 8.0 + 1e-6)) + 1
     for k, plane in enumerate(meta["planes"]):
@@ -264,7 +264,7 @@ def test_zcorrect_positions_drive_the_planes(corrected_run):
 
 def test_destreak_removes_stripes_in_render(corrected_run):
     truth, out = corrected_run
-    meta = json.loads((out / "render" / "render.json").read_text())
+    meta = json.loads((out / "render" / "volume" / "render.json").read_text())
     assert meta["destreak"]["enabled"]
     s0 = read_scales(out)[0]
     raw = tifffile.imread(truth.raw_dir / "M09_D24_tile0-0.tif").astype(float)

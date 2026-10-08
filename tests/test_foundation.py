@@ -139,3 +139,27 @@ def test_selection_is_local_time_when_timezone_set():
     assert select(df, sel, "Europe/London")["z"].tolist() == [1, 2]
     assert select(df, sel)["z"].tolist() == [2, 3]          # no timezone: times compared as written
     assert select(df, {"start": "2026-10-25 01:30:00"}, "Europe/London")["z"].tolist() == [4, 5]
+
+
+def test_read_blocks_match_tifffile(tmp_path):
+    """Every read path (whole slice, wide block, narrow strip, steps, ints) equals tifffile's array."""
+    import synth
+    data = np.random.default_rng(3).integers(0, 65535, (3, 50, 64), dtype=np.uint16)
+    path = tmp_path / "s.tif"
+    synth.write_imagej(path, data, [f"l{i}" for i in range(3)])
+    st = ImageJStack(path)
+    for rows, cols in [(slice(None), slice(None)), (slice(5, 40), slice(2, 60)), (slice(0, 50), slice(10, 14)),
+                       (slice(3, 30, 2), slice(1, 63, 3)), (slice(10, 10), slice(0, 5)), (slice(45, 99), slice(60, 70)),
+                       (slice(None, None, -1), slice(5, 9)), (7, slice(0, 64))]:
+        np.testing.assert_array_equal(st.read(2, rows, cols), data[2][rows, cols])
+    assert st.read(1, slice(0, 50), slice(10, 14)).dtype.isnative
+
+
+def test_read_truncated_slice_raises(tmp_path):
+    import synth
+    truth = synth.make_dataset(tmp_path / "raw", n_slices=4, faults={"truncate": [("M09_D24", "1-1", 1000)]})
+    name = [n for n in truth.files if "tile1-1" in n][0]
+    st = ImageJStack(truth.raw_dir / name)
+    st.read(st.n - 2)
+    with pytest.raises(EOFError):
+        st.read(st.n - 1)

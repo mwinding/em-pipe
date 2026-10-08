@@ -110,18 +110,56 @@ class ImageJStack:
         return self._memmap
 
     def read(self, i, rows=slice(None), cols=slice(None)):
-        """Slice ``i`` (optionally a block of it) as a native-endian array copy."""
+        """Slice ``i`` (optionally a block of it) as a native-endian array copy.
+
+        Contiguous stacks are read with plain file reads into a fresh buffer rather than through
+        the memmap: pages read through a mapping stay counted in the process's resident memory,
+        so a task reading many 354 MB slices would look like it uses tens of GB.
+        """
         if not 0 <= i < self.n:
             raise IndexError(f"{self.path}: slice {i} out of range 0..{self.n - 1}")
-        if self.contiguous:
-            block = self._memmap[i, rows, cols]
-        else:
+        native = self.dtype.newbyteorder("=")
+        if not self.contiguous:
             with tifffile.TiffFile(self.path) as tif:
                 block = tif.pages[i].asarray()[rows, cols]
-        return np.ascontiguousarray(block).astype(self.dtype.newbyteorder("="), copy=False)
+            return np.ascontiguousarray(block).astype(native, copy=False)
+        if not (isinstance(rows, slice) and isinstance(cols, slice)):
+            return self.read(i)[rows, cols]
+        r0, r1, rs = rows.indices(self.height)
+        c0, c1, cs = cols.indices(self.width)
+        if rs < 0 or cs < 0:   # reversed steps: not used by the pipeline, keep it simple
+            return self.read(i)[rows, cols]
+        nr, nc = max(0, r1 - r0), max(0, c1 - c0)
+        item, w = self.dtype.itemsize, self.width
+        base = self.data_offset + i * self.slice_bytes
+        with open(self.path, "rb", buffering=0) as fh:
+            if nr == 0 or nc == 0:
+                out = np.empty((nr, nc), self.dtype)
+            elif 4 * nc >= w:   # wide block: whole rows in one read, then crop
+                out = np.empty((nr, w), self.dtype)
+                _read_into(fh, base + r0 * w * item, memoryview(out).cast("B"), self.path)
+                out = out[:, c0:c1]
+            else:               # narrow strip: one read per row
+                out = np.empty((nr, nc), self.dtype)
+                buf, step = memoryview(out).cast("B"), nc * item
+                for k in range(nr):
+                    _read_into(fh, base + ((r0 + k) * w + c0) * item, buf[k * step:(k + 1) * step], self.path)
+        out = out[::rs, ::cs]
+        return np.ascontiguousarray(out).astype(native, copy=False) if out.dtype != native else np.ascontiguousarray(out)
 
     def read_raw_bytes(self, offset, length):
         """Raw bytes from the pixel data section (for cheap content hashing)."""
         with open(self.path, "rb") as fh:
             fh.seek(self.data_offset + offset)
             return fh.read(length)
+
+
+def _read_into(fh, offset, buf, path):
+    """Fill ``buf`` from ``offset``; network filesystems may return short reads."""
+    fh.seek(offset)
+    done = 0
+    while done < len(buf):
+        n = fh.readinto(buf[done:])
+        if not n:
+            raise EOFError(f"{path}: file ends before byte {offset + len(buf)} (truncated?)")
+        done += n

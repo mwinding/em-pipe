@@ -95,7 +95,7 @@ def _read(out):
 
 
 def _meta(out):
-    return json.loads((out / "render" / "render.json").read_text())
+    return json.loads((out / "render" / "volume" / "render.json").read_text())
 
 
 def _aligned(truth, zs):
@@ -143,7 +143,7 @@ def test_render_matches_ground_truth(truth, full):
     assert meta["origin_xy"] == [0, 0] and meta["shape"] == list(vol.shape)
     assert meta["voxel_nm"] == [8.0, 8.0, 8.0] and meta["downsample"] == 1 and not meta["zcorrected"]
     assert meta["planes"] == [[[z, 1.0]] for z in range(N)]
-    assert sorted(p.name for p in (out / "render" / "done").iterdir()) == ["slab_000000", "slab_000001",
+    assert sorted(p.name for p in (out / "render" / "volume" / "done").iterdir()) == ["slab_000000", "slab_000001",
                                                                           "slab_000002"]
     root = out / "render" / "volume.ome.zarr"
     ome = json.loads((root / "zarr.json").read_text())["attributes"]["ome"]
@@ -313,7 +313,7 @@ def test_tasks_markers_and_reinit(truth, full, tmp_path):
     args = ["--config", str(cfg)]
     assert render.main(["init", *args]) == 0
     assert render.main(["run", *args, "--task-id", "1", "--num-tasks", "2"]) == 0
-    done = out / "render" / "done"
+    done = out / "render" / "volume" / "done"
     assert [p.name for p in done.iterdir()] == ["slab_000001"]
     assert render.main(["run", *args, "--task-id", "0", "--num-tasks", "2"]) == 0
     np.testing.assert_array_equal(_read(out), ref)
@@ -475,3 +475,27 @@ def test_rotated_alignment_uses_warp(truth, tmp_path, f):
     exp, cov = exp.reshape(blocks).mean(axis=(1, 3, 5)), cov.reshape(blocks).all(axis=(1, 3, 5))
     assert _corr(vol[cov], exp[cov]) > 0.99
     assert np.abs(vol[cov] - exp[cov]).mean() < (3 if f == 1 else 2)
+
+
+def test_two_volumes_share_output_dir(truth, full, tmp_path):
+    """A full-resolution region next to an overview in one output_dir: each volume keeps its own
+    plan and done markers (they used to share render/render.json and render/done/, so the second
+    volume's init was refused and its run silently skipped every slab)."""
+    import yaml
+    cfg, out = _setup(tmp_path, truth, render={"downsample": 2})
+    _render(cfg)
+    roi = yaml.safe_load(cfg.read_text())
+    roi["render"] = {**roi["render"], "downsample": 1, "name": "roi.ome.zarr", "bbox": [10, 10, 60, 50]}
+    cfg_roi = tmp_path / "roi.yaml"
+    cfg_roi.write_text(yaml.safe_dump(roi))
+    _render(cfg_roi)
+
+    small = omezarr.open_scale(out / "render" / "roi.ome.zarr", 0).read().result()
+    full_out, full_vol = full
+    ox, oy = _meta(full_out)["origin_xy"]
+    x0, y0 = 10 - int(ox), 10 - int(oy)
+    assert small.shape == (N, 40, 50)
+    assert np.abs(small.astype(int) - full_vol[:, y0:y0 + 40, x0:x0 + 50]).max() <= 1
+    assert json.loads((out / "render" / "roi" / "render.json").read_text())["downsample"] == 1
+    assert _meta(out)["downsample"] == 2 and _read(out).shape[1] < full_vol.shape[1]
+    assert render.main(["init", "--config", str(cfg)]) == 0   # overview plan untouched: kept

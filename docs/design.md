@@ -160,14 +160,17 @@ All paths are relative to `output_dir`.
 ### render/
 - `<render.name>` (default `volume.ome.zarr`) — OME-Zarr 0.5 (Zarr v3, `sharding_indexed`), uint8,
   scales `s0..sN`, axes z, y, x in nanometres; written with tensorstore.
-- `tiles.csv` — the plan frozen by `init`, one row per selected (z, tile): `z, tile, file, index,
+- `<stem>/` — the volume's work folder (`<stem>` = render.name without `.ome.zarr`, e.g. `volume/`),
+  holding the three items below. Per volume, so several renders (e.g. a 32 nm overview and a
+  full-resolution region with its own `render.name` and `render.bbox`) can share one output_dir.
+- `<stem>/tiles.csv` — the plan frozen by `init`, one row per selected (z, tile): `z, tile, file, index,
   height, width, a, b, tx, c, d, ty` (tile pixel → aligned = align ∘ stitch, rounded when
   `integer_shifts`), `lo, hi` (NaN where intensity has no levels: the tile's own p0.5/p99.5 is used).
-- `render.json` — `volume, origin_xy` (aligned px of output pixel (0, 0)), `canvas_size_xy, shape
+- `<stem>/render.json` — `volume, origin_xy` (aligned px of output pixel (0, 0)), `canvas_size_xy, shape
   [z, y, x], voxel_nm [z, y, x]` (× downsample), `downsample, zcorrected, shard, settings` (render
   section minus threads), `destreak` (section or null), `planes` (`[[z, weight], ...]` per plane),
   `digest` (of all the above and tiles.csv). `run` reads only these and the raw tiles.
-- `done/slab_{k:06d}` — render's marker per finished slab, holding the digest (counts only for the
+- `<stem>/done/slab_{k:06d}` — render's marker per finished slab, holding the digest (counts only for the
   current plan); `done/s{s}_{index:06d}` — pyramid's marker per shard of scale s (index in
   `omezarr.shard_boxes` C order), valid only if newer than `s{s}/zarr.json` and its source shards.
 - `init` with unchanged inputs and settings does nothing; if they changed it exits 1 unless

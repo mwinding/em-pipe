@@ -3,7 +3,7 @@
 render init creates every scale's array and render run fills s0. ``run --scale s`` fills
 scale s from scale s-1, one whole shard per write, so scale s-1 must be complete: one job
 per scale, each after the previous; its array tasks take the shards strided.
-Each finished shard leaves ``render/done/s{s}_{index:06d}`` (index in omezarr.shard_boxes
+Each finished shard leaves ``<render work folder>/done/s{s}_{index:06d}`` (index in omezarr.shard_boxes
 order). A marker counts only if it is newer than its scale array (so render init redoes the
 pyramid) and than the s-1 shard files it was pooled from (so shards whose source was
 re-rendered, or written late, are redone without --overwrite).
@@ -20,12 +20,8 @@ import numpy as np
 
 from . import omezarr
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info
-from .config import step_dir
 
-try:  # render's defaults supply render.name; pyramid also works on a volume made without it
-    from .render import DEFAULTS as RENDER_DEFAULTS
-except ImportError:
-    RENDER_DEFAULTS = {}
+from .render import DEFAULTS as RENDER_DEFAULTS, volume_paths
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +31,7 @@ DEFAULTS = {"pyramid": {}}
 
 def volume_path(cfg):
     """output_dir/render/<render.name>."""
-    return step_dir(cfg, "render", cfg.get("render", {}).get("name", "volume.ome.zarr"))
+    return volume_paths(cfg)[0]
 
 
 def downsample(block):
@@ -78,7 +74,7 @@ def run(cfg, args):
         return 1
     src, dst = omezarr.open_scale(root, s - 1), omezarr.open_scale(root, s)
     src_shard = omezarr.shard_shape(src)
-    done = step_dir(cfg, "render", "done")
+    done = volume_paths(cfg)[1] / "done"
     created = _mtime(root / f"s{s}" / "zarr.json")
     boxes = omezarr.shard_boxes(dst.shape, omezarr.shard_shape(dst))
     task_id, num_tasks = task_info(args)
