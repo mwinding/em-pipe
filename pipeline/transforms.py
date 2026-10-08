@@ -39,8 +39,10 @@ def apply(A, pts):
 
 
 def is_translation(A, tol=1e-9):
+    """True if the linear part is the identity to within ``tol`` (absolute: a relative tolerance
+    would accept a scale of 1 + 1e-5, 0.14 px across a real tile)."""
     A = np.asarray(A, float)
-    return np.allclose(A[:, :2], np.eye(2), atol=tol)
+    return bool(np.all(np.abs(A[:, :2] - np.eye(2)) <= tol))
 
 
 def corners(width, height):

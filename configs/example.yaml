@@ -1,0 +1,137 @@
+# em-pipe dataset config: every section and key with its default value.
+# A dataset config only needs raw_dir and output_dir plus the keys it changes; everything else
+# falls back to these defaults (defined in pipeline/config.py and each pipeline/<step>.py).
+# Run everything on Slurm:  ./run_pipeline.sh configs/<dataset>.yaml [--dry-run]
+
+name: null                   # dataset name for report and plot titles and the OME-Zarr metadata
+raw_dir: /path/to/raw        # folder of daily ImageJ TIFF exports (searched recursively); never written to
+output_dir: /path/to/output  # every step writes into output_dir/<step>/
+
+raw:
+  # Daily export files, e.g. M10_D06_tile1-1.tif or M09_D23_tile0-0_part2.tif
+  file_pattern: '^M(?P<month>\d{2})_D(?P<day>\d{2})_tile(?P<row>\d+)-(?P<col>\d+)(?:_part(?P<part>\d+))?\.tif$'
+  # Per-slice ImageJ labels, e.g. G460-0186_26-10-06_000146_0-1-1_InLens_raw.tif
+  label_pattern: '^(?P<instrument>.+?)_(?P<date>\d{2}-\d{2}-\d{2})_(?P<time>\d{6})_(?P<group>\d+)-(?P<row>\d+)-(?P<col>\d+)_(?P<detector>[^_]+)_raw\.tif$'
+  label_time_format: '%y-%m-%d_%H%M%S'   # applied to "{date}_{time}" from the label pattern
+  recursive: true                        # also search subfolders of raw_dir
+
+# Restricts every step after check. Keys: start, end (timestamps, inclusive, e.g. '2026-10-01 00:00:00'),
+# z_start, z_end (global slice index, inclusive). Empty: everything.
+selection: {}
+
+check:
+  voxel_size_nm: null        # expected voxel size in nm (number, or [x, y, z]); files off by >1% get a WARN. null: no check
+  gap_factor: 1.5            # TIME_GAP when the interval between slices exceeds gap_factor x the segment's median interval
+  min_age_minutes: 60        # files modified more recently are still being written/copied: pending, not read
+  hash_bytes: 1048576        # bytes hashed from the middle of slices 0, n/2, n-1 to detect copied tiles (max half a slice)
+  threads: 8                 # parallel header reads (latency bound on network storage)
+  # Time zone of the label clock, e.g. Europe/London: label times are converted to UTC so slices stay in
+  # order when the clocks go back (selection start/end stay local). null: times as written
+  timezone: null
+  # Acknowledged problems: [{file, note, action: exclude|ignore}]; exclude drops the file's slices.
+  # file is the path relative to raw_dir or just the file name.
+  known_issues: []
+
+preview:
+  factor: 16                 # downsampling factor (area average) for stats and thumbnails
+  chunk_slices: 50           # z per array-task chunk (fixed blocks of global z, split at segment changes)
+  sheet_slices: 6            # evenly spaced slices shown on each daily contact sheet
+
+stitch:
+  sample_every: 50           # stitch every n-th selected z of a segment (plus its ends and seams)
+  coarse_factor: 8           # downsampling of whole tiles for the overlap search
+  fine_factor: 2             # downsampling of the full-res overlap strips for the final matches
+  fine_margin_px: 200        # full-res margin added around the coarse overlap for fine matching
+  model: translation         # translation | rigid | similarity | affine (pairs and per-tile solve)
+  mode: auto                 # fixed (one transform per tile and segment) | per_slice | auto
+  fixed_tolerance_px: 2.0    # auto -> fixed if no tile's sampled offset is further than this from its median
+  ratio: 0.8                 # Lowe ratio test
+  ransac_px: 3.0             # RANSAC inlier distance, in pixels of the image being matched
+  min_inliers: 12            # fewer RANSAC inliers -> pair rejected
+  max_points_per_pair: 200   # inlier correspondences per pair used in the solve
+  max_features: 20000        # SIFT keypoints kept per image (strongest)
+
+align:
+  scale: 0.25                # detect features on tiles downsampled to this fraction
+  neighbors: 4               # match each slice to this many following selected slices
+  chunk_slices: 100          # global z per array-task chunk (bounds at multiples of this)
+  max_features: 8000         # SIFT features per tile (at the detection scale)
+  ratio: 0.8                 # Lowe ratio test
+  ransac_model: rigid        # translation | rigid | similarity | affine, per tile pair
+  ransac_px: 2.0             # RANSAC inlier threshold in detection-scale pixels
+  min_inliers: 12            # tile pairs with fewer RANSAC inliers are dropped
+  max_points_per_pair: 100   # inliers kept per (slice pair, tile), spread over the tile
+  model: translation         # per-slice transform: translation | affine
+  affine_regularization: 0.1 # affine: pull of the linear part toward identity, relative to the data
+  robust_iterations: 3       # rounds of outlier rejection + re-solve
+  reject_px: 4.0             # never reject points whose residual is below this (full-res px)
+  anchor: first              # first (first selected slice = identity) | mean (mean translation 0)
+  remove_trend: none         # none | linear | lowpass: remove slow drift (steps at seams are kept)
+  trend_window_slices: 2000  # lowpass: Gaussian FWHM in slices
+
+intensity:
+  lo_percentile: 0.5         # preview percentile rendered as 0 (one of 0.5, 1, 50, 99, 99.5)
+  hi_percentile: 99.5        # preview percentile rendered as 255
+  smooth_slices: 51          # running-median window over z, in selected slices
+  break_at_seams: true       # restart smoothing at seams (it always restarts at segment changes)
+  balance_tiles: true        # match brightness of overlapping tiles (needs stitch/tiles.csv)
+  balance_every: 10          # measure tile overlaps every N selected slices
+
+# Curtaining removal inside render. Tune first: python -m pipeline.destreak test --config C --z Z --tile r-c
+destreak:
+  enabled: false             # apply inside render
+  direction: vertical        # stripes run along y (vertical) or along x (horizontal)
+  wavelet: db4               # pywt wavelet name
+  levels: 6                  # wavelet decomposition levels (capped by the image size)
+  sigma: 4.0                 # width of the Gaussian notch in FFT bins; larger removes more
+
+zcorrect:
+  enabled: false             # run zcorrect and let render use positions.csv
+  chunk_slices: 200          # selected slices per array chunk in `run`
+  max_distance: 8            # compare each slice with its next N selected slices
+  crop_px: 1024              # square crop per tile (full-resolution px), centred on the tile
+  factor: 1                  # downsample crops before NCC
+  iterations: 3              # solve: re-estimate f(d) from positions and re-solve
+  regularization: 0.1        # pull of each spacing toward nominal, relative to one adjacent-pair NCC
+  min_spacing_fraction: 0.25 # minimum spacing as a fraction of nominal
+  # Hold the rolling mean spacing over this many slices at nominal, so slow changes in image texture
+  # are not read as thickness drift (0: only per block between seams)
+  nominal_window: 200
+
+# render writes scale 0; pyramid builds scales 1..num_scales-1 from it.
+render:
+  name: volume.ome.zarr      # output folder under output_dir/render/
+  downsample: 1              # integer binning factor f in x, y and z (1 = full resolution)
+  bbox: null                 # [xmin, ymin, xmax, ymax] in aligned px to render a region; null = all
+  integer_shifts: true       # round translation-only transforms to whole px (no interpolation blur)
+  blend_px: 256              # feathering ramp width from each tile edge, full-resolution px
+  slab: 64                   # planes per run work unit = shard z size
+  chunk: [64, 64, 64]        # inner chunk (z, y, x) that neuroglancer fetches
+  shard_xy: 1024             # shard size in y and x
+  num_scales: 7              # pyramid levels s0..s{n-1}; render writes s0, pyramid the rest
+  compression: gzip          # none | gzip | zstd | blosc; gzip is safe for neuroglancer
+  clahe:
+    enabled: true            # local contrast equalisation of each output plane
+    clip_limit: 2.0          # cv2 CLAHE clip limit
+    tile_px: 512             # CLAHE tile size in full-resolution px
+  threads: 8                 # tiles rendered concurrently (does not change the output)
+
+pyramid: {}                  # no settings: scales, chunks and shards are fixed by render init
+
+serve:
+  port: 8000                 # HTTP port (--port overrides)
+  bind: 127.0.0.1            # listen address (--bind overrides); 0.0.0.0 to tunnel via the login host
+
+# Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
+# string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch.
+# Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, intensity, zcorrect,
+# zcorrect_solve, render_init, render, pyramid (one job per scale, each with this array size).
+slurm:
+  mail_user: null            # sbatch --mail-user (failure mails); null: Slurm's default
+  preview: {array: 20}
+  stitch: {array: 10}
+  align: {array: 20}
+  zcorrect: {array: 10}
+  render_init: {mem: 16G}    # render.sbatch's 160G is sized for render run
+  render: {array: 20}
+  pyramid: {array: 10}

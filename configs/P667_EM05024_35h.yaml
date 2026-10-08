@@ -1,0 +1,48 @@
+# P667 EM05024 35h: the whole acquisition so far (~11,500 slices, 2x2 grid of 12751 x 13875 px tiles at
+# 8 nm after an earlier 3x3 segment of 8626 x 8833 px tiles; ~16 TB, growing daily).
+# Settings not listed here use the defaults in configs/example.yaml.
+#   ./run_pipeline.sh configs/P667_EM05024_35h.yaml --dry-run    # check the job chain first
+
+name: P667_EM05024_35h
+raw_dir: /camp/project/proj-efibsem/WindingM/P667_EM05024_35h
+output_dir: /camp/project/proj-efibsem/WindingM/P667_EM05024_35h_em-pipe    # confirm path
+
+check:
+  voxel_size_nm: [8, 8, 8]
+  # If the label clock is UK local time, set Europe/London before the clocks go back on 2026-10-25
+  # (labels would otherwise repeat an hour: NON_MONOTONIC). selection start/end stay local time.
+  timezone: null
+  known_issues:
+    - file: M09_D28_tile0-1.tif
+      action: exclude
+      note: byte copy of M09_D28_tile1-0.tif
+    - file: Approach/M09_D18_tile2-1_part2.tif
+      action: exclude
+      note: byte copy of M09_D18_tile2-2_part2.tif
+
+# Tune on a few slices before enabling: python -m pipeline.destreak test --config C --z Z --tile 0-0
+destreak:
+  enabled: false
+
+zcorrect:
+  enabled: false
+
+render:
+  downsample: 1
+
+# ~11,500 slices x 4 tiles of ~354 MB. Arrays are task counts; chunks are spread over the tasks.
+slurm:
+  mail_user: null            # your email, for failure mails
+  check: {cpus: 4, mem: 16G, time: "02:00:00"}
+  preview: {array: 40, cpus: 2, mem: 8G, time: "04:00:00"}        # ~230 chunks of 50 slices (~70 GB read each)
+  preview_merge: {cpus: 2, mem: 16G, time: "01:00:00"}
+  stitch: {array: 20, cpus: 8, mem: 32G, time: "04:00:00"}        # ~300 sampled slices, ~1 min each
+  stitch_merge: {cpus: 2, mem: 8G, time: "01:00:00"}
+  align: {array: 40, cpus: 8, mem: 16G, time: "12:00:00"}         # ~115 chunks of 100 slices, ~30 min each
+  align_solve: {cpus: 4, mem: 32G, time: "02:00:00"}
+  intensity: {cpus: 2, mem: 16G, time: "01:00:00"}
+  zcorrect: {array: 20, cpus: 2, mem: 8G, time: "04:00:00"}
+  zcorrect_solve: {cpus: 2, mem: 8G, time: "01:00:00"}
+  render_init: {cpus: 2, mem: 16G, time: "01:00:00"}
+  render: {array: 30, cpus: 8, mem: 160G, time: "24:00:00"}       # ~180 slabs of 64 planes, 5-10 min each
+  pyramid: {array: 20, cpus: 4, mem: 8G, time: "06:00:00"}        # s1: ~16k shards of ~0.5 s

@@ -161,7 +161,7 @@ def test_duplicate_undecidable_excludes_both(tmp_path):
 
 
 def test_truncated_and_missing_tile_with_known_issues(tmp_path):
-    # Cut into the last slice's pixels (tifffile puts the IFDs of pages 2..n after the pixel data).
+    # Cut into the last slice's pixels.
     t = synth.make_dataset(tmp_path / "raw", faults={"truncate": [("M09_D24", "1-1", 50000)],
                                                      "missing": [("M09_D25", "1-1")]})
     trunc, gone = "M09_D24_tile1-1.tif", "M09_D25_tile1-1.tif"

@@ -1,10 +1,14 @@
 """Access to check/slices.csv — the global slice list every later step works from."""
 
+import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .imagej_tiff import ImageJStack
+
+log = logging.getLogger(__name__)
 
 
 def slices_path(cfg):
@@ -27,21 +31,53 @@ def load_slices(cfg, include_excluded=False, apply_selection=True):
     if not include_excluded:
         df = df[~df["excluded"]]
     if apply_selection:
-        df = select(df, cfg.get("selection") or {})
+        df = select(df, cfg.get("selection") or {}, (cfg.get("check") or {}).get("timezone"))
     return df.sort_values(["z", "tile"]).reset_index(drop=True)
 
 
-def select(df, selection):
-    """Apply a selection dict: start/end (timestamps, inclusive), z_start/z_end (inclusive)."""
+def select(df, selection, timezone=None):
+    """Apply a selection dict: start/end (timestamps, inclusive), z_start/z_end (inclusive).
+
+    start/end are wall-clock times of the label clock. When ``timezone`` (check.timezone) is set,
+    slices.csv holds UTC, so start/end are converted from that zone first.
+    """
+    def utc(value):
+        t = pd.Timestamp(value)
+        if timezone:
+            # In the hour repeated when clocks go back, the first (summer-time) pass is meant.
+            t = t.tz_localize(timezone, ambiguous=True, nonexistent="shift_forward")
+            t = t.tz_convert("UTC").tz_localize(None)
+        return t
+
     if selection.get("start"):
-        df = df[df["timestamp"] >= pd.Timestamp(selection["start"])]
+        df = df[df["timestamp"] >= utc(selection["start"])]
     if selection.get("end"):
-        df = df[df["timestamp"] <= pd.Timestamp(selection["end"])]
+        df = df[df["timestamp"] <= utc(selection["end"])]
     if selection.get("z_start") is not None:
         df = df[df["z"] >= int(selection["z_start"])]
     if selection.get("z_end") is not None:
         df = df[df["z"] <= int(selection["z_end"])]
     return df
+
+
+def voxel_size_nm(cfg, files):
+    """Raw (z, y, x) voxel size in nm: per axis the median over ``files`` in check/files.csv, else 8.
+
+    render spaces its planes by this and zcorrect's positions are in units of it, so both use it.
+    """
+    path = Path(cfg["output_dir"]) / "check" / "files.csv"
+    df = pd.read_csv(path, dtype={"file": str}) if path.exists() else pd.DataFrame({"file": []})
+    df = df[df["file"].isin(set(files))]
+    vox, unknown = [], []
+    for col in ("voxel_z_nm", "voxel_y_nm", "voxel_x_nm"):
+        v = pd.to_numeric(df[col], errors="coerce").median() if col in df else np.nan
+        if not (np.isfinite(v) and v > 0):   # 0 nm would collapse the volume
+            unknown.append(col)
+            v = 8.0
+        vox.append(float(v))
+    if unknown:
+        log.warning("no usable %s in %s for the selected files: assuming 8 nm", ", ".join(unknown), path)
+    return vox
 
 
 def z_values(df):

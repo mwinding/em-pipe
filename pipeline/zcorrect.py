@@ -23,7 +23,7 @@ from . import transforms
 from .cli import atomic_write, base_parser, chunks, my_chunks, setup, task_info
 from .config import step_dir
 from .features import downsample
-from .slices import StackCache, load_slices, z_values
+from .slices import StackCache, load_slices, voxel_size_nm, z_values
 
 log = logging.getLogger(__name__)
 
@@ -226,19 +226,6 @@ def _constrain(s, nominal, brk, min_fraction, window):
     return s
 
 
-def _voxel_z(cfg, files):
-    """Median voxel_z_nm over the used files in check/files.csv, else 8 nm (as render does)."""
-    path = Path(cfg["output_dir"]) / "check" / "files.csv"
-    if path.exists():
-        f = pd.read_csv(path, dtype={"file": str})
-        if "voxel_z_nm" in f:
-            v = pd.to_numeric(f.loc[f["file"].isin(set(files)), "voxel_z_nm"], errors="coerce").median()
-            if np.isfinite(v) and v > 0:
-                return float(v)
-    log.warning("no usable voxel_z_nm in %s for the selection: assuming 8 nm", path)
-    return 8.0
-
-
 def _load_pairs(cfg, zs, zc):
     """(z_a, z_b, ncc) from the chunk files expected for the current selection (NaN rows dropped)."""
     frames, missing = [], []
@@ -297,7 +284,7 @@ def solve(cfg, args):
                  ", ".join(f"{x:.2f}:{y:.2f}" for x, y in zip(xs, ys)),
                  (s / nominal).min(), (s / nominal).max(), (s / nominal).std())
 
-    vz = _voxel_z(cfg, df["file"].unique())
+    vz = voxel_size_nm(cfg, df["file"].unique())[0]
     pos = np.concatenate([[0.0], np.cumsum(s)])
     out = step_dir(cfg, "zcorrect")
     # Same origin as uncorrected slices (z * voxel_z), so positions stay comparable across runs.

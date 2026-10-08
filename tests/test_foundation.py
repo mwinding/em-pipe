@@ -38,6 +38,12 @@ def test_truncated_detection(tmp_path):
     assert st.memmap().shape[0] == st.n - 1   # only complete slices are mapped
 
 
+def test_single_slice_labels(tmp_path):
+    import synth
+    synth.write_imagej(tmp_path / "one.tif", np.zeros((1, 8, 8), np.uint16), ["only-label.tif"])
+    assert ImageJStack(tmp_path / "one.tif").labels == ["only-label.tif"]
+
+
 def test_config_overrides(make_config, synth_2x2, tmp_path):
     path = make_config(synth_2x2, selection={"z_start": 3})
     cfg = load_config(path, output_dir=str(tmp_path / "other"), step_defaults={"stitch": {"model": "translation"}})
@@ -119,3 +125,17 @@ def test_omezarr_create_write_read(tmp_path, compression):
     assert omezarr.open_scale(root, 0)[0:1, 0:1, 0:1].read().result()[0, 0, 0] == 0
     boxes = omezarr.shard_boxes(shapes[0], (32, 128, 128))
     assert len(boxes) == 3 * 3 * 3 and boxes[-1] == ((64, 70), (256, 300), (256, 260))
+
+
+def test_selection_is_local_time_when_timezone_set():
+    """check stores UTC when check.timezone is set; selection start/end are still label-clock time."""
+    import pandas as pd
+    from pipeline.slices import select
+    # 2026-10-01 00:30 BST = 2026-09-30 23:30 UTC; 2026-10-25 01:30 is the repeated hour (BST pass first).
+    utc = pd.to_datetime(["2026-09-30 22:59:59", "2026-09-30 23:30:00", "2026-10-01 22:59:59",
+                          "2026-10-01 23:00:00", "2026-10-25 00:30:00", "2026-10-25 01:30:00"])
+    df = pd.DataFrame({"z": range(6), "timestamp": utc})
+    sel = {"start": "2026-10-01 00:00:00", "end": "2026-10-01 23:59:59"}
+    assert select(df, sel, "Europe/London")["z"].tolist() == [1, 2]
+    assert select(df, sel)["z"].tolist() == [2, 3]          # no timezone: times compared as written
+    assert select(df, {"start": "2026-10-25 01:30:00"}, "Europe/London")["z"].tolist() == [4, 5]

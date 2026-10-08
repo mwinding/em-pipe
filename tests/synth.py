@@ -10,15 +10,19 @@ Ground truth (in the conventions of docs/design.md, with filename r = y, c = x):
 - align: montage of slice z -> volume frame is a translation by ``drift[z]`` (+ a constant)
 """
 
+import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import tifffile
 import yaml
 from scipy import ndimage
+
+from pipeline.imagej_tiff import ImageJStack
 
 LABEL = "G460-0186_{ts:%y-%m-%d_%H%M%S}_0-{r}-{c}_InLens_raw.tif"
 
@@ -84,7 +88,7 @@ def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overl
     tile_gain: {tile: gain} multiplicative intensity per tile
     streaks: amplitude of vertical curtaining stripes (fraction of range)
     faults: {"duplicate": [(day_prefix, dst_tile, src_tile)],
-             "truncate": [(day_prefix, tile, n_bytes_removed)],
+             "truncate": [(day_prefix, tile, n_bytes)]   (cut n_bytes off the end of the pixel data),
              "mislabel": [(day_prefix, tile, label_tile)],
              "missing":  [(day_prefix, tile)]}
       day_prefix like "M09_D25" (part suffix is matched as part of the file name).
@@ -182,14 +186,15 @@ def _apply_faults(root, faults, truth):
             shutil.copyfile(src_path, dst_path)
     for prefix, tile, n in faults.get("truncate", []):
         for path in _match(root, prefix, tile):
-            size = path.stat().st_size
+            # Relative to the pixel data's end: tifffile writes the IFDs of slices 2..n after it.
+            end = ImageJStack(path).expected_size
             with open(path, "r+b") as fh:
-                fh.truncate(size - n)
+                fh.truncate(end - n)
     for prefix, tile, label_tile in faults.get("mislabel", []):
         for path in _match(root, prefix, tile):
             with tifffile.TiffFile(path) as tif:
                 data = tif.asarray()
-                labels = tif.imagej_metadata["Labels"]
+            labels = ImageJStack(path).labels
             r, c = label_tile.split("-")
             labels = [l.replace(f"_0-{tile}_", f"_0-{r}-{c}_") for l in labels]
             write_imagej(path, data, labels)
@@ -197,6 +202,40 @@ def _apply_faults(root, faults, truth):
         for path in _match(root, prefix, tile):
             path.unlink()
             truth.files.pop(path.name, None)
+
+
+def slice_rows(truth, z0=0, segment_starts=(), seams=(), excluded=()):
+    """check/slices.csv rows (columns per docs/design.md) for a synthetic dataset's slices at z0 + z.
+
+    Segment = number of ``segment_starts`` <= z; seams at ``seams`` and segment starts;
+    ``excluded`` holds global z (every tile) or (z, tile).
+    """
+    th, tw = truth.tile_shape
+    rows = []
+    for name, zs in truth.files.items():
+        tile = re.search(r"_tile(\d+-\d+)", name).group(1)
+        r, c = map(int, tile.split("-"))
+        for i, local in enumerate(zs):
+            z = z0 + local
+            ex = z in excluded or (z, tile) in excluded
+            rows.append({"z": z, "timestamp": truth.timestamps[local].isoformat(), "tile": tile, "tile_row": r,
+                         "tile_col": c, "file": name, "index": i, "height": th, "width": tw,
+                         "segment": sum(z >= s for s in segment_starts),
+                         "seam": z in seams or z in segment_starts, "excluded": ex,
+                         "exclude_reason": "test" if ex else "",
+                         "label": LABEL.format(ts=truth.timestamps[local], r=r, c=c)})
+    return rows
+
+
+def save_slices(output_dir, rows):
+    path = Path(output_dir) / "check" / "slices.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).sort_values(["z", "tile"]).to_csv(path, index=False)
+    return path
+
+
+def write_slices(truth, output_dir, **kw):
+    return save_slices(output_dir, slice_rows(truth, **kw))
 
 
 def write_config(path, raw_dir, output_dir, **sections):

@@ -2,7 +2,6 @@
 
 import re
 from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -11,42 +10,9 @@ import tifffile
 
 import synth
 from pipeline import features, preview
+from synth import save_slices, slice_rows, write_slices
 
 FACTOR = 4
-
-
-def slice_rows(truth, z0=0, segment_starts=(), seams=(), excluded=()):
-    """check/slices.csv rows (columns per docs/design.md) for a synthetic dataset's slices at z0 + z.
-
-    Segment = number of ``segment_starts`` <= z; seams at ``seams`` and segment starts;
-    ``excluded`` holds global z (every tile) or (z, tile).
-    """
-    th, tw = truth.tile_shape
-    rows = []
-    for name, zs in truth.files.items():
-        tile = re.search(r"_tile(\d+-\d+)", name).group(1)
-        r, c = map(int, tile.split("-"))
-        for i, local in enumerate(zs):
-            z = z0 + local
-            ex = z in excluded or (z, tile) in excluded
-            rows.append({"z": z, "timestamp": truth.timestamps[local].isoformat(), "tile": tile, "tile_row": r,
-                         "tile_col": c, "file": name, "index": i, "height": th, "width": tw,
-                         "segment": sum(z >= s for s in segment_starts),
-                         "seam": z in seams or z in segment_starts, "excluded": ex,
-                         "exclude_reason": "test" if ex else "",
-                         "label": synth.LABEL.format(ts=truth.timestamps[local], r=r, c=c)})
-    return rows
-
-
-def save_slices(output_dir, rows):
-    path = Path(output_dir) / "check" / "slices.csv"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).sort_values(["z", "tile"]).to_csv(path, index=False)
-    return path
-
-
-def write_slices(truth, output_dir, **kw):
-    return save_slices(output_dir, slice_rows(truth, **kw))
 
 
 def two_segments(raw_dir, gains3=None, gains2=None, **kw):

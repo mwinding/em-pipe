@@ -31,7 +31,7 @@ import pandas as pd
 from . import omezarr, transforms
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info
 from .config import deep_merge, get, step_dir
-from .slices import StackCache, load_slices, z_values
+from .slices import StackCache, load_slices, voxel_size_nm, z_values
 
 log = logging.getLogger(__name__)
 
@@ -82,17 +82,11 @@ def _require(path, step):
     return path
 
 
-# Absolute tolerances only: np.allclose's default rtol=1e-5 (also in transforms.is_translation)
-# accepts a 0.1 px offset at x = 10^4 px, or a 1e-5 scale (0.14 px across a real tile).
+# Absolute tolerance: np.allclose's default rtol=1e-5 would accept a 0.1 px offset at x = 10^4 px.
 def _whole(v, tol=1e-6):
     """True if every value is an integer to within ``tol``."""
     v = np.asarray(v, float)
     return bool(np.all(np.abs(v - np.round(v)) <= tol))
-
-
-def _is_shift(T):
-    """True if the 2x3 transform is a pure translation."""
-    return bool(np.all(np.abs(np.asarray(T, float)[:, :2] - np.eye(2)) <= 1e-9))
 
 
 def _tile_plan(cfg):
@@ -111,7 +105,7 @@ def _tile_plan(cfg):
     mats = []
     for z, tile in keys:
         T = transforms.compose(align[z], stitch[(z, tile)])
-        if cfg["render"]["integer_shifts"] and _is_shift(T):
+        if cfg["render"]["integer_shifts"] and transforms.is_translation(T):
             # floor(x + 0.5), not rint: half-pixel shifts must round the same way for every z.
             T = transforms.translation(*np.floor(T[:, 2] + 0.5))
         mats.append(T)
@@ -146,23 +140,6 @@ def _canvas(plan, bbox):
                         "align/transforms.csv for outliers, or set render.bbox", size.round(), typical.round())
     x0, y0 = math.floor(bbox[0]), math.floor(bbox[1])
     return x0, y0, math.ceil(bbox[2]) - x0, math.ceil(bbox[3]) - y0
-
-
-def _voxel_nm(cfg, files):
-    """Raw (z, y, x) voxel size: median over the used files in check/files.csv, else 8 nm."""
-    path = Path(cfg["output_dir"]) / "check" / "files.csv"
-    df = pd.read_csv(path, dtype={"file": str}) if path.exists() else pd.DataFrame({"file": []})
-    df = df[df["file"].isin(set(files))]
-    vox, unknown = [], []
-    for col in ("voxel_z_nm", "voxel_y_nm", "voxel_x_nm"):
-        v = pd.to_numeric(df[col], errors="coerce").median() if col in df else np.nan
-        if not (np.isfinite(v) and v > 0):
-            unknown.append(col)
-            v = 8.0
-        vox.append(float(v))
-    if unknown:
-        log.warning("no usable %s in %s: assuming 8 nm", ", ".join(unknown), path)
-    return vox
 
 
 def _positions(cfg, zs):
@@ -220,7 +197,7 @@ def init(cfg, overwrite=False):
     plan = _tile_plan(cfg)
     zs = z_values(plan)
     x0, y0, w, h = _canvas(plan, s["bbox"])
-    vz, vy, vx = _voxel_nm(cfg, plan["file"].unique())
+    vz, vy, vx = voxel_size_nm(cfg, plan["file"].unique())
     positions = _positions(cfg, zs)
     planes = plane_sources(zs, f, positions, vz * f)
     meta = {
@@ -383,7 +360,7 @@ class _Renderer:
         box = transforms.apply(transforms.invert(T), canvas)
         c0, r0 = (int(q) for q in np.maximum(np.floor(box.min(axis=0)) - f - 1, 0))
         c1, r1 = (int(q) for q in np.minimum(np.ceil(box.max(axis=0)) + f + 1, (w, h)))
-        is_shift = _is_shift(T)
+        is_shift = transforms.is_translation(T)
         if f > 1:
             if is_shift and _whole(T[:, 2]):
                 # Start on an output block boundary so area-downsampling gives exact block means.

@@ -1,0 +1,34 @@
+# P667 EM05024 35h, 1-2 October 2026 only (~1,200 slices) at 32 nm: a quick first look at the whole
+# pipeline before running configs/P667_EM05024_35h.yaml. check still reads every raw header.
+#   ./run_pipeline.sh configs/P667_test_2day.yaml
+
+name: P667_EM05024_35h_test-M10-D01-D02
+raw_dir: /camp/project/proj-efibsem/WindingM/P667_EM05024_35h
+output_dir: /camp/lab/windingm/home/users/windinm/em-pipe_P667_test-M10-D01-D02/output
+
+selection:
+  start: '2026-10-01 00:00:00'
+  end: '2026-10-02 23:59:59'
+
+check:
+  voxel_size_nm: [8, 8, 8]
+  known_issues:
+    - file: M09_D28_tile0-1.tif
+      action: exclude
+      note: byte copy of M09_D28_tile1-0.tif
+    - file: Approach/M09_D18_tile2-1_part2.tif
+      action: exclude
+      note: byte copy of M09_D18_tile2-2_part2.tif
+
+render:
+  downsample: 4              # 32 nm voxels
+
+slurm:
+  mail_user: null            # your email, for failure mails
+  preview: {array: 10, time: "04:00:00"}                          # ~25 chunks of 50 slices
+  stitch: {array: 5, time: "04:00:00"}                            # ~30 sampled slices
+  align: {array: 13, time: "12:00:00"}                            # ~13 chunks of 100 slices
+  zcorrect: {array: 6}
+  render_init: {mem: 16G, time: "01:00:00"}
+  render: {array: 5, cpus: 8, mem: 32G, time: "12:00:00"}         # ~300 planes at f=4: 5 slabs
+  pyramid: {array: 5, time: "02:00:00"}

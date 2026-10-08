@@ -41,7 +41,7 @@ DEFAULTS = {
         # Parallel header reads (latency bound on network storage)
         "threads": 8,
         # Time zone of the label clock, e.g. Europe/London: label times are converted to UTC so slices
-        # stay in order when the clocks go back (then selection start/end are UTC too). null: as written
+        # stay in order when the clocks go back (selection start/end stay local). null: as written
         "timezone": None,
         # Acknowledged problems: [{file, note, action: exclude|ignore}]; exclude drops the file's slices
         "known_issues": [],
@@ -108,12 +108,10 @@ def read_header(path, hash_bytes):
         useful = len(data) == length and data[k:] != data[:-k]
         hashes.append(hashlib.md5(data).hexdigest() if useful else "-")
     vx, vy, vz = st.voxel_size_nm
-    # tifffile gives a single-slice stack's label as a str (ImageJStack.labels would split it into characters)
-    labels = st.imagej_metadata.get("Labels") or []
     return {"n_slices": st.n, "n_complete": int(n_complete), "height": st.height, "width": st.width,
             "dtype": st.dtype.name, "byteorder": st.byteorder, "data_offset": st.data_offset,
             "contiguous": st.contiguous, "voxel_x_nm": vx, "voxel_y_nm": vy, "voxel_z_nm": vz,
-            "labels": [labels] if isinstance(labels, str) else list(labels), "sample_hashes": ";".join(hashes)}
+            "labels": st.labels, "sample_hashes": ";".join(hashes)}
 
 
 def read_headers(raw_dir, stats, cache_dir, hash_bytes, threads, overwrite=False):

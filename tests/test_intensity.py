@@ -13,7 +13,8 @@ import tifffile
 import synth
 from pipeline import intensity, transforms
 from pipeline.preview import PERCENTILES
-from test_preview import run_preview, save_slices, slice_rows, two_segments, write_slices
+from synth import save_slices, slice_rows, write_slices
+from test_preview import run_preview, two_segments
 
 GAIN = {"0-1": 1.15, "1-0": 0.9}
 GAIN3 = {"0-1": 1.2, "1-1": 1.1, "2-0": 0.92, "2-2": 0.85}
@@ -115,6 +116,21 @@ def test_tile_without_overlap_measurement_keeps_own_levels(gained, tmp_path, cap
     base = run_intensity(root, truth.raw_dir, out, smooth_slices=5, balance_tiles=False)
     pd.testing.assert_frame_equal(lv[lv["tile"] == "1-1"], base[base["tile"] == "1-1"])
     np.testing.assert_allclose(window_ratios(lv, GAIN)["0-1"], GAIN["0-1"], rtol=0.03)
+
+
+def test_no_overlap_anywhere_leaves_every_tile_unbalanced(gained, tmp_path, caplog):
+    """Regression: no tile pair overlapping at any sampled slice used to crash (empty measurements)."""
+    truth, root, out = gained
+    for step in ("check", "preview", "stitch"):
+        shutil.copytree(out / step, tmp_path / step)
+    tiles = pd.read_csv(out / "stitch" / "tiles.csv", dtype={"tile": str})
+    tiles[["tx", "ty"]] *= 10   # tiles far apart
+    tiles.to_csv(tmp_path / "stitch" / "tiles.csv", index=False)
+    with caplog.at_level(logging.WARNING):
+        lv = run_intensity(tmp_path, truth.raw_dir, tmp_path, smooth_slices=5, balance_every=3)
+    assert "left unbalanced" in caplog.text
+    base = run_intensity(root, truth.raw_dir, out, smooth_slices=5, balance_tiles=False)
+    pd.testing.assert_frame_equal(lv, base)
 
 
 @pytest.fixture(scope="module")

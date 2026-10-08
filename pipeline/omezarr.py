@@ -11,6 +11,7 @@ one shard at a time.
 
 import json
 import math
+import os
 from pathlib import Path
 
 import tensorstore as ts
@@ -97,8 +98,11 @@ def create(root, shape0, voxel_nm, num_scales=7, chunk=(64, 64, 64), shard=(64, 
 
 def open_scale(root, scale):
     """Open an existing scale array for reading and writing."""
+    # Encoding threads default to every core of the node; keep them to the Slurm allocation.
+    cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+    context = ts.Context({"data_copy_concurrency": {"limit": int(cpus)}} if cpus else {})
     return ts.open({"driver": "zarr3", "kvstore": {"driver": "file", "path": str(Path(root) / f"s{scale}")}},
-                   open=True).result()
+                   open=True, context=context).result()
 
 
 def shard_shape(arr):

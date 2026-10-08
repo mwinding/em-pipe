@@ -73,7 +73,9 @@ class ImageJStack:
 
     @property
     def labels(self):
-        return list(self.imagej_metadata.get("Labels") or [])
+        labels = self.imagej_metadata.get("Labels") or []
+        # tifffile gives a single-slice stack's label as a str, not a list of one.
+        return [labels] if isinstance(labels, str) else list(labels)
 
     @property
     def voxel_size_nm(self):

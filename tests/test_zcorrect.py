@@ -12,7 +12,7 @@ import synth
 from pipeline import transforms, zcorrect
 from pipeline.cli import chunks
 from pipeline.config import load_config
-from pipeline.slices import StackCache, load_slices
+from pipeline.slices import StackCache, load_slices, voxel_size_nm
 
 VOXEL_Z = 8.0  # nm; no check/files.csv in most tests, so zcorrect uses its 8 nm default
 
@@ -274,14 +274,17 @@ def test_segment_change_and_missing_tiles(tmp_path, make_config):
 
 
 def test_voxel_z_from_files_csv(tmp_path):
-    """Same rule as render: median of usable values over the used files, else 8 nm."""
+    """The rule render shares: median of usable values over the used files, else 8 nm."""
     cfg = {"output_dir": str(tmp_path)}
     (tmp_path / "check").mkdir()
     path = tmp_path / "check" / "files.csv"
-    assert zcorrect._voxel_z(cfg, ["a.tif"]) == 8.0                     # no files.csv
+
+    def voxel_z(files):
+        return voxel_size_nm(cfg, files)[0]
+    assert voxel_z(["a.tif"]) == 8.0                     # no files.csv
     pd.DataFrame({"file": ["a.tif", "b.tif", "c.tif"], "voxel_z_nm": [9.0, 11.0, 50.0]}).to_csv(path, index=False)
-    assert zcorrect._voxel_z(cfg, ["a.tif", "b.tif"]) == 10.0
+    assert voxel_z(["a.tif", "b.tif"]) == 10.0
     pd.DataFrame({"file": ["a.tif", "b.tif"], "voxel_z_nm": [0.0, None]}).to_csv(path, index=False)
-    assert zcorrect._voxel_z(cfg, ["a.tif", "b.tif"]) == 8.0           # 0 nm would collapse the volume
+    assert voxel_z(["a.tif", "b.tif"]) == 8.0           # 0 nm would collapse the volume
     pd.DataFrame({"file": ["a.tif"]}).to_csv(path, index=False)
-    assert zcorrect._voxel_z(cfg, ["a.tif"]) == 8.0
+    assert voxel_z(["a.tif"]) == 8.0

@@ -110,7 +110,8 @@ def balance(cfg, df, tiles_csv):
     found = []
     for z, rows in sampled.groupby("z"):
         found += [{"z": z, "tile": t, "g": g, "o": o} for t, (g, o) in measure(rows, stitch, thumbs_dir).items()]
-    meas = pd.DataFrame(found, columns=["z", "tile", "g", "o"])
+    # Float columns even when nothing was measured: object columns break the assignments below.
+    meas = pd.DataFrame(found, columns=["z", "tile", "g", "o"]).astype({"z": int, "g": float, "o": float})
     log.info("tile balance measured at %d of %d sampled slices", meas["z"].nunique(), sampled["z"].nunique())
     df = df.merge(meas, on=["z", "tile"], how="left")
 

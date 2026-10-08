@@ -7,6 +7,8 @@ documented next to the code that uses them.
 
 import argparse
 import copy
+import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -27,7 +29,30 @@ DEFAULTS = {
     },
     # Restricts every step after check. Keys: start, end (timestamps), z_start, z_end (inclusive).
     "selection": {},
+    # Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
+    # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch.
+    # Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, intensity,
+    # zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale).
+    "slurm": {
+        "mail_user": None,          # sbatch --mail-user (failure mails); null: Slurm's default
+        "preview": {"array": 20},
+        "stitch": {"array": 10},
+        "align": {"array": 20},
+        "zcorrect": {"array": 10},
+        "render_init": {"mem": "16G"},   # render.sbatch's 160G is sized for render run
+        "render": {"array": 20},
+        "pyramid": {"array": 10},
+    },
 }
+
+# Step modules, in pipeline order; each has a DEFAULTS section of the same name.
+STEPS = ("check", "preview", "stitch", "align", "intensity", "destreak", "zcorrect", "render", "pyramid",
+         "serve")
+JOBS = ("check", "preview", "preview_merge", "stitch", "stitch_merge", "align", "align_solve", "intensity",
+        "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid")
+ARRAY_JOBS = ("preview", "stitch", "align", "zcorrect", "render", "pyramid")
+_SBATCH = {"cpus": "--cpus-per-task", "mem": "--mem", "time": "--time", "partition": "--partition",
+           "gres": "--gres"}
 
 
 def deep_merge(base, override):
@@ -79,17 +104,62 @@ def get(cfg, dotted, default=None):
     return node
 
 
+def step_defaults(*sections):
+    """Merged DEFAULTS of the step modules owning ``sections`` (every step if none are given)."""
+    out = {}
+    for step in sections or STEPS:
+        if step in STEPS:
+            out = deep_merge(out, importlib.import_module(f"pipeline.{step}").DEFAULTS)
+    return out
+
+
+def sbatch_args(cfg, job):
+    """sbatch options (job name aside) for one run_pipeline.sh job from the config's ``slurm`` section."""
+    if job not in JOBS:
+        raise ValueError(f"unknown job {job!r}; expected one of {JOBS}")
+    slurm = cfg.get("slurm") or {}
+    opts = slurm.get(job) or {}
+    unknown = set(opts) - {"array", *_SBATCH}
+    if unknown:
+        raise ValueError(f"slurm.{job}: unknown keys {sorted(unknown)}")
+    if not isinstance(opts.get("time", ""), str):
+        # YAML reads an unquoted 04:00:00 as the integer 14400, which Slurm would take as minutes.
+        raise ValueError(f"slurm.{job}.time must be a quoted string such as \"04:00:00\"")
+    array = job in ARRAY_JOBS
+    args = [f"--output={Path(cfg['output_dir']) / 'logs' / ('%x-%A_%a.out' if array else '%x-%j.out')}"]
+    if array:
+        args.append(f"--array=0-{int(opts.get('array', 1)) - 1}")
+    args += [f"{flag}={opts[key]}" for key, flag in _SBATCH.items() if opts.get(key) is not None]
+    if slurm.get("mail_user"):
+        args.append(f"--mail-user={slurm['mail_user']}")
+    return args
+
+
 def _main(argv=None):
-    """`python -m pipeline.config --config C --get slurm.render.array` (used by run_pipeline.sh)."""
-    p = argparse.ArgumentParser(description=_main.__doc__)
+    """Config values and sbatch options for run_pipeline.sh (two calls cover a whole submission).
+
+    python -m pipeline.config --config C --get output_dir zcorrect.enabled
+        one value per line, step defaults included; JSON for non-strings (e.g. true, 7)
+    python -m pipeline.config --config C --sbatch-args [JOB ...]
+        one line per job (default: every job): the job, then its sbatch options, tab-separated
+    """
+    p = argparse.ArgumentParser(description=_main.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", required=True)
-    p.add_argument("--get", required=True, help="dotted key")
-    p.add_argument("--default", default="")
+    what = p.add_mutually_exclusive_group(required=True)
+    what.add_argument("--get", nargs="+", metavar="KEY", help="dotted keys, e.g. zcorrect.enabled")
+    what.add_argument("--sbatch-args", nargs="*", metavar="JOB", choices=JOBS, help=f"jobs: {', '.join(JOBS)}")
+    p.add_argument("--default", default="", help="--get: printed for keys that are not set")
     a = p.parse_args(argv)
-    with open(a.config) as fh:
-        cfg = deep_merge(DEFAULTS, yaml.safe_load(fh) or {})
-    value = get(cfg, a.get, a.default)
-    print("" if value is None else value)
+    if a.sbatch_args is not None:
+        cfg = load_config(a.config)
+        for job in a.sbatch_args or JOBS:
+            print("\t".join([job, *sbatch_args(cfg, job)]))
+        return 0
+    cfg = load_config(a.config, step_defaults=step_defaults(*{key.split(".")[0] for key in a.get}))
+    for key in a.get:
+        value = get(cfg, key, a.default)
+        print("" if value is None else value if isinstance(value, str) else json.dumps(value))
+    return 0
 
 
 if __name__ == "__main__":
