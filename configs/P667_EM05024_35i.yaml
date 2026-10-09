@@ -32,7 +32,7 @@ destreak:
   enabled: false
 
 render:
-  downsample: 4              # 32 nm voxels
+  downsample: 1              # full resolution (8 nm); the pyramid adds 16, 32, 64 nm ... (~7 TB)
 
 # Scaled from configs/P667_test_2day.yaml (1.7 TB, ~1,200 slices) to ~20 TB, ~14,200 slices.
 slurm:
@@ -47,5 +47,6 @@ slurm:
   intensity: {cpus: 2, mem: 16G, time: "01:00:00"}
   zcorrect: {array: 71}                                          # off; 71 chunks of 200 slices
   render_init: {cpus: 2, mem: 16G, time: "01:00:00"}
-  render: {array: 56, cpus: 8, mem: 32G, time: "04:00:00"}       # ~3,540 planes at f=4: 56 slabs
-  pyramid: {array: 60, cpus: 2, mem: 8G, time: "01:00:00"}
+  # f=1: 14,172 planes = 222 slabs of 64; planes up to ~1 Gpx (2x3 phase): ~64 GB slab buffer + ~50 GB
+  render: {array: 111, cpus: 8, mem: 200G, time: "12:00:00"}    # 2 slabs per task
+  pyramid: {array: 100, cpus: 2, mem: 8G, time: "06:00:00"}     # s1 alone is ~29,000 shards
