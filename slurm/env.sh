@@ -9,11 +9,15 @@
 # Crick conda.env.sh here: it rewrites ~/.bashrc every time it runs, and array tasks starting
 # together would race on that file.
 
-# Non-login shells (e.g. `ssh host cmd`) don't have Lmod's `ml` yet.
+# Non-login shells (e.g. `ssh host cmd`) have neither Lmod's `ml` nor the site's MODULEPATH
+# (NEMO sets it in /etc/profile.d/00-modulepath.sh): do the login setup. /etc/profile doesn't read
+# ~/.bashrc. Its scripts aren't written for `set -e`, so that is paused meanwhile.
 if ! type ml >/dev/null 2>&1; then
-    for f in /etc/profile.d/z00_lmod.sh /etc/profile.d/modules.sh; do
-        [ -f "$f" ] && source "$f" && break
-    done
+    case $- in *e*) _em_e=1 ;; *) _em_e= ;; esac
+    set +e
+    source /etc/profile >/dev/null 2>&1
+    [ -n "$_em_e" ] && set -e
+    unset _em_e
 fi
 ml purge
 ml Anaconda3/2024.10
