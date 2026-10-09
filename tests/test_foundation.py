@@ -166,10 +166,31 @@ def test_read_truncated_slice_raises(tmp_path):
 
 
 def test_atomic_write_uses_normal_permissions(tmp_path):
-    """Outputs get the umask's permissions (e.g. group-readable), not mkstemp's private 0600."""
+    """Outputs get a normal write's permissions (e.g. group-readable), not mkstemp's private 0600."""
     import os
-    path = tmp_path / "x.csv"
-    cli.atomic_write(path, lambda tmp: open(tmp, "w").write("a"))
-    umask = os.umask(0)
-    os.umask(umask)
-    assert (path.stat().st_mode & 0o777) == 0o666 & ~umask
+    old = os.umask(0o027)   # set after import: the process's current umask must be honoured
+    try:
+        path = tmp_path / "x.csv"
+        cli.atomic_write(path, lambda tmp: open(tmp, "w").write("a"))
+        open(tmp_path / "plain.csv", "w").close()
+    finally:
+        os.umask(old)
+    assert (path.stat().st_mode & 0o777) == (tmp_path / "plain.csv").stat().st_mode & 0o777 == 0o640
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []
+
+
+def test_atomic_write_follows_default_acl(tmp_path):
+    """In a folder with a default ACL (NEMO lab folders) outputs get the ACL's rw-rw----, not 0666 & ~umask."""
+    import os
+    import shutil
+    import subprocess
+    if not shutil.which("setfacl") or subprocess.run(
+            ["setfacl", "-d", "-m", "u::rwx,g::rwx,o::---", str(tmp_path)], capture_output=True).returncode:
+        pytest.skip("POSIX default ACLs not available here")
+    old = os.umask(0o022)
+    try:
+        path = tmp_path / "x.csv"
+        cli.atomic_write(path, lambda tmp: open(tmp, "w").write("a"))
+    finally:
+        os.umask(old)
+    assert (path.stat().st_mode & 0o777) == 0o660

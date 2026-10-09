@@ -3,7 +3,6 @@
 import argparse
 import logging
 import os
-import tempfile
 from pathlib import Path
 
 from .config import load_config
@@ -63,8 +62,21 @@ def my_chunks(all_chunks, task_id, num_tasks):
     return all_chunks[task_id::num_tasks]
 
 
-_UMASK = os.umask(0)
-os.umask(_UMASK)
+def _create_tmp(directory, prefix, suffix):
+    """Create an empty, uniquely named file the way ``open(..., "w")`` would.
+
+    mkstemp makes files private (0600), and a chmod from the umask afterwards overrides the folder's
+    default ACL (NEMO lab folders: rw for the lab, nothing for others). Creating with mode 0666 lets
+    the OS apply the umask or the default ACL, so outputs get a normal write's permissions.
+    """
+    for _ in range(100):
+        tmp = os.path.join(directory, f"{prefix}{os.urandom(4).hex()}{suffix}")
+        try:
+            os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666))
+            return tmp
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"no free temporary name {prefix}*{suffix} in {directory}")
 
 
 def atomic_write(path, write_fn, suffix=None):
@@ -72,13 +84,9 @@ def atomic_write(path, write_fn, suffix=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     # Keep the real extension last so numpy/matplotlib don't append or misdetect one.
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".", suffix=suffix or ".tmp" + path.suffix)
-    os.close(fd)
+    tmp = _create_tmp(path.parent, "." + path.name + ".", suffix or ".tmp" + path.suffix)
     try:
         write_fn(tmp)
-        # mkstemp makes the file private (0600): give it the permissions a normal write would have,
-        # so lab members can read the outputs.
-        os.chmod(tmp, 0o666 & ~_UMASK)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
