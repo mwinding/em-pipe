@@ -44,7 +44,8 @@ def main(argv=None):
         return 1
     s, shape, (vz, vy, vx) = choose_scale(root, float(cfg["export"]["max_gb"]) * 1e9)
     stem = root.name.removesuffix(".zarr").removesuffix(".ome")
-    out = root.parent / f"{stem}_{vx:g}nm.tif"
+    # Headers give e.g. 7.99986 nm: name the file by the rounded voxel size (64nm, not 63.9988nm).
+    out = root.parent / f"{stem}_{round(vx)}nm.tif"
     log.info("exporting scale s%d %s at %g nm to %s", s, shape, vx, out)
     data = omezarr.open_scale(root, s).read().result()
     atomic_write(out, lambda tmp: tifffile.imwrite(

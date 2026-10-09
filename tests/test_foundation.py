@@ -163,3 +163,13 @@ def test_read_truncated_slice_raises(tmp_path):
     st.read(st.n - 2)
     with pytest.raises(EOFError):
         st.read(st.n - 1)
+
+
+def test_atomic_write_uses_normal_permissions(tmp_path):
+    """Outputs get the umask's permissions (e.g. group-readable), not mkstemp's private 0600."""
+    import os
+    path = tmp_path / "x.csv"
+    cli.atomic_write(path, lambda tmp: open(tmp, "w").write("a"))
+    umask = os.umask(0)
+    os.umask(umask)
+    assert (path.stat().st_mode & 0o777) == 0o666 & ~umask

@@ -63,6 +63,10 @@ def my_chunks(all_chunks, task_id, num_tasks):
     return all_chunks[task_id::num_tasks]
 
 
+_UMASK = os.umask(0)
+os.umask(_UMASK)
+
+
 def atomic_write(path, write_fn, suffix=None):
     """Call ``write_fn(tmp_path)`` then rename to ``path`` so readers never see partial files."""
     path = Path(path)
@@ -72,6 +76,9 @@ def atomic_write(path, write_fn, suffix=None):
     os.close(fd)
     try:
         write_fn(tmp)
+        # mkstemp makes the file private (0600): give it the permissions a normal write would have,
+        # so lab members can read the outputs.
+        os.chmod(tmp, 0o666 & ~_UMASK)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):

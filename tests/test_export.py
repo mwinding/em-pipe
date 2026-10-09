@@ -38,3 +38,14 @@ def test_exports_finest_scale_that_fits(make_config, tmp_path):
 def test_missing_volume_fails(make_config, tmp_path):
     cfg = make_config(tmp_path / "raw")
     assert export.main(["--config", str(cfg)]) == 1
+
+
+def test_name_uses_rounded_voxel_size(make_config, tmp_path):
+    """Headers give 7.99986 nm: the file is called ..._8nm.tif, not ..._7.99986nm.tif."""
+    out = tmp_path / "out"
+    root = out / "synthetic.ome.zarr"
+    omezarr.create(root, (8, 64, 64), (7.99986, 7.99986, 7.99986), num_scales=2, chunk=(8, 32, 32),
+                   shard=(8, 64, 64))
+    cfg = make_config(tmp_path / "raw")
+    assert export.main(["--config", str(cfg)]) == 0
+    assert [p.name for p in out.glob("*.tif")] == ["synthetic_8nm.tif"]
