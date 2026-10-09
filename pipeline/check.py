@@ -627,6 +627,9 @@ def main(argv=None):
         f[col] = f[col].astype("Int64")
     _write_csv(out / "files.csv", f)
     _write_csv(out / "slices.csv", slices.assign(timestamp=slices["timestamp"].dt.strftime(TIME_FMT)))
+    # Timestamps are UTC when check.timezone is set; later steps must interpret them the same way.
+    atomic_write(out / "meta.json", lambda tmp: Path(tmp).write_text(
+        json.dumps({"timezone": cfg["check"].get("timezone")})))
     _write_csv(out / "issues.csv", issues.assign(timestamp=issues["timestamp"].dt.strftime(TIME_FMT)))
     text = report(cfg, files, slices, issues, per, ignored)
     atomic_write(out / "report.md", lambda tmp: Path(tmp).write_text(text))

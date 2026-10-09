@@ -1,5 +1,6 @@
 """Access to check/slices.csv — the global slice list every later step works from."""
 
+import json
 import logging
 from pathlib import Path
 
@@ -24,6 +25,14 @@ def load_slices(cfg, include_excluded=False, apply_selection=True):
     path = slices_path(cfg)
     if not path.exists():
         raise FileNotFoundError(f"{path} not found: run the check step first")
+    tz = (cfg.get("check") or {}).get("timezone")
+    meta = path.with_name("meta.json")
+    if meta.exists():
+        written = json.loads(meta.read_text()).get("timezone")
+        if written != tz:
+            # Otherwise a date selection silently shifts by the UTC offset.
+            raise ValueError(f"{path} was written with check.timezone {written!r} but this config has {tz!r}: "
+                             "use the same value, or re-run check")
     df = pd.read_csv(path, dtype={"tile": str, "file": str, "exclude_reason": str, "label": str},
                      parse_dates=["timestamp"], keep_default_na=False)
     for col in ("seam", "excluded"):
@@ -31,7 +40,7 @@ def load_slices(cfg, include_excluded=False, apply_selection=True):
     if not include_excluded:
         df = df[~df["excluded"]]
     if apply_selection:
-        df = select(df, cfg.get("selection") or {}, (cfg.get("check") or {}).get("timezone"))
+        df = select(df, cfg.get("selection") or {}, tz)
     return df.sort_values(["z", "tile"]).reset_index(drop=True)
 
 

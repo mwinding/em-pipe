@@ -6,7 +6,7 @@
 #SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --mem=8G
 #SBATCH --time=04:00:00
 #SBATCH --output=slurm-%x-%j.out
 #SBATCH --mail-type=FAIL

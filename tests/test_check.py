@@ -503,3 +503,15 @@ def test_excluded_day_keeps_segment_and_moves_seam(tmp_path):
     assert slices.loc[slices["excluded"], "z"].unique().tolist() == d25
     usable = load_slices(load_config(cfg))
     assert usable.loc[usable["seam"], "z"].unique().tolist() == [d25[-1] + 1]
+
+
+def test_timezone_recorded_and_enforced(tmp_path):
+    """slices.csv holds UTC when check.timezone is set: later steps with another timezone must refuse,
+    not silently shift a date selection by the UTC offset."""
+    t = synth.make_dataset(tmp_path / "raw", n_slices=4)
+    cfg = config(tmp_path, t.raw_dir, timezone="Europe/London")
+    assert run(cfg) == 0
+    assert load_slices(load_config(cfg))["z"].nunique() == 4
+    other = config(tmp_path, t.raw_dir)          # same output_dir, timezone null
+    with pytest.raises(ValueError, match="timezone"):
+        load_slices(load_config(other))

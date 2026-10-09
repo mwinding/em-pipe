@@ -389,3 +389,21 @@ def test_with_check_slices(tmp_path):
     tiles = read_tiles(tmp_path / "out")
     assert len(tiles) == 12 * 4
     assert_matches_truth(tiles, {(z, t): truth.tile_origin[t] for z in range(12) for t in truth.tiles})
+
+
+def test_coarse_search_retries_at_higher_resolution(two_segments, tmp_path):
+    """At coarse_factor 8 these small tiles have too few features to find the overlaps (as a ~1%
+    overlap would on real noisy tiles); the search is retried at 4 and 2 instead of failing the run."""
+    root, parts = two_segments
+    part = [parts[1]]
+    cfg, out, origin = setup_run(tmp_path, "no_retry", part, coarse_factor=8, min_coarse_factor=8)
+    assert stitch.main(["run", "--config", str(cfg)]) == 0
+    recs = [json.loads(p.read_text()) for p in sorted((out / "stitch" / "samples").glob("*.json"))]
+    assert recs and not any(r["ok"] for r in recs)
+    assert all("not connected" in r["reason"] for r in recs)
+    assert all(p["note"].startswith("no coarse match") for r in recs for p in r["pairs"] if p["A"] is None)
+
+    out2, origin2 = stitched(tmp_path, "retry", part, coarse_factor=8)   # min_coarse_factor 2 (default)
+    recs = [json.loads(p.read_text()) for p in sorted((out2 / "stitch" / "samples").glob("*.json"))]
+    assert all(r["ok"] for r in recs) and {r["coarse_factor_used"] for r in recs} <= {4, 2}
+    assert_matches_truth(read_tiles(out2), origin2)

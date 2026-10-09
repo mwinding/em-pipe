@@ -20,15 +20,26 @@ check:
       action: exclude
       note: byte copy of M09_D18_tile2-2_part2.tif
 
+# Tile overlap is unknown: search it at 1/4 resolution (8 is the default; ~1% overlaps on noisy
+# tiles can need more). Failed slices are retried at higher resolution anyway.
+stitch:
+  coarse_factor: 4
+
 render:
   downsample: 4              # 32 nm voxels
 
 slurm:
   mail_user: null            # your email, for failure mails
-  preview: {array: 10, time: "04:00:00"}                          # ~25 chunks of 50 slices
-  stitch: {array: 5, time: "04:00:00"}                            # ~30 sampled slices
-  align: {array: 13, time: "12:00:00"}                            # ~13 chunks of 100 slices
+  # Short single jobs: small requests so they start quickly between the array jobs.
+  check: {cpus: 4, mem: 4G, time: "01:00:00"}
+  preview: {array: 10, cpus: 2, mem: 8G, time: "02:00:00"}       # 25 chunks of 50 slices
+  preview_merge: {cpus: 2, mem: 4G, time: "00:30:00"}
+  stitch: {array: 5, cpus: 8, mem: 8G, time: "02:00:00"}         # 28 sampled slices
+  stitch_merge: {cpus: 2, mem: 4G, time: "00:30:00"}
+  align: {array: 13, cpus: 8, mem: 16G, time: "04:00:00"}        # 13 chunks of 100 slices
+  align_solve: {cpus: 2, mem: 8G, time: "00:30:00"}
+  intensity: {cpus: 2, mem: 8G, time: "00:30:00"}
   zcorrect: {array: 6}
-  render_init: {mem: 16G, time: "01:00:00"}
-  render: {array: 5, cpus: 8, mem: 32G, time: "12:00:00"}         # ~300 planes at f=4: 5 slabs
-  pyramid: {array: 5, time: "02:00:00"}
+  render_init: {cpus: 2, mem: 8G, time: "00:30:00"}
+  render: {array: 5, cpus: 8, mem: 32G, time: "04:00:00"}        # ~303 planes at f=4: 5 slabs
+  pyramid: {array: 5, cpus: 2, mem: 8G, time: "01:00:00"}

@@ -20,6 +20,10 @@ check:
       action: exclude
       note: byte copy of M09_D18_tile2-2_part2.tif
 
+# Tile overlap search at 1/4 resolution: more margin than the default 8 for small (~1%) overlaps.
+stitch:
+  coarse_factor: 4
+
 # Tune on a few slices before enabling: python -m pipeline.destreak test --config C --z Z --tile 0-0
 destreak:
   enabled: false
@@ -36,7 +40,7 @@ slurm:
   check: {cpus: 4, mem: 16G, time: "02:00:00"}
   preview: {array: 40, cpus: 2, mem: 8G, time: "04:00:00"}        # ~230 chunks of 50 slices (~70 GB read each)
   preview_merge: {cpus: 2, mem: 16G, time: "01:00:00"}
-  stitch: {array: 20, cpus: 8, mem: 32G, time: "04:00:00"}        # ~300 sampled slices, ~1 min each
+  stitch: {array: 20, cpus: 8, mem: 8G, time: "04:00:00"}        # ~300 sampled slices, ~1 min each
   stitch_merge: {cpus: 2, mem: 8G, time: "01:00:00"}
   align: {array: 40, cpus: 8, mem: 16G, time: "12:00:00"}         # ~115 chunks of 100 slices, ~30 min each
   align_solve: {cpus: 4, mem: 32G, time: "02:00:00"}

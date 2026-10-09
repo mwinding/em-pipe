@@ -28,6 +28,7 @@ DEFAULTS = {
     "stitch": {
         "sample_every": 50,          # stitch every n-th selected z of a segment (plus its ends and seams)
         "coarse_factor": 8,          # downsampling of whole tiles for the overlap search
+        "min_coarse_factor": 2,      # if tiles stay unconnected, retry the search at half the factor down to this
         "fine_factor": 2,            # downsampling of the full-res overlap strips for the final matches
         "fine_margin_px": 200,       # full-res margin added around the coarse overlap for fine matching
         "model": "translation",      # translation | rigid | similarity | affine (pairs and per-tile solve)
@@ -43,7 +44,7 @@ DEFAULTS = {
 
 MODES = ("auto", "fixed", "per_slice")
 # Settings that change a sample's result: run redoes samples made with other values, merge refuses them.
-_RUN_KEYS = ("coarse_factor", "fine_factor", "fine_margin_px", "model", "ratio", "ransac_px", "min_inliers",
+_RUN_KEYS = ("coarse_factor", "min_coarse_factor", "fine_factor", "fine_margin_px", "model", "ratio", "ransac_px", "min_inliers",
              "max_points_per_pair", "max_features")
 _NPARAM = {"translation": 2, "rigid": 3, "similarity": 4, "affine": 6}
 _IDENTITY = {"translation": [0, 0], "rigid": [0, 0, 0], "similarity": [1, 0, 0, 0], "affine": [1, 0, 0, 0, 1, 0]}
@@ -243,7 +244,7 @@ def stitch_slice(rows, cache, opts, reference):
     by_tile = {r["tile"]: r for _, r in rows.iterrows()}
     tiles = sorted(by_tile, key=tile_key)
     first = by_tile[tiles[0]]
-    model, cf, ff, margin = opts["model"], opts["coarse_factor"], opts["fine_factor"], opts["fine_margin_px"]
+    model, cf, ff = opts["model"], opts["coarse_factor"], opts["fine_factor"]
     rec = {"z": int(first["z"]), "timestamp": first["timestamp"].isoformat(), "segment": int(first["segment"]),
            "model": model, "reference": reference, "settings": {k: opts[k] for k in _RUN_KEYS},
            "ok": False, "reason": "", "tiles": {}, "pairs": []}
@@ -252,18 +253,55 @@ def stitch_slice(rows, cache, opts, reference):
         return rec
     shapes = {t: (int(r["height"]), int(r["width"])) for t, r in by_tile.items()}
 
+    # A small overlap (~1% of a tile) is only a few pixels wide at coarse_factor 8 and may yield too few
+    # matches on noisy images: retry the whole search at twice the resolution before giving up.
+    while True:
+        rec["pairs"], points = _match_pairs(cache, by_tile, tiles, shapes, cf, opts)
+        missing = sorted(set(tiles) - _component(reference, points), key=tile_key)
+        if not missing or cf <= opts["min_coarse_factor"]:
+            break
+        new_cf = max(opts["min_coarse_factor"], cf // 2)
+        log.info("z %d: tiles %s not connected at coarse_factor %d: retrying at %d", rec["z"], missing, cf, new_cf)
+        cf = new_cf
+    rec["coarse_factor_used"] = cf
+    if missing:
+        rec["reason"] = f"too few matches: tiles {missing} not connected to {reference}"
+        return rec
+    T, used, rec["reason"] = solve_robust(points, tiles, reference, model, opts["ransac_px"] * ff)
+    if T is None:
+        return rec
+    final = residuals(T, points)
+    for pair in rec["pairs"]:
+        key = (pair["tile_a"], pair["tile_b"])
+        if key in final:
+            pair.update(solve_residual_px=final[key], used=key in used)
+    rec.update(ok=True, tiles={t: T[t].tolist() for t in tiles})
+    return rec
+
+
+def _match_pairs(cache, by_tile, tiles, shapes, cf, opts):
+    """Coarse search over every tile pair at ``cf``, then fine matches in each found overlap.
+
+    Returns (pair records, {(tile_a, tile_b): (points in a, points in b)} for the good pairs).
+    """
+    model, ff, margin = opts["model"], opts["fine_factor"], opts["fine_margin_px"]
     # Coarse: whole tiles, every pair (filename r/c say nothing reliable about the layout).
     coarse = {t: _detect(cache.read(r), cf, opts) for t, r in by_tile.items()}
-    points = {}
+    pairs, points = [], {}
     for ta, tb in combinations(tiles, 2):
         fit = _fit(*coarse[ta], *coarse[tb], "translation", opts["ransac_px"] * cf, opts)
         if fit is None or not _plausible(fit[0][:, 2], shapes[ta], shapes[tb]):
+            # Expected for diagonal neighbours with little or no overlap; recorded for diagnosis.
+            pairs.append({"tile_a": ta, "tile_b": tb, "coarse_tx": None, "coarse_ty": None,
+                          "coarse_inliers": 0 if fit is None else len(fit[1]), "A": None, "n_inliers": 0,
+                          "residual_px": None, "solve_residual_px": None, "used": False,
+                          "note": f"no coarse match at coarse_factor {cf}"})
             continue
         t = fit[0][:, 2]
         pair = {"tile_a": ta, "tile_b": tb, "coarse_tx": float(t[0]), "coarse_ty": float(t[1]),
                 "coarse_inliers": len(fit[1]), "A": None, "n_inliers": 0, "residual_px": None,
                 "solve_residual_px": None, "used": False, "note": ""}
-        rec["pairs"].append(pair)
+        pairs.append(pair)
         # Fine: only the overlap (+ margin) of each tile, at full resolution.
         box = _overlap(t, shapes[ta], shapes[tb])
         ra, ca = _region(box, (0, 0), shapes[ta], margin)
@@ -282,21 +320,7 @@ def stitch_slice(rows, cache, opts, reference):
         pair.update(A=A.tolist(), n_inliers=len(pa), residual_px=_rms(A, pa, pb))
         keep = np.unique(np.linspace(0, len(pa) - 1, min(len(pa), opts["max_points_per_pair"])).round().astype(int))
         points[(ta, tb)] = (pa[keep], pb[keep])
-
-    missing = sorted(set(tiles) - _component(reference, points), key=tile_key)
-    if missing:
-        rec["reason"] = f"too few matches: tiles {missing} not connected to {reference}"
-        return rec
-    T, used, rec["reason"] = solve_robust(points, tiles, reference, model, opts["ransac_px"] * ff)
-    if T is None:
-        return rec
-    final = residuals(T, points)
-    for pair in rec["pairs"]:
-        key = (pair["tile_a"], pair["tile_b"])
-        if key in final:
-            pair.update(solve_residual_px=final[key], used=key in used)
-    rec.update(ok=True, tiles={t: T[t].tolist() for t in tiles})
-    return rec
+    return pairs, points
 
 
 def _sample_path(cfg, z):
