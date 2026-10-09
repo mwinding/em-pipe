@@ -18,7 +18,7 @@ import tifffile
 from scipy import ndimage
 
 import synth
-from pipeline import destreak, omezarr, pyramid
+from pipeline import destreak, omezarr, pyramid, transforms
 
 ROOT = Path(__file__).resolve().parents[1]
 N = 30
@@ -149,9 +149,13 @@ def test_stitch_matches_true_tile_offsets(main_run):
     tiles = pd.read_csv(out / "stitch" / "tiles.csv", dtype={"tile": str})
     sl = pd.read_csv(out / "check" / "slices.csv", dtype={"tile": str})
     assert len(tiles) == (~sl["excluded"]).sum()
-    true = np.array([truth.tile_origin[t] for t in tiles["tile"]])
-    assert np.abs(tiles[["tx", "ty"]].to_numpy() - true).max() < 0.5
-    np.testing.assert_allclose(tiles[["a", "b", "c", "d"]].to_numpy(), [[1, 0, 0, 1]] * len(tiles))
+    # The default affine_rigid model fits a near-identity affine to these pure-translation tiles:
+    # every tile corner must land within 0.5 px of the truth.
+    th, tw = truth.tile_shape
+    corners = transforms.corners(tw, th)
+    for row in tiles.itertuples():
+        got = transforms.apply(transforms.from_row(row._asdict()), corners)
+        assert np.abs(got - (corners + truth.tile_origin[row.tile])).max() < 0.5, (row.z, row.tile)
     layout = json.loads((out / "stitch" / "layout.json").read_text())["segments"]["0"]
     assert layout["grid_shape"] == [2, 2] and layout["row_axis"] == "y"
 
@@ -181,8 +185,9 @@ def test_render_matches_truth_without_tile_seams(main_run):
         montage, feet, corner = masks(truth, meta, z)
         exp = expected(truth, z, img.shape, corner)
         covered = np.any([feet[t] for t in present[z]], axis=0)
-        # No data outside the tiles that exist at z (e.g. tile 1-1 on day 1) ...
-        assert (img[~covered] == 0).all(), f"z {z}: data outside the present tiles"
+        # No data outside the tiles that exist at z (e.g. tile 1-1 on day 1), beyond the 1 px edge a
+        # sub-pixel affine stitch interpolates into ...
+        assert (img[~ndimage.binary_dilation(covered, np.ones((3, 3)))] == 0).all(), f"z {z}: data outside the present tiles"
         # ... and the truth inside them, overlaps included.
         inner = interior(montage) & covered
         assert np.corrcoef(img[inner], exp[inner])[0, 1] > 0.98, f"z {z}"
@@ -209,7 +214,7 @@ def test_missing_tile_area_filled_by_neighbours(main_run):
             continue
         _, feet, corner = masks(truth, meta, z)
         neighbours = feet["0-1"] | feet["1-0"]
-        assert (s0[z][feet["1-1"] & ~neighbours] == 0).all()
+        assert (s0[z][feet["1-1"] & ~ndimage.binary_dilation(neighbours, np.ones((3, 3)))] == 0).all()
         # Where the neighbours overlap tile 1-1 they show the truth (dark pixels clip to 0 anywhere).
         filled = interior(feet["1-1"] & neighbours, 1)
         exp = expected(truth, z, s0[z].shape, corner)

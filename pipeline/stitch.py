@@ -31,7 +31,11 @@ DEFAULTS = {
         "min_coarse_factor": 2,      # if tiles stay unconnected, retry the search at half the factor down to this
         "fine_factor": 2,            # downsampling of the full-res overlap strips for the final matches
         "fine_margin_px": 200,       # full-res margin added around the coarse overlap for fine matching
-        "model": "translation",      # translation | rigid | similarity | affine (pairs and per-tile solve)
+        # Per-tile model. affine_rigid (default) is Janelia's montage model (mpicbg/TrakEM2/render): each
+        # tile's transform is (1 - lambda) * affine + lambda * rigid, fitted iteratively over the λ
+        # schedule below. Also: translation | rigid | similarity | affine (one linear least-squares solve).
+        "model": "affine_rigid",
+        "lambdas": [1.0, 0.5, 0.1],  # affine_rigid: rigid weight per round, decreasing (1 = rigid)
         "mode": "auto",              # fixed (one transform per tile and segment) | per_slice | auto
         "fixed_tolerance_px": 2.0,   # auto -> fixed if no tile's sampled offset is further than this from its median
         "ratio": 0.8,                # Lowe ratio test
@@ -44,9 +48,12 @@ DEFAULTS = {
 
 MODES = ("auto", "fixed", "per_slice")
 # Settings that change a sample's result: run redoes samples made with other values, merge refuses them.
-_RUN_KEYS = ("coarse_factor", "min_coarse_factor", "fine_factor", "fine_margin_px", "model", "ratio", "ransac_px", "min_inliers",
+_RUN_KEYS = ("coarse_factor", "min_coarse_factor", "fine_factor", "fine_margin_px", "model", "lambdas", "ratio", "ransac_px", "min_inliers",
              "max_points_per_pair", "max_features")
 _NPARAM = {"translation": 2, "rigid": 3, "similarity": 4, "affine": 6}
+MODELS = (*_NPARAM, "affine_rigid")
+# Point-match filtering (RANSAC) model per tile model.
+_PAIR_MODEL = {"affine_rigid": "affine"}
 _IDENTITY = {"translation": [0, 0], "rigid": [0, 0, 0], "similarity": [1, 0, 0, 0], "affine": [1, 0, 0, 0, 1, 0]}
 
 
@@ -145,7 +152,50 @@ def _matrix(model, q):
     return np.asarray(q, float).reshape(2, 3)
 
 
-def solve(pairs, tiles, reference, model):
+def solve(pairs, tiles, reference, model, lambdas=(1.0, 0.5, 0.1)):
+    """Tile -> montage transforms with ``reference`` fixed at identity: ({tile: A}, {pair: rms px}).
+
+    pairs: {(tile_a, tile_b): (pa, pb)}, pa (N, 2) in tile_a pixels matching pb in tile_b pixels.
+    """
+    if model == "affine_rigid":
+        return solve_affine_rigid(pairs, tiles, reference, lambdas)
+    return _solve_linear(pairs, tiles, reference, model)
+
+
+def solve_affine_rigid(pairs, tiles, reference, lambdas, max_rounds=5000, tol=1e-3):
+    """Janelia's montage solve (mpicbg TileConfiguration with InterpolatedAffineModel2D).
+
+    Starting from the rigid solution, tiles are updated one at a time: each is refitted to its
+    matches' current positions in the montage as (1 - λ) * affine fit + λ * rigid fit, until no
+    point moves by more than ``tol`` px; then the next, smaller λ of the schedule. The rigid
+    part keeps a tile's affine from overfitting its thin overlap strips.
+    """
+    T = _solve_linear(pairs, tiles, reference, "rigid")[0]
+    free = [t for t in tiles if t != reference]
+    for lam in lambdas:
+        for _ in range(max_rounds):
+            moved = 0.0
+            for t in free:
+                src, dst = [], []
+                for (ta, tb), (pa, pb) in pairs.items():
+                    if ta == t:
+                        src.append(pa)
+                        dst.append(transforms.apply(T[tb], pb))
+                    elif tb == t:
+                        src.append(pb)
+                        dst.append(transforms.apply(T[ta], pa))
+                if not src:
+                    continue
+                S, D = np.vstack(src), np.vstack(dst)
+                new = (1 - lam) * features.estimate("affine", S, D) + lam * features.estimate("rigid", S, D)
+                moved = max(moved, float(np.abs(transforms.apply(new, S) - transforms.apply(T[t], S)).max()))
+                T[t] = new
+            if moved < tol:
+                break
+    return T, residuals(T, pairs)
+
+
+def _solve_linear(pairs, tiles, reference, model):
     """Least-squares tile -> montage transforms with ``reference`` fixed at identity.
 
     pairs: {(tile_a, tile_b): (pa, pb)}, pa (N, 2) in tile_a pixels matching pb in tile_b pixels.
@@ -186,7 +236,7 @@ def _without(pairs, p):
     return {q: v for q, v in pairs.items() if q != p}
 
 
-def loop_error(pairs, tiles, reference, model):
+def loop_error(pairs, tiles, reference, model, lambdas=(1.0, 0.5, 0.1)):
     """Worst loop-closure error: over pairs that close a loop, the residual of the pair when
     only the other pairs are solved. (The full solve's residuals understate it: one bad pair's
     error is spread around its loop, e.g. a quarter of it per pair in a 2x2 ring.)"""
@@ -194,31 +244,31 @@ def loop_error(pairs, tiles, reference, model):
     for p in pairs:
         rest = _without(pairs, p)
         if _component(reference, rest) == set(tiles):
-            err = max(err, residuals(solve(rest, tiles, reference, model)[0], {p: pairs[p]})[p])
+            err = max(err, residuals(solve(rest, tiles, reference, model, lambdas)[0], {p: pairs[p]})[p])
     return err
 
 
-def solve_robust(pairs, tiles, reference, model, tol):
+def solve_robust(pairs, tiles, reference, model, tol, lambdas=(1.0, 0.5, 0.1)):
     """``solve`` after removing pairs that break loop closure (error > tol) one at a time.
 
     Each round removes the pair whose removal leaves the smallest loop error, keeping all tiles
     connected. If several removals would each fix it, the bad pair is ambiguous (e.g. one 2x2
     ring without diagonal matches) and the slice fails. Returns (T or None, kept pairs, reason).
     """
-    err = loop_error(pairs, tiles, reference, model)
+    err = loop_error(pairs, tiles, reference, model, lambdas)
     while err > tol:
         options = []
         for p in pairs:
             rest = _without(pairs, p)
             if _component(reference, rest) == set(tiles):
-                options.append((loop_error(rest, tiles, reference, model), p))
+                options.append((loop_error(rest, tiles, reference, model, lambdas), p))
         options.sort()
         if len(options) > 1 and options[1][0] <= tol:
             return None, pairs, (f"inconsistent pair offsets (loop closure error {err:.1f} px) and "
                                  "no single bad pair can be identified")
         err, drop = options[0]
         pairs = _without(pairs, drop)
-    return solve(pairs, tiles, reference, model)[0], pairs, ""
+    return solve(pairs, tiles, reference, model, lambdas)[0], pairs, ""
 
 
 def _component(start, pairs):
@@ -267,7 +317,8 @@ def stitch_slice(rows, cache, opts, reference):
     if missing:
         rec["reason"] = f"too few matches: tiles {missing} not connected to {reference}"
         return rec
-    T, used, rec["reason"] = solve_robust(points, tiles, reference, model, opts["ransac_px"] * ff)
+    T, used, rec["reason"] = solve_robust(points, tiles, reference, model, opts["ransac_px"] * ff,
+                                          opts["lambdas"])
     if T is None:
         return rec
     final = residuals(T, points)
@@ -308,7 +359,7 @@ def _match_pairs(cache, by_tile, tiles, shapes, cf, opts):
         rb, cb = _region(box, t, shapes[tb], margin)
         ka, da = _detect(cache.read(by_tile[ta], ra, ca), ff, opts, (ca.start, ra.start))
         kb, db = _detect(cache.read(by_tile[tb], rb, cb), ff, opts, (cb.start, rb.start))
-        fit = _fit(ka, da, kb, db, model, opts["ransac_px"] * ff, opts)
+        fit = _fit(ka, da, kb, db, _PAIR_MODEL.get(model, model), opts["ransac_px"] * ff, opts)
         if fit is None:
             pair["note"] = "fine matching failed"
             continue
@@ -353,8 +404,8 @@ def _stale(rec, opts, segment, reference):
 
 def run(cfg, task_id, num_tasks, overwrite=False):
     opts = cfg["stitch"]
-    if opts["model"] not in _NPARAM:
-        raise ValueError(f"stitch.model must be one of {list(_NPARAM)}")
+    if opts["model"] not in MODELS:
+        raise ValueError(f"stitch.model must be one of {list(MODELS)}")
     slices, samples, gauge = _load(cfg)
     mine = my_chunks(samples, task_id, num_tasks)
     log.info("%d sampled slices, task %d/%d takes %d", len(samples), task_id, num_tasks, len(mine))

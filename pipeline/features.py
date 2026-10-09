@@ -49,7 +49,7 @@ def match(desc_a, desc_b, ratio=0.8):
     return np.array([m.queryIdx for m in good], int), np.array([m.trainIdx for m in good], int)
 
 
-def _estimate(model, pa, pb):
+def estimate(model, pa, pb):
     """Least-squares model mapping pa -> pb (needs at least _MIN_POINTS[model] points)."""
     if model == "translation":
         t = (pb - pa).mean(axis=0)
@@ -94,7 +94,7 @@ def fit_model(pa, pb, model="translation", threshold=3.0, iterations=1000, min_i
     for _ in range(iterations):
         idx = rng.choice(n, size=k, replace=False)
         with np.errstate(all="ignore"):
-            A = _estimate(model, pa[idx], pb[idx])
+            A = estimate(model, pa[idx], pb[idx])
         if not np.all(np.isfinite(A)):
             continue
         inl = residuals(A, pa, pb) < threshold
@@ -105,11 +105,11 @@ def fit_model(pa, pb, model="translation", threshold=3.0, iterations=1000, min_i
     if best.sum() < min_inliers:
         return None, best
     # Refit on inliers, then re-select inliers under the refit model once.
-    A = _estimate(model, pa[best], pb[best])
+    A = estimate(model, pa[best], pb[best])
     inl = residuals(A, pa, pb) < threshold
     if inl.sum() >= best.sum():
         best = inl
-        A = _estimate(model, pa[best], pb[best])
+        A = estimate(model, pa[best], pb[best])
     return A, best
 
 

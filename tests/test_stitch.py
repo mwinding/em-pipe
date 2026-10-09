@@ -12,7 +12,8 @@ import tifffile
 import synth
 from pipeline import stitch, transforms
 
-OPTS = {"sample_every": 3, "coarse_factor": 2, "fine_factor": 1, "fine_margin_px": 16}
+# Synthetic tiles are pure translations: the translation model makes exact identity checks possible.
+OPTS = {"sample_every": 3, "coarse_factor": 2, "fine_factor": 1, "fine_margin_px": 16, "model": "translation"}
 
 
 def write_slices(out_dir, parts, relabel=None, exclude=()):
@@ -407,3 +408,51 @@ def test_coarse_search_retries_at_higher_resolution(two_segments, tmp_path):
     recs = [json.loads(p.read_text()) for p in sorted((out2 / "stitch" / "samples").glob("*.json"))]
     assert all(r["ok"] for r in recs) and {r["coarse_factor_used"] for r in recs} <= {4, 2}
     assert_matches_truth(read_tiles(out2), origin2)
+
+
+def _real_like_2x2():
+    """A 2x2 layout like the real data (13875 x 12751 tiles, ~600 px overlaps, bottom row ~890 px
+    right) whose tiles differ by small rotations, scales and shears (scan geometry), with
+    correspondences only in thin overlap strips."""
+    W, H = 13875, 12751
+    def tile(tx, ty, rot=0.0, scale=1.0, shear=0.0):
+        c, s = np.cos(rot) * scale, np.sin(rot) * scale
+        return np.array([[c, -s + shear, tx], [s, c, ty]])
+    true = {"0-0": transforms.identity(), "0-1": tile(13263, -63, 7e-4, 1.0003),
+            "1-0": tile(892, 12160, -5e-4, 0.9997, 2e-4), "1-1": tile(14104, 12112, 3e-4, 1.0002)}
+    rng = np.random.default_rng(1)
+    pairs = {}
+    for ta, tb in [("0-0", "0-1"), ("0-0", "1-0"), ("0-1", "1-1"), ("1-0", "1-1")]:
+        # montage points in the overlap of the two tiles' nominal rectangles
+        xa0, ya0, xa1, ya1 = transforms.bbox(true[ta], W, H)
+        xb0, yb0, xb1, yb1 = transforms.bbox(true[tb], W, H)
+        x0, x1, y0, y1 = max(xa0, xb0) + 20, min(xa1, xb1) - 20, max(ya0, yb0) + 20, min(ya1, yb1) - 20
+        pm = np.column_stack([rng.uniform(x0, x1, 400), rng.uniform(y0, y1, 400)])
+        pa, pb = (transforms.apply(transforms.invert(true[t]), pm) for t in (ta, tb))
+        pairs[(ta, tb)] = (pa + rng.normal(0, 0.3, pa.shape), pb + rng.normal(0, 0.3, pb.shape))
+    return true, pairs
+
+
+def test_affine_rigid_fixes_real_like_loop_closure():
+    """On the geometry seen in the real P667 tiles, translation-only leaves a loop-closure error of
+    several px (the first real run failed with 7.5-9.5 px); Janelia's affine_rigid solve closes it."""
+    true, pairs = _real_like_2x2()
+    tiles = list(true)
+    assert stitch.loop_error(pairs, tiles, "0-0", "translation") > 4
+    T, rms = stitch.solve(pairs, tiles, "0-0", "affine_rigid")
+    assert stitch.loop_error(pairs, tiles, "0-0", "affine_rigid") < 1.5
+    assert max(rms.values()) < 1.0
+    # Outer tile corners are ~13,000 px from any overlap, so they are extrapolated (and the rigid pull
+    # shrinks scale differences slightly); still far closer than translation-only (~10 px).
+    corners = transforms.corners(13875, 12751)
+    err = max(np.abs(transforms.apply(T[t], corners) - transforms.apply(true[t], corners)).max() for t in tiles)
+    T_tr, _ = stitch.solve(pairs, tiles, "0-0", "translation")
+    err_tr = max(np.abs(transforms.apply(T_tr[t], corners) - transforms.apply(true[t], corners)).max() for t in tiles)
+    assert err < 5 and err < err_tr / 2
+
+
+def test_affine_rigid_lambda_one_is_rigid():
+    true, pairs = _real_like_2x2()
+    T, _ = stitch.solve(pairs, list(true), "0-0", "affine_rigid", lambdas=[1.0])
+    for A in T.values():   # orthonormal linear part
+        np.testing.assert_allclose(A[:, :2] @ A[:, :2].T, np.eye(2), atol=1e-9)
