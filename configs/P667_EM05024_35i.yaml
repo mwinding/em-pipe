@@ -42,6 +42,8 @@ slurm:
   preview_merge: {cpus: 2, mem: 16G, time: "01:00:00"}
   # 32G: the 2x3 phase retries the overlap search at coarse_factor 2 (SIFT on ~4x larger images);
   # 8G ran out of memory there.
+  # 32G: the 2x3 phase retries the overlap search at coarse_factor 2 (SIFT on ~4x larger images);
+  # 8G ran out of memory there.
   stitch: {array: 60, cpus: 8, mem: 32G, time: "02:00:00"}       # ~340 sampled slices
   stitch_merge: {cpus: 2, mem: 8G, time: "01:00:00"}
   align: {array: 142, cpus: 8, mem: 16G, time: "04:00:00"}       # 142 chunks of 100 slices
