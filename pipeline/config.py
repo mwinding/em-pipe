@@ -19,7 +19,8 @@ DEFAULTS = {
     "raw_dir": None,
     "output_dir": None,
     "raw": {
-        # Daily export files, e.g. M10_D06_tile1-1.tif or M09_D23_tile0-0_part2.tif
+        # Daily export files, e.g. M10_D06_tile1-1.tif or M09_D23_tile0-0_part2.tif. Groups: month, day, row,
+        # col, optional part (default 1); a name without row/col takes its tile from its slice labels.
         "file_pattern": r"^M(?P<month>\d{2})_D(?P<day>\d{2})_tile(?P<row>\d+)-(?P<col>\d+)(?:_part(?P<part>\d+))?\.tif$",
         # Per-slice ImageJ labels, e.g. G460-0186_26-10-06_000146_0-1-1_InLens_raw.tif
         "label_pattern": r"^(?P<instrument>.+?)_(?P<date>\d{2}-\d{2}-\d{2})_(?P<time>\d{6})_(?P<group>\d+)-(?P<row>\d+)-(?P<col>\d+)_(?P<detector>[^_]+)_raw\.tif$",

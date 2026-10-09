@@ -201,8 +201,9 @@ def check_file(f, h, parsed, voxel_nm, add):
             f"label_time_format, e.g. {bad[0]!r}", rel, t0)
     wrong = Counter(tile for _, tile in parsed if tile is not None and tile != f["tile"])
     if wrong:
+        said = "filename says" if f.get("tile_from_name", True) else "the other labels say"
         add("ERROR", "TILE_MISMATCH", f"labels say tile {', '.join(wrong)} ({sum(wrong.values())} of "
-            f"{len(parsed)}), filename says {f['tile']}", rel, t0)
+            f"{len(parsed)}), {said} {f['tile']}", rel, t0)
     back = [(i, a, b) for (_, a), (i, b) in zip(timed, timed[1:]) if b <= a]
     if back:
         i, a, b = back[0]
@@ -347,7 +348,12 @@ def timeline(sl, recs, gap_factor, add):
 
 
 def _tile_name(rel, m, row, col):
-    """``rel`` with the tile row/col in its filename replaced: the file that would hold that tile."""
+    """``rel`` with the tile row/col in its filename replaced: the file that would hold that tile.
+
+    ``"<rel> (tile r-c)"`` when the name has no tile (its tile came from the labels).
+    """
+    if m.groupdict().get("row") is None or m.groupdict().get("col") is None:
+        return f"{rel} (tile {row}-{col})"
     name = os.path.basename(rel)
     for group, value in sorted((("row", row), ("col", col)), key=lambda gv: -m.start(gv[0])):
         name = name[:m.start(group)] + str(value) + name[m.end(group):]
@@ -433,10 +439,14 @@ def analyse(cfg, overwrite=False):
     cutoff = time.time() - 60 * float(c["min_age_minutes"])
     recs = {}
     for rel, (m, st) in found.items():
-        row, col = int(m["row"]), int(m["col"])
-        recs[rel] = {"file": rel, "month": int(m["month"]), "day": int(m["day"]),
-                     "part": int(m.groupdict().get("part") or 1), "tile": f"{row}-{col}", "tile_row": row,
-                     "tile_col": col, "size_bytes": st.st_size if st else None,
+        g = m.groupdict()
+        # A name without row/col (e.g. M06_D05_1.tif, a single-tile phase) takes its tile from its labels.
+        named = g.get("row") is not None and g.get("col") is not None
+        row, col = (int(g["row"]), int(g["col"])) if named else (None, None)
+        recs[rel] = {"file": rel, "month": int(g["month"]), "day": int(g["day"]),
+                     "part": int(g.get("part") or 1), "tile": f"{row}-{col}" if named else None,
+                     "tile_row": row, "tile_col": col, "tile_from_name": named,
+                     "size_bytes": st.st_size if st else None,
                      "mtime": datetime.fromtimestamp(st.st_mtime).strftime(TIME_FMT) if st else "",
                      "status": "pending" if st is None or st.st_mtime > cutoff else "ok"}
         if st is None:
@@ -460,10 +470,17 @@ def analyse(cfg, overwrite=False):
         f["first_timestamp"], f["last_timestamp"] = (times[0], times[-1]) if times else (None, None)
         tiles = Counter(t for _, t in p if t is not None)
         label_tile[rel] = tiles.most_common(1)[0][0] if tiles else None
+        if f["tile"] is None and label_tile[rel] is not None:
+            f["tile"] = label_tile[rel]
+            f["tile_row"], f["tile_col"] = map(int, f["tile"].split("-"))
         n_before = len(issues)
         check_file(f, h, p, c["voxel_size_nm"], add)
         if any(i["code"].startswith("LABEL_") for i in issues[n_before:]):
             label_errors.add(rel)
+        if f["tile"] is None:
+            add("ERROR", "NO_TILE", "neither the file name (raw.file_pattern row, col) nor the slice labels "
+                "(raw.label_pattern row, col) give the tile; file not used", rel, f["first_timestamp"])
+            del parsed[rel]
     timestamp_mismatch(recs, parsed, label_errors, add)
 
     # Whole-file exclusions: copied tiles, files of a day still being copied, known_issues 'exclude'.
@@ -623,7 +640,7 @@ def main(argv=None):
     f = files.copy()
     for col in ("first_timestamp", "last_timestamp"):
         f[col] = pd.to_datetime(f[col]).dt.strftime(TIME_FMT)
-    for col in ("n_slices", "height", "width", "data_offset"):
+    for col in ("tile_row", "tile_col", "n_slices", "height", "width", "data_offset"):
         f[col] = f[col].astype("Int64")
     _write_csv(out / "files.csv", f)
     _write_csv(out / "slices.csv", slices.assign(timestamp=slices["timestamp"].dt.strftime(TIME_FMT)))

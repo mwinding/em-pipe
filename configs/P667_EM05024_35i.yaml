@@ -1,0 +1,51 @@
+# P667 EM05024 35i, 5-29 June 2026 (finished): ~14,200 slices at 8 nm, ~20 TB in 137 stacks.
+# Phases (from the headers): one tile per slice in files without a tile in the name (M06_D05_1.tif ...
+# M06_D06_2.tif; labels say tile 0-0; 10000x12500 growing to 25000x15000 px), then a 2x2 grid from
+# M06_D06_3_tile_0-0.tif (12751-12876 x 13126-13438 px tiles), then 2x3 from M06_D20_2_tile_0-0.tif
+# (12876x13229 px). Rendered at 32 nm. Only the volume is wanted, so skip export:
+#   ./run_pipeline.sh configs/P667_EM05024_35i.yaml --steps check
+#   ./run_pipeline.sh configs/P667_EM05024_35i.yaml --steps preview,stitch,align,intensity,render,pyramid
+
+name: P667_EM05024_35i
+raw_dir: /camp/lab/windingm/home/shared/electron_microscopy/35_i/P667_EM05024_35i
+output_dir: /camp/lab/windingm/home/shared/electron_microscopy/35_i/P667_EM05024_35i_stitched
+
+# Whole acquisition. To start at the 2x2 grid instead (z 1618 on, without the single-tile phase):
+# selection: {start: '2026-06-06 17:53:00'}
+
+raw:
+  # M06_D05_1.tif (part 1, tile from the labels), M06_D06_3_tile_0-0.tif (part 3), M06_D07_tile_0-0.tif
+  file_pattern: '^M(?P<month>\d{2})_D(?P<day>\d{2})(?:_(?P<part>\d+))?(?:_tile_(?P<row>\d+)-(?P<col>\d+))?\.tif$'
+  recursive: false           # the subfolders (MACS failure/, uCT datasets/) hold other data
+
+check:
+  voxel_size_nm: [8, 8, 8]   # headers: 7.99986 nm (M06_D06_2.tif has no calibration)
+  # June only, so no clock change: label times as written (BST).
+  timezone: null
+  known_issues: []
+
+# Tile overlap is unknown: search it at 1/4 resolution, as for 35h.
+stitch:
+  coarse_factor: 4
+
+destreak:
+  enabled: false
+
+render:
+  downsample: 4              # 32 nm voxels
+
+# Scaled from configs/P667_test_2day.yaml (1.7 TB, ~1,200 slices) to ~20 TB, ~14,200 slices.
+slurm:
+  mail_user: null            # your email, for failure mails
+  check: {cpus: 4, mem: 4G, time: "01:00:00"}
+  preview: {array: 120, cpus: 2, mem: 8G, time: "02:00:00"}      # ~290 chunks of 50 slices
+  preview_merge: {cpus: 2, mem: 16G, time: "01:00:00"}
+  stitch: {array: 60, cpus: 8, mem: 8G, time: "02:00:00"}        # ~350 sampled slices
+  stitch_merge: {cpus: 2, mem: 8G, time: "01:00:00"}
+  align: {array: 142, cpus: 8, mem: 16G, time: "04:00:00"}       # 142 chunks of 100 slices
+  align_solve: {cpus: 4, mem: 32G, time: "02:00:00"}
+  intensity: {cpus: 2, mem: 16G, time: "01:00:00"}
+  zcorrect: {array: 71}                                          # off; 71 chunks of 200 slices
+  render_init: {cpus: 2, mem: 16G, time: "01:00:00"}
+  render: {array: 56, cpus: 8, mem: 32G, time: "04:00:00"}       # ~3,540 planes at f=4: 56 slabs
+  pyramid: {array: 60, cpus: 2, mem: 8G, time: "01:00:00"}

@@ -515,3 +515,66 @@ def test_timezone_recorded_and_enforced(tmp_path):
     other = config(tmp_path, t.raw_dir)          # same output_dir, timezone null
     with pytest.raises(ValueError, match="timezone"):
         load_slices(load_config(other))
+
+
+# 35i-style names: an optional _N part, and a tile only in the later files (M06_D05_1.tif, M06_D06_3_tile_0-0.tif)
+UNTILED_PATTERN = r"^M(?P<month>\d{2})_D(?P<day>\d{2})(?:_(?P<part>\d+))?(?:_tile_(?P<row>\d+)-(?P<col>\d+))?\.tif$"
+
+
+def test_untiled_files_take_tile_from_labels(tmp_path):
+    """A single-tile phase in files without a tile in the name (labels ..._0-0-0_...), then a 2x2 phase."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    one = synth.make_dataset(tmp_path / "one", grid=(1, 1), tile_shape=(250, 300), n_slices=5,
+                             start=datetime(2026, 9, 24, 8, 0), seed=1)
+    four = synth.make_dataset(tmp_path / "four", n_slices=12, start=datetime(2026, 9, 24, 23, 45), seed=2)
+    (one.raw_dir / "M09_D24_tile0-0.tif").rename(raw / "M09_D24_1.tif")
+    for name in four.files:
+        new = name.replace("_tile", "_2_tile_" if name.startswith("M09_D24") else "_tile_")
+        (four.raw_dir / name).rename(raw / new)
+
+    cfg = config(tmp_path, raw, raw={"file_pattern": UNTILED_PATTERN})
+    assert run(cfg) == 0
+    files, slices, issues, report = outputs(cfg)
+    f = files.set_index("file")
+    assert len(f) == 9 and (f.at["M09_D24_1.tif", "tile"], f.at["M09_D24_1.tif", "part"]) == ("0-0", 1)
+    assert f.at["M09_D24_1.tif", "tile_row"] == 0 and f.at["M09_D24_2_tile_1-0.tif", "part"] == 2
+    assert f.at["M09_D25_tile_1-1.tif", "part"] == 1
+    first = slices[slices["file"] == "M09_D24_1.tif"]
+    assert first["z"].tolist() == list(range(5)) and (first["tile"] == "0-0").all()
+    assert (first["segment"] == 0).all() and (slices.loc[slices["z"] >= 5, "segment"] == 1).all()
+    assert slices.loc[slices["z"] >= 5].groupby("z").size().eq(4).all()
+    assert not pairs(issues, "ERROR")
+    assert issues.loc[issues["code"].isin(["RESTART", "SEGMENT_CHANGE"]), "z"].tolist() == [5, 5]
+    assert "| 0 | 1x1 | 250x300 | 0-4 |" in report and "| 1 | 2x2 | 192x224 | 5-16 |" in report
+
+    # Labels without a tile either: the untiled file can't be placed.
+    no_tile = r"^(?P<instrument>.+?)_(?P<date>\d{2}-\d{2}-\d{2})_(?P<time>\d{6})_.+_raw\.tif$"
+    cfg = config(tmp_path, raw, raw={"file_pattern": UNTILED_PATTERN, "label_pattern": no_tile})
+    assert run(cfg) == 1
+    files, slices, issues, _ = outputs(cfg)
+    assert pairs(issues, "ERROR") == {("NO_TILE", "M09_D24_1.tif")}
+    assert "M09_D24_1.tif" not in set(slices["file"]) and slices["z"].nunique() == 12
+    assert files.set_index("file").at["M09_D24_1.tif", "status"] == "error"
+
+
+def test_missing_tile_named_for_untiled_files(tmp_path):
+    """Untiled files (tile from the labels) of one day in separate folders, one tile absent."""
+    t = synth.make_dataset(tmp_path / "raw", n_slices=6, start=datetime(2026, 9, 24, 10, 0))
+    for name in t.files:
+        tile = name.split("_tile")[1][:3]
+        if tile == "1-1":
+            (t.raw_dir / name).unlink()
+        else:
+            (t.raw_dir / tile).mkdir()
+            (t.raw_dir / name).rename(t.raw_dir / tile / "M09_D24.tif")
+    cfg = config(tmp_path, t.raw_dir, raw={"file_pattern": UNTILED_PATTERN})
+    assert run(cfg) == 1
+    _, slices, issues, _ = outputs(cfg)
+    gone = "0-0/M09_D24.tif (tile 1-1)"
+    assert pairs(issues, "ERROR") == {("MISSING_TILE", gone)}
+    assert set(slices["tile"]) == {"0-0", "0-1", "1-0"}
+
+    cfg = config(tmp_path, t.raw_dir, raw={"file_pattern": UNTILED_PATTERN},
+                 known_issues=[{"file": gone, "action": "ignore", "note": "not imaged"}])
+    assert run(cfg) == 0

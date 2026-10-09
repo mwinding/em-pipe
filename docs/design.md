@@ -27,7 +27,8 @@ destreak has no batch stage: it is a function applied per tile inside render whe
 ## Conventions
 
 - **Arrays** are indexed `[z, y, x]`. **Points** are `(x, y)` = (column, row), in pixels.
-- **Tile ID** is the string `"r-c"` from the filename `tile{r}-{c}`. Code must not assume
+- **Tile ID** is the string `"r-c"` from the filename `tile{r}-{c}`, or from the slice labels when the
+  filename has none (e.g. `M06_D05_1.tif` of a single-tile phase). Code must not assume
   whether `r` is the y or x direction — stitch detects the layout from the images.
 - **Global slice index `z`**: 0-based position of a slice timestamp in time order over the
   whole acquisition (all non-ignored files, including excluded ones). All tiles of a slice
@@ -80,13 +81,14 @@ as do the Slurm logs (`work/logs/`).
 - `slices.csv` — one row per (slice timestamp, tile):
   `z, timestamp` (ISO 8601, no timezone), `tile, tile_row, tile_col, file, index` (slice index
   within the file), `height, width, segment, seam` (bool), `excluded` (bool), `exclude_reason, label`.
-  The tile comes from the file name. (z, tile) is unique. Timestamps are as written in the labels,
-  or naive UTC when `check.timezone` is set (selection start/end stay in local time and are
-  converted).
+  The tile comes from the file name, else from the file's slice labels (their most common tile).
+  (z, tile) is unique. Timestamps are as written in the labels, or naive UTC when `check.timezone`
+  is set (selection start/end stay in local time and are converted).
 - `issues.csv` — `severity` (`ERROR | WARN | INFO`), `code, file, timestamp, z, message, known` (bool).
   Codes: ERROR `UNREADABLE, TRUNCATED, LABEL_COUNT, LABEL_PARSE, TILE_MISMATCH, NON_MONOTONIC,
   TIMESTAMP_MISMATCH, DUPLICATE_CONTENT` (a byte copy of another tile; the copy is excluded),
-  `DUPLICATE_SLICE` (same timestamp and tile in two files; one kept), `TILE_SHAPE` (tile shaped unlike
+  `DUPLICATE_SLICE` (same timestamp and tile in two files; one kept), `NO_TILE` (neither the file name nor
+  the labels give the tile; file not used), `TILE_SHAPE` (tile shaped unlike
   the others of its slices; excluded), `MISSING_TILE` (also where the grid shrinks with the same tile
   shape), `NO_FILES`; WARN `DTYPE, VOXEL_SIZE, TIME_GAP, UNAVAILABLE`; INFO `RESTART, SEGMENT_CHANGE,
   KNOWN_ISSUE_RESOLVED` (a known_issues entry with no ERROR or WARN now).
