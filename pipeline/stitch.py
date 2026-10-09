@@ -321,6 +321,9 @@ def stitch_slice(rows, cache, opts, reference):
     if reference not in by_tile:  # no gauge shared with the segment's other samples
         rec["reason"] = f"reference tile {reference} missing"
         return rec
+    if len(tiles) == 1:  # one large field of view (e.g. the start of P667 35i): it is the montage
+        rec.update(ok=True, tiles={reference: transforms.identity().tolist()})
+        return rec
     shapes = {t: (int(r["height"]), int(r["width"])) for t, r in by_tile.items()}
 
     # A small overlap (~1% of a tile) is only a few pixels wide at coarse_factor 8 and may yield too few

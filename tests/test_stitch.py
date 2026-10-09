@@ -464,3 +464,20 @@ def test_affine_rigid_lambda_near_one_is_rigid():
         assert abs(L[0, 0] - L[1, 1]) < 1e-5 and abs(L[0, 1] + L[1, 0]) < 1e-5 and abs(L[0, 0] - 1) < 1e-5
     T, _ = stitch.solve(pairs, list(true), "0-0", "affine_rigid", rigid_lambda=0.001)
     assert max(abs(np.linalg.det(A[:, :2]) - 1) for A in T.values()) > 1e-4   # scale differences kept
+
+
+def test_single_tile_segment_then_grid(tmp_path):
+    """A 1x1 phase (one large field of view, as at the start of P667 35i) before a 2x2 grid: the
+    single tile is its own montage (identity) instead of crashing the solve."""
+    a = synth.make_dataset(tmp_path / "raw", n_slices=6, grid=(1, 1), tile_shape=(240, 300),
+                           start=datetime(2026, 6, 5, 12), seed=4)
+    b = synth.make_dataset(tmp_path / "raw", n_slices=6, grid=(2, 2), tile_shape=(192, 160), overlap=(44, 30),
+                           start=datetime(2026, 6, 6, 12), seed=5)
+    out, origin = stitched(tmp_path, "single", [(a, 0), (b, 1)])
+    tiles = read_tiles(out)
+    assert sorted(zip(tiles["z"], tiles["tile"])) == sorted(origin)
+    assert_matches_truth(tiles, origin)
+    single = tiles[tiles["segment"] == 0]
+    np.testing.assert_allclose(single[["a", "b", "tx", "c", "d", "ty"]].to_numpy(), [[1, 0, 0, 0, 1, 0]] * len(single))
+    layout = json.loads((out / "work" / "stitch" / "layout.json").read_text())["segments"]
+    assert layout["0"]["grid_shape"] == [1, 1] and layout["1"]["grid_shape"] == [2, 2]
