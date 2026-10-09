@@ -21,8 +21,15 @@ if ! type ml >/dev/null 2>&1; then
 fi
 ml purge
 ml Anaconda3/2024.10
+EM_PIPE_ENV=${EM_PIPE_ENV:-/camp/lab/windingm/home/shared/conda-envs/em-pipe}
 eval "$(conda shell.bash hook)"
-conda activate "${EM_PIPE_ENV:-/camp/lab/windingm/home/shared/conda-envs/em-pipe}"
+conda activate "$EM_PIPE_ENV"
+# A job inherits the submitting shell's activation, so conda treats the activate above as already
+# done although `ml` has just put the base Anaconda first on PATH: make sure the env comes first.
+case ":$PATH:" in
+    ":$EM_PIPE_ENV/bin:"*) ;;
+    *) export PATH="$EM_PIPE_ENV/bin:$PATH" ;;
+esac
 
 # Keep numerical libraries to the CPUs Slurm gave us.
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
