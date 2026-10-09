@@ -439,9 +439,13 @@ def test_affine_rigid_fixes_real_like_loop_closure():
     true, pairs = _real_like_2x2()
     tiles = list(true)
     assert stitch.loop_error(pairs, tiles, "0-0", "translation") > 4
+    _, rms_tr = stitch.solve(pairs, tiles, "0-0", "translation")
     T, rms = stitch.solve(pairs, tiles, "0-0", "affine_rigid")
-    assert stitch.loop_error(pairs, tiles, "0-0", "affine_rigid") < 1.5
-    assert max(rms.values()) < 1.0
+    # Joint residuals (what stitch checks for this model; a leave-one-out loop check would extrapolate
+    # a tile's affine from a single thin strip) drop from translation's 3.8-5.3 px to the noise level.
+    assert min(rms_tr.values()) > 3 and max(rms.values()) < 1.0
+    T_ok, _, reason = stitch.solve_filtered(pairs, tiles, "0-0", "affine_rigid", tol=10.0)
+    assert T_ok is not None and reason == ""
     # Outer tile corners are ~13,000 px from any overlap, so they are extrapolated (and the rigid pull
     # shrinks scale differences slightly); still far closer than translation-only (~10 px).
     corners = transforms.corners(13875, 12751)
@@ -451,8 +455,12 @@ def test_affine_rigid_fixes_real_like_loop_closure():
     assert err < 5 and err < err_tr / 2
 
 
-def test_affine_rigid_lambda_one_is_rigid():
+def test_affine_rigid_lambda_near_one_is_rigid():
+    """A strong rigid pull leaves (small-angle) rotations: a = d = 1, b = -c; a weak one allows scale."""
     true, pairs = _real_like_2x2()
-    T, _ = stitch.solve(pairs, list(true), "0-0", "affine_rigid", lambdas=[1.0])
-    for A in T.values():   # orthonormal linear part
-        np.testing.assert_allclose(A[:, :2] @ A[:, :2].T, np.eye(2), atol=1e-9)
+    T, _ = stitch.solve(pairs, list(true), "0-0", "affine_rigid", rigid_lambda=0.9999)
+    for A in T.values():
+        L = A[:, :2]
+        assert abs(L[0, 0] - L[1, 1]) < 1e-5 and abs(L[0, 1] + L[1, 0]) < 1e-5 and abs(L[0, 0] - 1) < 1e-5
+    T, _ = stitch.solve(pairs, list(true), "0-0", "affine_rigid", rigid_lambda=0.001)
+    assert max(abs(np.linalg.det(A[:, :2]) - 1) for A in T.values()) > 1e-4   # scale differences kept

@@ -43,10 +43,11 @@ stitch:
   min_coarse_factor: 2       # if tiles stay unconnected, retry the search at half the factor down to this
   fine_factor: 2             # downsampling of the full-res overlap strips for the final matches
   fine_margin_px: 200        # full-res margin added around the coarse overlap for fine matching
-  # affine_rigid: Janelia's montage model (mpicbg/TrakEM2/render), (1 - λ) affine + λ rigid per tile;
-  # also translation | rigid | similarity | affine
+  # affine_rigid: Janelia's montage model (mpicbg/TrakEM2/render), an affine per tile regularised
+  # toward rigid; also translation | rigid | similarity | affine
   model: affine_rigid
-  lambdas: [1.0, 0.5, 0.1]   # affine_rigid: rigid weight per round, decreasing (1 = rigid)
+  rigid_lambda: 0.1          # affine_rigid: weight of the rigid pull (1 ~ rigid, 0 = free affine)
+  max_pair_rms_px: 10.0      # non-translation models: reject a slice if a pair's rms after the joint solve exceeds this
   mode: auto                 # fixed (one transform per tile and segment) | per_slice | auto
   fixed_tolerance_px: 2.0    # auto -> fixed if no tile's sampled offset is further than this from its median
   ratio: 0.8                 # Lowe ratio test

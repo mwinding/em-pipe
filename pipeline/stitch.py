@@ -31,11 +31,12 @@ DEFAULTS = {
         "min_coarse_factor": 2,      # if tiles stay unconnected, retry the search at half the factor down to this
         "fine_factor": 2,            # downsampling of the full-res overlap strips for the final matches
         "fine_margin_px": 200,       # full-res margin added around the coarse overlap for fine matching
-        # Per-tile model. affine_rigid (default) is Janelia's montage model (mpicbg/TrakEM2/render): each
-        # tile's transform is (1 - lambda) * affine + lambda * rigid, fitted iteratively over the λ
-        # schedule below. Also: translation | rigid | similarity | affine (one linear least-squares solve).
+        # Per-tile model. affine_rigid (default): Janelia's montage model (mpicbg/TrakEM2/render), an
+        # affine per tile regularised toward rigid. Also translation | rigid | similarity | affine.
         "model": "affine_rigid",
-        "lambdas": [1.0, 0.5, 0.1],  # affine_rigid: rigid weight per round, decreasing (1 = rigid)
+        "rigid_lambda": 0.1,         # affine_rigid: weight of the rigid pull (1 ~ rigid, 0 = free affine)
+        "max_pair_rms_px": 10.0,     # non-translation models: reject a slice if a pair's rms after the
+                                     # joint solve exceeds this (wrong matches are off by tens of px)
         "mode": "auto",              # fixed (one transform per tile and segment) | per_slice | auto
         "fixed_tolerance_px": 2.0,   # auto -> fixed if no tile's sampled offset is further than this from its median
         "ratio": 0.8,                # Lowe ratio test
@@ -48,12 +49,14 @@ DEFAULTS = {
 
 MODES = ("auto", "fixed", "per_slice")
 # Settings that change a sample's result: run redoes samples made with other values, merge refuses them.
-_RUN_KEYS = ("coarse_factor", "min_coarse_factor", "fine_factor", "fine_margin_px", "model", "lambdas", "ratio", "ransac_px", "min_inliers",
+_RUN_KEYS = ("coarse_factor", "min_coarse_factor", "fine_factor", "fine_margin_px", "model", "rigid_lambda", "ratio", "ransac_px", "min_inliers",
              "max_points_per_pair", "max_features")
 _NPARAM = {"translation": 2, "rigid": 3, "similarity": 4, "affine": 6}
 MODELS = (*_NPARAM, "affine_rigid")
-# Point-match filtering (RANSAC) model per tile model.
-_PAIR_MODEL = {"affine_rigid": "affine"}
+# Point-match filtering (RANSAC) model per tile model. Within one overlap strip tiles relate by a
+# rotation and shift; affine filtering would keep matches no per-tile affine can explain (real P667
+# data: median joint residual 4-6 px with affine filtering vs 2.2-2.4 px with rigid).
+_PAIR_MODEL = {"affine_rigid": "rigid"}
 _IDENTITY = {"translation": [0, 0], "rigid": [0, 0, 0], "similarity": [1, 0, 0, 0], "affine": [1, 0, 0, 0, 1, 0]}
 
 
@@ -152,51 +155,23 @@ def _matrix(model, q):
     return np.asarray(q, float).reshape(2, 3)
 
 
-def solve(pairs, tiles, reference, model, lambdas=(1.0, 0.5, 0.1)):
+def solve(pairs, tiles, reference, model, rigid_lambda=0.1):
     """Tile -> montage transforms with ``reference`` fixed at identity: ({tile: A}, {pair: rms px}).
 
     pairs: {(tile_a, tile_b): (pa, pb)}, pa (N, 2) in tile_a pixels matching pb in tile_b pixels.
     """
     if model == "affine_rigid":
-        return solve_affine_rigid(pairs, tiles, reference, lambdas)
+        return _solve_linear(pairs, tiles, reference, "affine", rigid_lambda)
     return _solve_linear(pairs, tiles, reference, model)
 
 
-def solve_affine_rigid(pairs, tiles, reference, lambdas, max_rounds=5000, tol=1e-3):
-    """Janelia's montage solve (mpicbg TileConfiguration with InterpolatedAffineModel2D).
-
-    Starting from the rigid solution, tiles are updated one at a time: each is refitted to its
-    matches' current positions in the montage as (1 - λ) * affine fit + λ * rigid fit, until no
-    point moves by more than ``tol`` px; then the next, smaller λ of the schedule. The rigid
-    part keeps a tile's affine from overfitting its thin overlap strips.
-    """
-    T = _solve_linear(pairs, tiles, reference, "rigid")[0]
-    free = [t for t in tiles if t != reference]
-    for lam in lambdas:
-        for _ in range(max_rounds):
-            moved = 0.0
-            for t in free:
-                src, dst = [], []
-                for (ta, tb), (pa, pb) in pairs.items():
-                    if ta == t:
-                        src.append(pa)
-                        dst.append(transforms.apply(T[tb], pb))
-                    elif tb == t:
-                        src.append(pb)
-                        dst.append(transforms.apply(T[ta], pa))
-                if not src:
-                    continue
-                S, D = np.vstack(src), np.vstack(dst)
-                new = (1 - lam) * features.estimate("affine", S, D) + lam * features.estimate("rigid", S, D)
-                moved = max(moved, float(np.abs(transforms.apply(new, S) - transforms.apply(T[t], S)).max()))
-                T[t] = new
-            if moved < tol:
-                break
-    return T, residuals(T, pairs)
-
-
-def _solve_linear(pairs, tiles, reference, model):
+def _solve_linear(pairs, tiles, reference, model, rigid_lambda=None):
     """Least-squares tile -> montage transforms with ``reference`` fixed at identity.
+
+    With ``rigid_lambda`` (affine only), each tile's linear part is also pulled toward a rotation
+    (Janelia's affine regularised by rigid): rows a - d = 0, b + c = 0 and a + d = 2, weighted by
+    lambda / (1 - lambda) x the tile's match count x their spread (px^2), so that the pull and the
+    matches are in the same units. One linear solve: the global optimum, unlike tile-by-tile fits.
 
     pairs: {(tile_a, tile_b): (pa, pb)}, pa (N, 2) in tile_a pixels matching pb in tile_b pixels.
     Returns ({tile: A}, {pair: rms residual px}).
@@ -220,6 +195,21 @@ def _solve_linear(pairs, tiles, reference, model):
                     M[:, :, col[t]:col[t] + k] += sign * J
             rows.append(M.reshape(-1, M.shape[-1]))
             rhs.append(r.ravel())
+        if rigid_lambda:
+            for t in free:
+                P = [p for (ta, tb), (pa, pb) in pairs.items() for p, u in ((pa, ta), (pb, tb)) if u == t]
+                if not P:
+                    continue
+                P = np.vstack(P)
+                spread = float(np.mean(np.sum((P - P.mean(axis=0)) ** 2, axis=1)))
+                w = np.sqrt(rigid_lambda / max(1.0 - rigid_lambda, 1e-9) * len(P) * spread)
+                a, b, _, c, d, _ = range(col[t], col[t] + 6)
+                for coeffs, target in (({a: 1, d: -1}, 0.0), ({b: 1, c: 1}, 0.0), ({a: 1, d: 1}, 2.0)):
+                    row = np.zeros(len(free) * k)
+                    for i, v in coeffs.items():
+                        row[i] = v * w
+                    rows.append(row[None])
+                    rhs.append(np.array([target * w]))
         q = np.linalg.lstsq(np.vstack(rows), np.concatenate(rhs), rcond=None)[0]
         T.update({t: _matrix(model, q[col[t]:col[t] + k]) for t in free})
     return T, residuals(T, pairs)
@@ -236,7 +226,7 @@ def _without(pairs, p):
     return {q: v for q, v in pairs.items() if q != p}
 
 
-def loop_error(pairs, tiles, reference, model, lambdas=(1.0, 0.5, 0.1)):
+def loop_error(pairs, tiles, reference, model, rigid_lambda=0.1):
     """Worst loop-closure error: over pairs that close a loop, the residual of the pair when
     only the other pairs are solved. (The full solve's residuals understate it: one bad pair's
     error is spread around its loop, e.g. a quarter of it per pair in a 2x2 ring.)"""
@@ -244,31 +234,61 @@ def loop_error(pairs, tiles, reference, model, lambdas=(1.0, 0.5, 0.1)):
     for p in pairs:
         rest = _without(pairs, p)
         if _component(reference, rest) == set(tiles):
-            err = max(err, residuals(solve(rest, tiles, reference, model, lambdas)[0], {p: pairs[p]})[p])
+            err = max(err, residuals(solve(rest, tiles, reference, model, rigid_lambda)[0], {p: pairs[p]})[p])
     return err
 
 
-def solve_robust(pairs, tiles, reference, model, tol, lambdas=(1.0, 0.5, 0.1)):
+def solve_filtered(pairs, tiles, reference, model, tol, rigid_lambda=0.1, mean_factor=3.0, rounds=10):
+    """Janelia's outlier handling (mpicbg TileConfiguration.optimizeAndFilter): solve every tile
+    jointly from all pairs, drop point matches whose residual exceeds ``mean_factor`` x the mean
+    residual, and re-solve until none is dropped. The slice is accepted if every remaining pair's
+    rms residual is within ``tol``. Returns (T or None, kept pairs, reason).
+
+    Used for models with a linear part: a leave-one-out loop check (``solve_robust``) can't work
+    there, because without one of its two overlap strips a tile's affine is extrapolated
+    ~13,000 px from a single thin strip.
+    """
+    pairs = dict(pairs)
+    for _ in range(rounds):
+        T, _ = solve(pairs, tiles, reference, model, rigid_lambda)
+        err = {p: np.linalg.norm(transforms.apply(T[p[0]], pa) - transforms.apply(T[p[1]], pb), axis=1)
+               for p, (pa, pb) in pairs.items()}
+        cut = mean_factor * float(np.mean(np.concatenate(list(err.values()))))
+        kept = {p: (pa[err[p] <= cut], pb[err[p] <= cut]) for p, (pa, pb) in pairs.items()}
+        kept = {p: v for p, v in kept.items() if len(v[0]) >= 3}
+        if sum(len(v[0]) for v in kept.values()) == sum(len(v[0]) for v in pairs.values()):
+            break
+        if _component(reference, kept) != set(tiles):
+            break   # keep the last connected set
+        pairs = kept
+    T, rms = solve(pairs, tiles, reference, model, rigid_lambda)
+    worst = max(rms.values()) if rms else 0.0
+    if worst > tol:
+        return None, pairs, f"joint solve leaves {worst:.1f} px rms on a pair (> {tol:.1f} px)"
+    return T, pairs, ""
+
+
+def solve_robust(pairs, tiles, reference, model, tol, rigid_lambda=0.1):
     """``solve`` after removing pairs that break loop closure (error > tol) one at a time.
 
     Each round removes the pair whose removal leaves the smallest loop error, keeping all tiles
     connected. If several removals would each fix it, the bad pair is ambiguous (e.g. one 2x2
     ring without diagonal matches) and the slice fails. Returns (T or None, kept pairs, reason).
     """
-    err = loop_error(pairs, tiles, reference, model, lambdas)
+    err = loop_error(pairs, tiles, reference, model, rigid_lambda)
     while err > tol:
         options = []
         for p in pairs:
             rest = _without(pairs, p)
             if _component(reference, rest) == set(tiles):
-                options.append((loop_error(rest, tiles, reference, model, lambdas), p))
+                options.append((loop_error(rest, tiles, reference, model, rigid_lambda), p))
         options.sort()
         if len(options) > 1 and options[1][0] <= tol:
             return None, pairs, (f"inconsistent pair offsets (loop closure error {err:.1f} px) and "
                                  "no single bad pair can be identified")
         err, drop = options[0]
         pairs = _without(pairs, drop)
-    return solve(pairs, tiles, reference, model, lambdas)[0], pairs, ""
+    return solve(pairs, tiles, reference, model, rigid_lambda)[0], pairs, ""
 
 
 def _component(start, pairs):
@@ -317,8 +337,11 @@ def stitch_slice(rows, cache, opts, reference):
     if missing:
         rec["reason"] = f"too few matches: tiles {missing} not connected to {reference}"
         return rec
-    T, used, rec["reason"] = solve_robust(points, tiles, reference, model, opts["ransac_px"] * ff,
-                                          opts["lambdas"])
+    if model == "translation":
+        T, used, rec["reason"] = solve_robust(points, tiles, reference, model, opts["ransac_px"] * ff)
+    else:
+        T, used, rec["reason"] = solve_filtered(points, tiles, reference, model, opts["max_pair_rms_px"],
+                                                opts["rigid_lambda"])
     if T is None:
         return rec
     final = residuals(T, points)
