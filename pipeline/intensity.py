@@ -38,6 +38,9 @@ DEFAULTS = {
         "break_at_seams": True,   # restart smoothing at seams (it always restarts at segment changes)
         "balance_tiles": True,    # match brightness of overlapping tiles (needs stitch/tiles.csv)
         "balance_every": 10,      # measure tile overlaps every N selected slices
+        # Follow each tile's slice-to-slice brightness jumps (tile median minus its running median),
+        # which the smoothing above would otherwise leave as tile flicker when scrolling through z.
+        "per_slice": True,
     },
 }
 
@@ -61,7 +64,7 @@ def load_inputs(cfg, lo_col, hi_col):
     """Selected (z, tile) rows with their preview percentiles, smoothing block and position in z."""
     slices = load_slices(cfg)
     stats = pd.read_csv(step_path(cfg, "preview", "stats.csv"), dtype={"tile": str})
-    cols = list(dict.fromkeys(["z", "tile", lo_col, hi_col, "p0_5", "p99_5"]))
+    cols = list(dict.fromkeys(["z", "tile", lo_col, hi_col, "p0_5", "p50", "p99_5"]))
     df = slices[["z", "tile", "height", "width", "segment", "seam"]].merge(stats[cols], on=["z", "tile"], how="left")
     missing = df[lo_col].isna() | df[hi_col].isna()
     if missing.any():
@@ -90,12 +93,19 @@ def compute_levels(cfg):
     by_run = df.groupby(["tile", "block"])
     for col in ("lo", "hi"):
         df[col] = by_run[f"{col}_raw"].transform(lambda s: running_median(s, c["smooth_slices"]))
+    # Raw P667 tiles jump by 1-2 % of the display range from slice to slice, independently of each
+    # other; tissue changes slowly, so the tile median's deviation from its trend is that jump.
+    # (A column, so it stays with its rows through balance's merge.)
+    df["jump"] = df["p50"] - by_run["p50"].transform(lambda s: running_median(s, c["smooth_slices"]))
     if c["balance_tiles"]:
         tiles_csv = step_path(cfg, "stitch", "tiles.csv")
         if tiles_csv.exists():
             df = balance(cfg, df, tiles_csv)
         else:
             log.warning("%s not found: per-tile levels without tile balancing", tiles_csv)
+    if c["per_slice"]:
+        df["lo"] += df["jump"]
+        df["hi"] += df["jump"]
     return df
 
 

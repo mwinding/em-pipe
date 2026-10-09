@@ -82,6 +82,7 @@ intensity:
   break_at_seams: true       # restart smoothing at seams (it always restarts at segment changes)
   balance_tiles: true        # match brightness of overlapping tiles (needs stitch/tiles.csv)
   balance_every: 10          # measure tile overlaps every N selected slices
+  per_slice: true            # follow each tile's slice-to-slice brightness jumps (else they flicker in z)
 
 # Curtaining removal inside render. Tune first: python -m pipeline.destreak test --config C --z Z --tile r-c
 destreak:

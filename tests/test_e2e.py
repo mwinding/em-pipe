@@ -32,7 +32,8 @@ SMALL = {
     "preview": {"factor": 4, "chunk_slices": 8},
     "stitch": {"sample_every": 5, "coarse_factor": 2, "fine_factor": 1, "fine_margin_px": 16},
     "align": {"scale": 1.0, "chunk_slices": 10, "max_points_per_pair": 40},
-    "intensity": {"smooth_slices": 9, "balance_every": 3},
+    # per_slice off: these ~200 px tiles change median with content, unlike real 177 Mpx tiles
+    "intensity": {"smooth_slices": 9, "balance_every": 3, "per_slice": False},
     "render": {"slab": 8, "chunk": [8, 32, 32], "shard_xy": 64, "num_scales": 3,
                "clahe": {"enabled": False}, "threads": 2},
 }

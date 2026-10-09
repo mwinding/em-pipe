@@ -36,6 +36,9 @@ def gained(tmp_path_factory):
 
 
 def run_intensity(root, raw_dir, out, **params):
+    # Synthetic tiles are tiny (~200 px), so their median changes with content from slice to slice;
+    # per_slice (following acquisition jumps of real 177 Mpx tiles) is tested on its own below.
+    params.setdefault("per_slice", False)
     cfg = synth.write_config(root / "intensity.yaml", raw_dir, out, intensity=params)
     assert intensity.main(["--config", str(cfg)]) == 0
     return pd.read_csv(out / "work" / "intensity" / "levels.csv", dtype={"tile": str})
@@ -261,3 +264,23 @@ def test_solve_uses_only_the_largest_connected_set_of_tiles():
     assert intensity.connected(rels) == rels[1:]
     assert set(intensity.solve(intensity.connected(rels))) == {"1-0", "1-1", "1-2"}
     assert intensity.connected(rels[:2] + [("0-1", "1-1", 1.0, 0.0, 400)]) == rels[:2] + [("0-1", "1-1", 1.0, 0.0, 400)]
+
+
+def test_per_slice_follows_tile_brightness_jumps(tmp_path):
+    """A tile that is brighter on single slices (as raw P667 tiles are, by 1-2 % of the range) gets
+    its window shifted on exactly those slices, so it doesn't flicker; other tiles are untouched."""
+    out = tmp_path / "out"
+    zs, expected = write_stats_only(out, seam_z=100, segment_z=100, excluded=(), outlier_z=-1)
+    stats = pd.read_csv(out / "work" / "preview" / "stats.csv", dtype={"tile": str})
+    jumps = {7: 300.0, 8: -200.0, 21: 150.0}
+    for z, d in jumps.items():
+        cols = [c for c in stats.columns if c.startswith("p") or c in ("mean", "min", "max")]
+        stats.loc[(stats.z == z) & (stats.tile == "0-1"), cols] += d
+    stats.to_csv(out / "work" / "preview" / "stats.csv", index=False)
+    lv = run_intensity(tmp_path, tmp_path, out, smooth_slices=11, balance_tiles=False,
+                       per_slice=True).set_index(["z", "tile"])
+    for z in zs:
+        assert lv.loc[(z, "0-1"), "lo"] == pytest.approx(expected[z, "0-1"] + jumps.get(z, 0.0))
+        assert lv.loc[(z, "0-0"), "lo"] == pytest.approx(expected[z, "0-0"])
+    off = run_intensity(tmp_path, tmp_path, out, smooth_slices=11, balance_tiles=False, per_slice=False)
+    assert off.set_index(["z", "tile"]).loc[(7, "0-1"), "lo"] == pytest.approx(expected[7, "0-1"])
