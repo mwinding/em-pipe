@@ -30,8 +30,9 @@ DEFAULTS = {
         "chunk_slices": 50,   # z per array-task chunk (fixed blocks of global z, split at segment changes)
         "sheet_slices": 6,    # evenly spaced slices shown on each daily contact sheet
         # Stats (and so display levels) ignore this many full-res px at each tile edge (capped at 1/8
-        # of the tile): P667 tiles have dark bands there where the beam scans past the sample.
-        "edge_margin_px": 600,
+        # of the tile), e.g. to leave out dark off-sample bands. Off: on P667 the narrower tissue-only
+        # window, with CLAHE on top, looked over-contrasted (600 px tried on the two-day test).
+        "edge_margin_px": 0,
     },
 }
 

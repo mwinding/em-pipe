@@ -38,7 +38,7 @@ preview:
   factor: 16                 # downsampling factor (area average) for stats and thumbnails
   chunk_slices: 50           # z per array-task chunk (fixed blocks of global z, split at segment changes)
   sheet_slices: 6            # evenly spaced slices shown on each daily contact sheet
-  edge_margin_px: 600        # stats ignore this many full-res px at tile edges (dark off-sample bands)
+  edge_margin_px: 0          # stats ignore this many full-res px at tile edges (e.g. dark off-sample bands)
 
 stitch:
   sample_every: 50           # stitch every n-th selected z of a segment (plus its ends and seams)
