@@ -29,6 +29,9 @@ DEFAULTS = {
         "factor": 16,         # downsampling factor (area average) for stats and thumbnails
         "chunk_slices": 50,   # z per array-task chunk (fixed blocks of global z, split at segment changes)
         "sheet_slices": 6,    # evenly spaced slices shown on each daily contact sheet
+        # Stats (and so display levels) ignore this many full-res px at each tile edge (capped at 1/8
+        # of the tile): P667 tiles have dark bands there where the beam scans past the sample.
+        "edge_margin_px": 600,
     },
 }
 
@@ -46,9 +49,10 @@ def downsample(img, factor):
     return np.clip(np.rint(features.downsample(img, factor)), 0, SATURATED).astype(np.uint16)
 
 
-def slice_stats(small):
-    """Stats of one downsampled uint16 slice, keyed like STATS."""
-    v = small.ravel()
+def slice_stats(small, margin=0):
+    """Stats of one downsampled uint16 slice without ``margin`` px at its edges, keyed like STATS."""
+    my, mx = (min(int(margin), n // 8) for n in small.shape)
+    v = small[my:small.shape[0] - my, mx:small.shape[1] - mx].ravel()
     pct = np.percentile(v, list(PERCENTILES.values()))
     return {"mean": float(v.mean()), "std": float(v.std()), **dict(zip(PERCENTILES, pct.tolist())),
             "min": int(v.min()), "max": int(v.max()),
@@ -109,7 +113,7 @@ def run(cfg, args):
         rows, thumbs = [], {}
         for rec in want.to_dict("records"):   # sorted by (z, tile)
             small = downsample(cache.read(rec), p["factor"])
-            st = slice_stats(small)
+            st = slice_stats(small, round(p["edge_margin_px"] / p["factor"]))
             rows.append({"z": rec["z"], "timestamp": rec["timestamp"].isoformat(), "tile": rec["tile"], **st})
             thumbs.setdefault(rec["tile"], []).append(features.to_uint8(small, st["p0_5"], st["p99_5"]))
         for tile, stack in thumbs.items():

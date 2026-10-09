@@ -25,10 +25,10 @@ check:
 stitch:
   coarse_factor: 4
 
-# Curtaining removal at the strength chosen from qc/destreak_compare_*.png (sigma 1/2/4/8 compared).
+# No curtaining removal: destreak (sigma 4) added bright lines ~500 px inside tile edges and smeared
+# strong raw lines, worse for tracing than the mild (~2 grey level) curtaining it removed.
 destreak:
-  enabled: true
-  sigma: 4.0
+  enabled: false
 
 render:
   downsample: 4              # 32 nm voxels

@@ -56,7 +56,7 @@ def test_stats_and_thumbs_match_numpy(synth_2x2, make_config, tmp_path):
     t = synth_2x2
     out = tmp_path / "out"
     write_slices(t, out)
-    run_preview(make_config(t, preview={"factor": FACTOR, "chunk_slices": 5}))
+    run_preview(make_config(t, preview={"factor": FACTOR, "edge_margin_px": 0, "chunk_slices": 5}))
     stats, thumbs = read_outputs(out)
     assert list(stats.columns) == ["z", "timestamp", "tile", *preview.STATS]
     assert len(stats) == len(t.timestamps) * len(t.tiles) == len(thumbs)
@@ -99,9 +99,9 @@ def test_chunks_follow_segments_and_selection_and_match_single_task(synth_2x2, t
     for out in (multi, single):
         write_slices(t, out, segment_starts=(10,), excluded=excluded)
     cfg_multi = synth.write_config(tmp_path / "multi.yaml", t.raw_dir, multi,
-                                   preview={"factor": FACTOR, "chunk_slices": 4}, **sections)
+                                   preview={"factor": FACTOR, "edge_margin_px": 0, "chunk_slices": 4}, **sections)
     cfg_single = synth.write_config(tmp_path / "single.yaml", t.raw_dir, single,
-                                    preview={"factor": FACTOR, "chunk_slices": 100}, **sections)
+                                    preview={"factor": FACTOR, "edge_margin_px": 0, "chunk_slices": 100}, **sections)
     run_preview(cfg_multi, num_tasks=3)
     run_preview(cfg_single)
 
@@ -134,7 +134,7 @@ def test_chunks_follow_segments_and_selection_and_match_single_task(synth_2x2, t
 def test_run_skips_existing_and_merge_needs_all_chunks(synth_2x2, make_config, tmp_path):
     out = tmp_path / "out"
     write_slices(synth_2x2, out)
-    cfg = str(make_config(synth_2x2, preview={"factor": FACTOR, "chunk_slices": 10}))
+    cfg = str(make_config(synth_2x2, preview={"factor": FACTOR, "edge_margin_px": 0, "chunk_slices": 10}))
     run_preview(cfg)
     chunk = out / "work" / "preview" / "stats" / "chunk_000000-000010.csv"
     before = chunk.stat().st_mtime_ns
@@ -156,7 +156,7 @@ def test_chunks_stay_put_and_late_tiles_are_filled_in(synth_2x2, tmp_path):
 
     def config(**selection):
         return str(synth.write_config(tmp_path / "c.yaml", t.raw_dir, out, selection=selection,
-                                      preview={"factor": FACTOR, "chunk_slices": 5}))
+                                      preview={"factor": FACTOR, "edge_margin_px": 0, "chunk_slices": 5}))
 
     def mtimes():
         return {p.name: p.stat().st_mtime_ns for p in stats_dir.glob("chunk_*.csv")}
@@ -196,7 +196,7 @@ def test_segments_with_different_tile_shapes(tmp_path):
     out = tmp_path / "out"
     save_slices(out, slice_rows(t3) + slice_rows(t2, z0=8, segment_starts=(8,)))
     run_preview(synth.write_config(tmp_path / "c.yaml", t3.raw_dir, out,
-                                   preview={"factor": FACTOR, "chunk_slices": 5}), num_tasks=2)
+                                   preview={"factor": FACTOR, "edge_margin_px": 0, "chunk_slices": 5}), num_tasks=2)
     thumbs_dir = out / "work" / "preview" / "thumbs"
     assert np.load(thumbs_dir / "z000005-000008_tile2-2.npy").shape == (3, 32, 36)
     assert np.load(thumbs_dir / "z000008-000010_tile0-0.npy").shape == (2, 48, 56)
@@ -208,3 +208,15 @@ def test_segments_with_different_tile_shapes(tmp_path):
                 assert_thumb(thumbs[(z0 + local, tile)], true_small(truth, local, tile))
     assert sorted(p.name for p in (out / "qc").glob("sheet_*.png")) == \
         ["sheet_2026-09-20.png", "sheet_2026-09-24.png"]
+
+
+def test_stats_ignore_dark_edge_bands():
+    """A dark band at a tile edge (beam past the sample) doesn't set p0.5; small tiles keep 3/4."""
+    from pipeline.preview import slice_stats
+    small = np.full((100, 120), 30000, np.uint16)
+    small += np.random.default_rng(0).integers(0, 2000, small.shape, dtype=np.uint16)
+    small[:, :8] = 100                                   # dark band, 8 px wide, at the left edge
+    assert slice_stats(small)["p0_5"] < 1000
+    st = slice_stats(small, margin=10)
+    assert st["p0_5"] > 29000 and st["min"] >= 30000
+    assert slice_stats(small, margin=1000)["p0_5"] > 29000   # capped at 1/8: 12 px in x
