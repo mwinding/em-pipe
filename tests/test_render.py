@@ -24,7 +24,8 @@ from pipeline import omezarr, render, transforms
 
 LO, HI = 26000, 41000
 GAIN = {"0-1": 1.2, "1-0": 0.85}
-SMALL = {"slab": 8, "chunk": [8, 32, 32], "shard_xy": 64, "num_scales": 3,
+# Tests compare renders with exact expectations written for feathering; seam tests set blend: seam.
+SMALL = {"blend": "feather", "slab": 8, "chunk": [8, 32, 32], "shard_xy": 64, "num_scales": 3,
          "clahe": {"enabled": False}, "threads": 2}
 N = 20
 
@@ -499,3 +500,39 @@ def test_two_volumes_share_output_dir(truth, full, tmp_path):
     assert json.loads((out / "work" / "render" / "roi" / "render.json").read_text())["downsample"] == 1
     assert _meta(out)["downsample"] == 2 and _read(out).shape[1] < full_vol.shape[1]
     assert render.main(["init", "--config", str(cfg)]) == 0   # overview plan untouched: kept
+
+
+def test_seam_switches_tiles_along_the_middle_of_the_overlap(truth, tmp_path):
+    """Default blend: across the 20 px overlap of tiles 0-0 and 0-1, pixels come from 0-0 up to the
+    middle and from 0-1 after it, switching over ~seam_px (no 50/50 overlay of the two tiles)."""
+    zs = list(range(4))
+    cfg, out = _setup(tmp_path, truth, selection={"z_end": zs[-1]}, shift={"0-1": 0.1},
+                      render={"blend": "seam", "seam_px": 4})
+    _render(cfg)
+    vol = _read(out)
+    img, _ = _aligned(truth, zs)
+    tw = truth.tile_shape[1]
+    x1, y1 = truth.tile_origin["0-1"][0], truth.tile_origin["1-0"][1]
+    errs = []
+    for i, (dx, dy) in enumerate(truth.drift[zs] - truth.drift[zs].min(axis=0)):
+        win = (i, slice(dy, dy + y1), slice(dx + x1, dx + tw))
+        errs.append(np.where(img[win] > 0.15, vol[win] - 255.0 * img[win], np.nan))
+    profile = np.nanmean(np.concatenate(errs), axis=0)      # 0 where 0-0 wins, -25.5 where 0-1 wins
+    n = tw - x1
+    assert np.abs(profile[: n // 2 - 3]).max() < 1.5
+    assert np.abs(profile[n // 2 + 3:] + 25.5).max() < 1.5
+
+
+def test_seam_weights_switch_at_equal_edge_distance():
+    """Normalised over two tiles, the weight crosses 0.5 where both edges are equally far and
+    takes ~seam_px to switch, also for overlaps far wider than the switch."""
+    for overlap in (40, 600):
+        x = np.arange(overlap) + 0.5                      # positions across the overlap
+        da, db = overlap - x, x                           # distance to tile A's / B's own edge
+        far = np.full(1, 5000.0)                          # far from the other two edges
+        wa = render._seam_weight(da, far, 32)[:, 0]
+        wb = render._seam_weight(db, far, 32)[:, 0]
+        share = wa / (wa + wb)
+        mid = overlap / 2
+        assert abs(np.interp(0.5, share[::-1], x[::-1]) - mid) < 1
+        assert (share[x < mid - 32] > 0.98).all() and (share[x > mid + 32] < 0.02).all()

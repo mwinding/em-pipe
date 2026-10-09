@@ -43,7 +43,12 @@ DEFAULTS = {
         "downsample": 1,            # integer binning factor f in x, y and z (1 = full resolution)
         "bbox": None,               # [xmin, ymin, xmax, ymax] in aligned px to render a region; null = all
         "integer_shifts": True,     # round translation-only transforms to whole px (no interpolation blur)
-        "blend_px": 256,            # feathering ramp width from each tile edge, full-resolution px
+        # How overlapping tiles combine. seam: each pixel from the tile whose own edge is farthest,
+        # switching along the middle of the overlap over ~seam_px (sharp, no ghosting where tiles
+        # disagree by a few px). feather: linear crossfade over blend_px from each tile edge.
+        "blend": "seam",
+        "seam_px": 32,              # seam: width of the switch between tiles, full-resolution px
+        "blend_px": 256,            # feather: ramp width from each tile edge, full-resolution px
         "slab": 64,                 # planes per run work unit = shard z size
         "chunk": [64, 64, 64],      # inner chunk (z, y, x) that neuroglancer fetches
         "shard_xy": 1024,           # shard size in y and x
@@ -79,6 +84,8 @@ def _settings(cfg):
     r["name"] = name = volume_name(cfg)
     if Path(name).name != name or not name.endswith(".zarr"):
         raise ValueError(f"render.name must be a folder name ending in .zarr, got {name!r}")
+    if r["blend"] not in ("seam", "feather"):
+        raise ValueError(f"render.blend must be seam or feather, got {r['blend']!r}")
     f = r["downsample"]
     if isinstance(f, bool) or not isinstance(f, int) or f < 1:
         raise ValueError(f"render.downsample must be an integer >= 1, got {f!r}")
@@ -258,12 +265,33 @@ def init(cfg, overwrite=False):
 
 # ----- run ------------------------------------------------------------------------------
 
-def _ramp(start, n, size, f, blend):
-    """Feathering weight of n downsampled pixels whose f-blocks start at full-res index ``start``
-    of a tile ``size`` px long: linear from the tile edge over ``blend`` full-res px."""
+def _edge_distance(start, n, size, f):
+    """Full-res distance to the nearer tile edge of n downsampled pixels whose f-blocks start at
+    full-res index ``start`` of a tile ``size`` px long."""
     centre = start + f * np.arange(n) + (f - 1) / 2
-    d = np.minimum(centre + 0.5, size - 0.5 - centre)
+    return np.minimum(centre + 0.5, size - 0.5 - centre)
+
+
+def _ramp(start, n, size, f, blend):
+    """Feathering weight: linear from the tile edge over ``blend`` full-res px."""
+    d = _edge_distance(start, n, size, f)
     return (np.clip(d / blend, 0, 1) if blend > 0 else np.ones(n)).astype(np.float32)
+
+
+SEAM_CAP = 30.0   # seam: edge distances are capped at SEAM_CAP * tau (weights stay within float32)
+
+
+def _seam_weight(dr, dc, seam_px):
+    """Seam weights exp((min(dr, cap) + min(dc, cap)) / tau), tau = seam_px / 2, cap = 30 tau, for
+    full-res distances to the tile's row edges (dr) and column edges (dc). Normalised over two
+    tiles side by side (same rows) the row terms cancel, leaving a logistic switch of width
+    ~seam_px where their column-edge distances are equal: along the middle of the overlap, right
+    up to the outer border (a nearest-edge distance would fall back to 50/50 there). Works for
+    overlaps up to 2 cap = 30 x seam_px wide."""
+    tau = max(float(seam_px), 1e-3) / 2
+    a = np.minimum(dr / tau, SEAM_CAP)
+    b = np.minimum(dc / tau, SEAM_CAP)
+    return np.exp(np.add.outer(a, b) - 2 * SEAM_CAP).astype(np.float32)
 
 
 def _normalise(img, lo, hi):
@@ -302,6 +330,7 @@ class _Renderer:
         self.origin = np.asarray(meta["origin_xy"], float)
         self.shape = tuple(meta["shape"][1:])
         self.blend = float(s["blend_px"])
+        self.mode, self.seam = s["blend"], float(s["seam_px"])
         self.clahe = s["clahe"]
         self.pool = pool
         self.cache = StackCache(cfg["raw_dir"])
@@ -388,7 +417,10 @@ class _Renderer:
         if f > 1:
             v = cv2.resize(v, ((c1 - c0) // f, (r1 - r0) // f), interpolation=cv2.INTER_AREA)
         hv, wv = v.shape
-        wt = np.outer(_ramp(r0, hv, h, f, self.blend), _ramp(c0, wv, w, f, self.blend))
+        if self.mode == "seam":
+            wt = _seam_weight(_edge_distance(r0, hv, h, f), _edge_distance(c0, wv, w, f), self.seam)
+        else:
+            wt = np.outer(_ramp(r0, hv, h, f, self.blend), _ramp(c0, wv, w, f, self.blend))
         v *= wt
         # Downsampled crop pixel (i, j) has its centre at tile (c0 + f*j + c, r0 + f*i + c).
         L, c = T[:, :2], (f - 1) / 2

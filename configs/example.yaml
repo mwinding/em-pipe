@@ -111,7 +111,12 @@ render:
   downsample: 1              # integer binning factor f in x, y and z (1 = full resolution)
   bbox: null                 # [xmin, ymin, xmax, ymax] in aligned px to render a region; null = all
   integer_shifts: true       # round translation-only transforms to whole px (no interpolation blur)
-  blend_px: 256              # feathering ramp width from each tile edge, full-resolution px
+  # How overlapping tiles combine. seam: each pixel from the tile whose own edge is farthest, switching
+  # along the middle of the overlap over ~seam_px (sharp; no ghosting where tiles disagree by a few px).
+  # feather: linear crossfade over blend_px from each tile edge.
+  blend: seam
+  seam_px: 32                # seam: width of the switch between tiles, full-resolution px
+  blend_px: 256              # feather: ramp width from each tile edge, full-resolution px
   slab: 64                   # planes per run work unit = shard z size
   chunk: [64, 64, 64]        # inner chunk (z, y, x) that neuroglancer fetches
   shard_xy: 1024             # shard size in y and x

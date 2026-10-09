@@ -25,6 +25,11 @@ check:
 stitch:
   coarse_factor: 4
 
+# Curtaining removal at the strength chosen from qc/destreak_compare_*.png (sigma 1/2/4/8 compared).
+destreak:
+  enabled: true
+  sigma: 4.0
+
 render:
   downsample: 4              # 32 nm voxels
 
@@ -41,5 +46,5 @@ slurm:
   intensity: {cpus: 2, mem: 8G, time: "00:30:00"}
   zcorrect: {array: 6}
   render_init: {cpus: 2, mem: 8G, time: "00:30:00"}
-  render: {array: 5, cpus: 8, mem: 32G, time: "04:00:00"}        # ~303 planes at f=4: 5 slabs
+  render: {array: 5, cpus: 8, mem: 64G, time: "04:00:00"}        # ~303 planes at f=4: 5 slabs
   pyramid: {array: 5, cpus: 2, mem: 8G, time: "01:00:00"}
