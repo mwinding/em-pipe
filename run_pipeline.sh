@@ -2,19 +2,19 @@
 # Submit the em-pipe steps for one dataset to Slurm, each job waiting for the previous one.
 #
 # Usage: ./run_pipeline.sh CONFIG [--steps a,b,...] [--from STEP] [--dry-run]
-#   steps (in order): check preview stitch align intensity zcorrect render pyramid
+#   steps (in order): check preview stitch align intensity zcorrect render pyramid export
 #   --steps a,b  only these steps (the first one waits for nothing)
 #   --from STEP  STEP and every later step
 #   --dry-run    print the sbatch commands instead of submitting them
 # zcorrect runs only when zcorrect.enabled is true. Array sizes, CPUs, memory, time, partition and
-# gres come from the config's slurm: section (see configs/example.yaml); logs go to output_dir/logs/.
+# gres come from the config's slurm: section (see configs/example.yaml); logs go to output_dir/work/logs/.
 # Set EM_PIPE_SKIP_ENV=1 to skip sourcing slurm/env.sh (when the environment is already active).
 # render init exits 1 (cancelling render and pyramid) when its inputs changed since the volume was made,
 # e.g. after new data: re-create it with  sbatch slurm/render.sbatch CONFIG init --overwrite  (deletes
 # the old volume), then  ./run_pipeline.sh CONFIG --from render.
 set -eo pipefail
 
-STEPS="check preview stitch align intensity zcorrect render pyramid"
+STEPS="check preview stitch align intensity zcorrect render pyramid export"
 usage() { sed -n '4,14p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "$1"; }
 
 CONFIG= SELECT= FROM= DRY=0
@@ -77,7 +77,7 @@ submit() {  # submit JOB NAME STEP [ARGS...]: sbatch slurm/STEP.sbatch after the
   fi
 }
 
-[ "$DRY" = 1 ] || mkdir -p "$OUT/logs"
+[ "$DRY" = 1 ] || mkdir -p "$OUT/work/logs"
 
 if wanted check; then submit check em-check check; fi
 if wanted preview; then
@@ -110,5 +110,6 @@ if wanted pyramid; then
     submit pyramid "em-pyramid-s$s" pyramid run --scale "$s"
   done
 fi
+if wanted export; then submit export em-export export; fi
 [ -n "$PREV" ] || { echo "no steps selected" >&2; exit 1; }
-[ "$DRY" = 1 ] || echo "logs: $OUT/logs/   (squeue --me to follow)"
+[ "$DRY" = 1 ] || echo "logs: $OUT/work/logs/   (squeue --me to follow)"

@@ -40,7 +40,7 @@ def write_slices(out_dir, parts, relabel=None, exclude=()):
                              "segment": segment, "seam": k > 0 and z == 0,
                              "excluded": gz in exclude or (gz, tile) in exclude, "exclude_reason": "", "label": ""})
         z0 += len(truth.timestamps)
-    path = out_dir / "check" / "slices.csv"
+    path = out_dir / "work" / "check" / "slices.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).sort_values(["z", "tile"]).to_csv(path, index=False)
     return origin
@@ -77,7 +77,7 @@ def assert_matches_truth(tiles, origin, tol=0.2):
 
 def assert_pairs_match_truth(out, origin, tol=0.2):
     """Every measured pair maps tile_b -> tile_a by the true origin difference."""
-    pairs = pd.read_csv(out / "stitch" / "pairs.csv", dtype={"tile_a": str, "tile_b": str})
+    pairs = pd.read_csv(out / "work" / "stitch" / "pairs.csv", dtype={"tile_a": str, "tile_b": str})
     assert len(pairs)
     true = np.array([np.subtract(origin[(z, b)], origin[(z, a)]) for z, a, b in
                      zip(pairs["z"], pairs["tile_a"], pairs["tile_b"])])
@@ -86,7 +86,7 @@ def assert_pairs_match_truth(out, origin, tol=0.2):
 
 
 def read_tiles(out):
-    return pd.read_csv(out / "stitch" / "tiles.csv", dtype={"tile": str})
+    return pd.read_csv(out / "work" / "stitch" / "tiles.csv", dtype={"tile": str})
 
 
 @pytest.fixture(scope="module")
@@ -120,7 +120,7 @@ def test_two_segments(two_segments):
     assert (tiles["segment"] == (tiles["z"] >= 9)).all()
     assert_matches_truth(tiles, origin)
 
-    layout = json.loads((out / "stitch" / "layout.json").read_text())["segments"]
+    layout = json.loads((out / "work" / "stitch" / "layout.json").read_text())["segments"]
     for seg, grid, (oy, ox) in (("0", [3, 3], (36, 52)), ("1", [2, 2], (44, 30))):
         lay = layout[seg]
         assert lay["mode"] == "fixed" and lay["model"] == "translation" and lay["row_axis"] == "y"
@@ -135,7 +135,7 @@ def test_two_segments(two_segments):
     # every grid neighbour pair (12 in 3x3, 4 in 2x2, 2 with a tile missing) is used in every sample
     n_used = pairs[pairs.used].groupby("z").size()
     assert all(n >= (12 if z < 9 else 2 if z == 12 else 4) for z, n in n_used.items())
-    assert (out / "stitch" / "stitch.png").stat().st_size > 0
+    assert (out / "qc" / "stitch.png").stat().st_size > 0
 
 
 def test_filename_row_is_x(two_segments):
@@ -144,7 +144,7 @@ def test_filename_row_is_x(two_segments):
     tiles = read_tiles(out)
     assert_matches_truth(tiles, origin)
     assert_pairs_match_truth(out, origin)
-    layout = json.loads((out / "stitch" / "layout.json").read_text())["segments"]
+    layout = json.loads((out / "work" / "stitch" / "layout.json").read_text())["segments"]
     assert layout["0"]["row_axis"] == layout["1"]["row_axis"] == "x"
     truth = parts[0][0]
     for t in truth.tiles:  # file tile{r}-{c} is labelled "c-r": its grid_x is the label's row
@@ -163,7 +163,7 @@ def test_reversed_numbering_and_fine_factor_2(two_segments):
     assert_matches_truth(tiles, origin)
     pairs = assert_pairs_match_truth(out, origin)
     assert (pairs[["tx", "ty"]].to_numpy() < 0.5).all()
-    layout = json.loads((out / "stitch" / "layout.json").read_text())["segments"]
+    layout = json.loads((out / "work" / "stitch" / "layout.json").read_text())["segments"]
     for seg, (R, C) in (("0", (3, 3)), ("1", (2, 2))):
         assert layout[seg]["row_axis"] == "y" and layout[seg]["reference_tile"] == "0-0"
         for t, pos in layout[seg]["tiles"].items():
@@ -176,10 +176,10 @@ def test_chunked_tasks_equal_single_task(two_segments):
     single, _ = stitched(root, "single", parts)
     chunked, _ = stitched(root, "chunked", parts, tasks=3)
     for name in ("tiles.csv", "pairs.csv", "layout.json"):
-        assert (single / "stitch" / name).read_text() == (chunked / "stitch" / name).read_text(), name
+        assert (single / "work" / "stitch" / name).read_text() == (chunked / "work" / "stitch" / name).read_text(), name
     # existing samples are skipped unless --overwrite
     cfg = root / "chunked.yaml"
-    sample = sorted((chunked / "stitch" / "samples").glob("*.json"))[0]
+    sample = sorted((chunked / "work" / "stitch" / "samples").glob("*.json"))[0]
     before = sample.stat().st_mtime_ns
     stitch.main(["run", "--config", str(cfg)])
     assert sample.stat().st_mtime_ns == before
@@ -196,14 +196,14 @@ def test_layout_change_per_slice_and_fixed(tmp_path):
 
     out, origin = stitched(tmp_path, "auto", parts)
     tiles = read_tiles(out)
-    lay = json.loads((out / "stitch" / "layout.json").read_text())["segments"]["0"]
+    lay = json.loads((out / "work" / "stitch" / "layout.json").read_text())["segments"]["0"]
     assert lay["mode"] == "per_slice" and lay["max_deviation_px"] > 5  # 14 px step, median midway
     assert len(tiles) == 12 * 4
     assert_matches_truth(tiles, origin)  # including z 5 | 6 on either side of the seam
 
     out, _ = stitched(tmp_path, "fixed", parts, mode="fixed")
     tiles = read_tiles(out)
-    assert json.loads((out / "stitch" / "layout.json").read_text())["segments"]["0"]["mode"] == "fixed"
+    assert json.loads((out / "work" / "stitch" / "layout.json").read_text())["segments"]["0"]["mode"] == "fixed"
     for t, g in tiles.groupby("tile"):
         assert g[["tx", "ty"]].nunique().max() == 1
         # 3 samples per side -> median is the midpoint of the two layouts
@@ -228,9 +228,9 @@ def test_bad_samples_are_skipped(tmp_path):
     _replace_slice(truth, 6, ["0-1"], lambda s: np.full(s, 30000, np.uint16))
     out, origin = stitched(tmp_path, "bad", [(truth, 0)])
     for z in (3, 6):
-        rec = json.loads((out / "stitch" / "samples" / f"z{z:06d}.json").read_text())
+        rec = json.loads((out / "work" / "stitch" / "samples" / f"z{z:06d}.json").read_text())
         assert not rec["ok"] and "too few matches" in rec["reason"]
-    lay = json.loads((out / "stitch" / "layout.json").read_text())["segments"]["0"]
+    lay = json.loads((out / "work" / "stitch" / "layout.json").read_text())["segments"]["0"]
     assert lay["failed_samples"] == [3, 6] and lay["n_good_samples"] == 2 and lay["mode"] == "fixed"
     tiles = read_tiles(out)
     assert sorted(tiles["z"].unique()) == list(range(10))
@@ -313,7 +313,7 @@ def test_stale_samples_are_redone(tmp_path):
     # z 0-3 only, where 0-0 is excluded: the reference is 0-1
     cfg, out, _ = setup_run(tmp_path, "s", [(truth, 0)], exclude=gone, selection={"z_end": 3})
     stitch.main(["run", "--config", str(cfg)])
-    sample = out / "stitch" / "samples" / "z000000.json"
+    sample = out / "work" / "stitch" / "samples" / "z000000.json"
     assert json.loads(sample.read_text())["reference"] == "0-1"
     # all z: the reference is 0-0, so samples 0 and 3 are redone (and fail: 0-0 is missing there)
     cfg, out, origin = setup_run(tmp_path, "s", [(truth, 0)], exclude=gone)
@@ -323,7 +323,7 @@ def test_stale_samples_are_redone(tmp_path):
     stitch.main(["merge", "--config", str(cfg)])
     assert_matches_truth(read_tiles(out), origin)
     # a sample made with other settings: merge refuses it, run redoes it
-    path = out / "stitch" / "samples" / "z000006.json"
+    path = out / "work" / "stitch" / "samples" / "z000006.json"
     rec = json.loads(path.read_text())
     rec["settings"]["min_inliers"] = 5
     path.write_text(json.dumps(rec))
@@ -385,7 +385,7 @@ def test_with_check_slices(tmp_path):
                              stitch={**OPTS, "sample_every": 4})
     assert check.main(["--config", str(cfg)]) == 0
     assert stitch.main(["run", "--config", str(cfg)]) == 0 and stitch.main(["merge", "--config", str(cfg)]) == 0
-    samples = sorted(int(p.stem[1:]) for p in (tmp_path / "out" / "stitch" / "samples").glob("z*.json"))
+    samples = sorted(int(p.stem[1:]) for p in (tmp_path / "out" / "work" / "stitch" / "samples").glob("z*.json"))
     assert samples == [0, 3, 4, 6, 7, 8, 11]
     tiles = read_tiles(tmp_path / "out")
     assert len(tiles) == 12 * 4
@@ -399,13 +399,13 @@ def test_coarse_search_retries_at_higher_resolution(two_segments, tmp_path):
     part = [parts[1]]
     cfg, out, origin = setup_run(tmp_path, "no_retry", part, coarse_factor=8, min_coarse_factor=8)
     assert stitch.main(["run", "--config", str(cfg)]) == 0
-    recs = [json.loads(p.read_text()) for p in sorted((out / "stitch" / "samples").glob("*.json"))]
+    recs = [json.loads(p.read_text()) for p in sorted((out / "work" / "stitch" / "samples").glob("*.json"))]
     assert recs and not any(r["ok"] for r in recs)
     assert all("not connected" in r["reason"] for r in recs)
     assert all(p["note"].startswith("no coarse match") for r in recs for p in r["pairs"] if p["A"] is None)
 
     out2, origin2 = stitched(tmp_path, "retry", part, coarse_factor=8)   # min_coarse_factor 2 (default)
-    recs = [json.loads(p.read_text()) for p in sorted((out2 / "stitch" / "samples").glob("*.json"))]
+    recs = [json.loads(p.read_text()) for p in sorted((out2 / "work" / "stitch" / "samples").glob("*.json"))]
     assert all(r["ok"] for r in recs) and {r["coarse_factor_used"] for r in recs} <= {4, 2}
     assert_matches_truth(read_tiles(out2), origin2)
 

@@ -32,7 +32,7 @@ DEFAULTS = {
     # Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
     # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch.
     # Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, intensity,
-    # zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale).
+    # zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale), export.
     "slurm": {
         "mail_user": None,          # sbatch --mail-user (failure mails); null: Slurm's default
         "preview": {"array": 20},
@@ -47,9 +47,9 @@ DEFAULTS = {
 
 # Step modules, in pipeline order; each has a DEFAULTS section of the same name.
 STEPS = ("check", "preview", "stitch", "align", "intensity", "destreak", "zcorrect", "render", "pyramid",
-         "serve")
+         "export", "serve")
 JOBS = ("check", "preview", "preview_merge", "stitch", "stitch_merge", "align", "align_solve", "intensity",
-        "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid")
+        "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid", "export")
 ARRAY_JOBS = ("preview", "stitch", "align", "zcorrect", "render", "pyramid")
 _SBATCH = {"cpus": "--cpus-per-task", "mem": "--mem", "time": "--time", "partition": "--partition",
            "gres": "--gres"}
@@ -87,11 +87,26 @@ def load_config(path, raw_dir=None, output_dir=None, step_defaults=None):
     return cfg
 
 
+# output_dir holds only what people look at: the volume (<name>.ome.zarr), a quick-look TIFF and
+# qc/ (check report and plots). Every step's working state and the logs live under work/.
+
+def step_path(cfg, step, *parts):
+    """``output_dir/work/<step>/<parts...>`` (nothing created: for reading other steps' outputs)."""
+    return Path(cfg["output_dir"]).joinpath("work", step, *parts)
+
+
 def step_dir(cfg, step, *parts):
-    """Path to ``output_dir/<step>/<parts...>``, creating the step folder."""
-    d = Path(cfg["output_dir"]) / step
+    """``step_path``, creating the step's folder."""
+    d = step_path(cfg, step)
     d.mkdir(parents=True, exist_ok=True)
     return d.joinpath(*parts) if parts else d
+
+
+def qc_path(cfg, name):
+    """``output_dir/qc/<name>``: reports and plots for people, one flat folder."""
+    d = Path(cfg["output_dir"]) / "qc"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / name
 
 
 def get(cfg, dotted, default=None):
@@ -126,7 +141,7 @@ def sbatch_args(cfg, job):
         # YAML reads an unquoted 04:00:00 as the integer 14400, which Slurm would take as minutes.
         raise ValueError(f"slurm.{job}.time must be a quoted string such as \"04:00:00\"")
     array = job in ARRAY_JOBS
-    args = [f"--output={Path(cfg['output_dir']) / 'logs' / ('%x-%A_%a.out' if array else '%x-%j.out')}"]
+    args = [f"--output={Path(cfg['output_dir']) / 'work' / 'logs' / ('%x-%A_%a.out' if array else '%x-%j.out')}"]
     if array:
         args.append(f"--array=0-{int(opts.get('array', 1)) - 1}")
     args += [f"{flag}={opts[key]}" for key, flag in _SBATCH.items() if opts.get(key) is not None]

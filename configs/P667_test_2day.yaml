@@ -2,9 +2,9 @@
 # pipeline before running configs/P667_EM05024_35h.yaml. check still reads every raw header.
 #   ./run_pipeline.sh configs/P667_test_2day.yaml
 
-name: P667_EM05024_35h_test-M10-D01-D02
+name: P667_M10-D01-D02   # -> P667_M10-D01-D02.ome.zarr and P667_M10-D01-D02_<voxel>nm.tif
 raw_dir: /camp/project/proj-efibsem/WindingM/P667_EM05024_35h
-output_dir: /camp/lab/windingm/home/users/windinm/em-pipe_P667_test-M10-D01-D02/output
+output_dir: /camp/lab/windingm/home/users/windinm/em-pipe_P667_test-M10-D01-D02
 
 selection:
   start: '2026-10-01 00:00:00'

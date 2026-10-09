@@ -32,14 +32,14 @@ import pandas as pd
 
 from . import omezarr, transforms
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info
-from .config import deep_merge, get, step_dir
+from .config import deep_merge, get, step_path
 from .slices import StackCache, load_slices, voxel_size_nm, z_values
 
 log = logging.getLogger(__name__)
 
 DEFAULTS = {
     "render": {
-        "name": "volume.ome.zarr",  # output folder under output_dir/render/
+        "name": None,               # volume folder in output_dir; null: <config name>.ome.zarr
         "downsample": 1,            # integer binning factor f in x, y and z (1 = full resolution)
         "bbox": None,               # [xmin, ymin, xmax, ymax] in aligned px to render a region; null = all
         "integer_shifts": True,     # round translation-only transforms to whole px (no interpolation blur)
@@ -59,12 +59,16 @@ DEFAULTS = {
 }
 
 
+def volume_name(cfg):
+    """render.name, else ``<config name>.ome.zarr`` (``volume.ome.zarr`` without a name)."""
+    return str((cfg.get("render") or {}).get("name") or f"{cfg.get('name') or 'volume'}.ome.zarr")
+
+
 def volume_paths(cfg):
-    """(volume, work folder) for render.name: output_dir/render/<name> and output_dir/render/<stem>/,
-    which holds this volume's render.json, tiles.csv and done/ markers."""
-    name = str((cfg.get("render") or {}).get("name") or DEFAULTS["render"]["name"])
-    rdir = step_dir(cfg, "render")
-    return rdir / name, rdir / name.removesuffix(".zarr").removesuffix(".ome")
+    """(volume, work folder): output_dir/<name> and output_dir/work/render/<stem>/, which holds this
+    volume's render.json, tiles.csv and done/ markers."""
+    name = volume_name(cfg)
+    return Path(cfg["output_dir"]) / name, step_path(cfg, "render", name.removesuffix(".zarr").removesuffix(".ome"))
 
 
 # ----- init -----------------------------------------------------------------------------
@@ -72,7 +76,7 @@ def volume_paths(cfg):
 def _settings(cfg):
     """Validated render settings that shape the output (all but ``threads``)."""
     r = {k: v for k, v in cfg["render"].items() if k != "threads"}
-    name = str(r["name"])
+    r["name"] = name = volume_name(cfg)
     if Path(name).name != name or not name.endswith(".zarr"):
         raise ValueError(f"render.name must be a folder name ending in .zarr, got {name!r}")
     f = r["downsample"]
@@ -104,9 +108,8 @@ def _tile_plan(cfg):
     sl = load_slices(cfg)
     if sl.empty:
         raise ValueError("no slices selected")
-    out = Path(cfg["output_dir"])
-    stitch = transforms.read_csv(_require(out / "stitch" / "tiles.csv", "stitch"), ["z", "tile"])
-    align = transforms.read_csv(_require(out / "align" / "transforms.csv", "align"), ["z"])
+    stitch = transforms.read_csv(_require(step_path(cfg, "stitch", "tiles.csv"), "stitch"), ["z", "tile"])
+    align = transforms.read_csv(_require(step_path(cfg, "align", "transforms.csv"), "align"), ["z"])
     keys = list(zip(sl["z"], sl["tile"]))
     missing = [k for k in keys if k not in stitch or k[0] not in align]
     if missing:
@@ -121,7 +124,7 @@ def _tile_plan(cfg):
         mats.append(T)
     plan = sl[["z", "tile", "file", "index", "height", "width"]].copy()
     plan[transforms.COLUMNS] = np.array(mats).reshape(-1, 6)
-    levels = out / "intensity" / "levels.csv"
+    levels = step_path(cfg, "intensity", "levels.csv")
     if levels.exists():
         lv = pd.read_csv(levels, dtype={"tile": str})[["z", "tile", "lo", "hi"]]
         plan = plan.merge(lv, on=["z", "tile"], how="left", validate="many_to_one")
@@ -156,7 +159,7 @@ def _positions(cfg, zs):
     """zcorrect positions (nm) of the selected z, or None when z-correction is off or not run."""
     if not get(cfg, "zcorrect.enabled", False):
         return None
-    path = Path(cfg["output_dir"]) / "zcorrect" / "positions.csv"
+    path = step_path(cfg, "zcorrect", "positions.csv")
     if not path.exists():
         log.warning("zcorrect.enabled but %s not found: rendering without z-correction", path)
         return None

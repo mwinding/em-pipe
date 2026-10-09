@@ -24,7 +24,7 @@ from scipy.sparse.csgraph import connected_components  # noqa: E402
 
 from . import transforms  # noqa: E402
 from .cli import atomic_write, base_parser, setup  # noqa: E402
-from .config import step_dir  # noqa: E402
+from .config import qc_path, step_dir, step_path  # noqa: E402
 from .preview import PERCENTILES, plot_tiles, save, thumb_values  # noqa: E402
 from .slices import load_slices  # noqa: E402
 
@@ -60,7 +60,7 @@ def running_median(s, window):
 def load_inputs(cfg, lo_col, hi_col):
     """Selected (z, tile) rows with their preview percentiles, smoothing block and position in z."""
     slices = load_slices(cfg)
-    stats = pd.read_csv(Path(cfg["output_dir"]) / "preview" / "stats.csv", dtype={"tile": str})
+    stats = pd.read_csv(step_path(cfg, "preview", "stats.csv"), dtype={"tile": str})
     cols = list(dict.fromkeys(["z", "tile", lo_col, hi_col, "p0_5", "p99_5"]))
     df = slices[["z", "tile", "height", "width", "segment", "seam"]].merge(stats[cols], on=["z", "tile"], how="left")
     missing = df[lo_col].isna() | df[hi_col].isna()
@@ -91,7 +91,7 @@ def compute_levels(cfg):
     for col in ("lo", "hi"):
         df[col] = by_run[f"{col}_raw"].transform(lambda s: running_median(s, c["smooth_slices"]))
     if c["balance_tiles"]:
-        tiles_csv = Path(cfg["output_dir"]) / "stitch" / "tiles.csv"
+        tiles_csv = step_path(cfg, "stitch", "tiles.csv")
         if tiles_csv.exists():
             df = balance(cfg, df, tiles_csv)
         else:
@@ -102,7 +102,7 @@ def compute_levels(cfg):
 def balance(cfg, df, tiles_csv):
     """Replace lo/hi by one common window per z, mapped through per-tile gain/offset (columns g, o)."""
     c = cfg["intensity"]
-    thumbs_dir = Path(cfg["output_dir"]) / "preview" / "thumbs"
+    thumbs_dir = step_path(cfg, "preview", "thumbs")
     stitch = transforms.read_csv(tiles_csv, ["z", "tile"])
     df = df.merge(pd.read_csv(thumbs_dir / "index.csv", dtype={"tile": str}), on=["z", "tile"], how="left")
     first = df.groupby("block")["pos"].transform("min")
@@ -250,7 +250,7 @@ def main(argv=None):
     df = compute_levels(cfg)
     atomic_write(step_dir(cfg, "intensity", "levels.csv"),
                  lambda t: df[["z", "tile", "lo", "hi"]].to_csv(t, index=False, float_format="%.2f"))
-    plot(df, step_dir(cfg, "intensity", "intensity.png"))
+    plot(df, qc_path(cfg, "intensity.png"))
     log.info("levels for %d (z, tile) over %d slices", len(df), df["z"].nunique())
     return 0
 

@@ -13,7 +13,7 @@ from pipeline import config
 
 ROOT = Path(__file__).resolve().parents[1]
 CHAIN = ["em-check", "em-preview-run", "em-preview-merge", "em-stitch-run", "em-stitch-merge", "em-align-run",
-         "em-align-solve", "em-intensity", "em-render-init", "em-render-run", "em-pyramid-s1", "em-pyramid-s2"]
+         "em-align-solve", "em-intensity", "em-render-init", "em-render-run", "em-pyramid-s1", "em-pyramid-s2", "em-export"]
 FAKE_SBATCH = """#!/bin/bash
 # Records its arguments (one call per line) and prints a job id like sbatch --parsable.
 echo "$*" >> "$SBATCH_LOG"
@@ -76,7 +76,7 @@ def test_submits_the_chain(tmp_path, env):
     assert "dependency" not in jobs[0]
     for k, j in enumerate(jobs[1:], start=1):
         assert j["dependency"] == f"afterok:{1000 + k}" and j["kill-on-invalid-dep"] == "yes"
-    assert f"em-pyramid-s2: job {1000 + len(CHAIN)}" in p.stdout
+    assert f"em-export: job {1000 + len(CHAIN)}" in p.stdout
 
     by_name = {j["job-name"]: j for j in jobs}
     cfg_abs = str(cfg.resolve())
@@ -85,14 +85,14 @@ def test_submits_the_chain(tmp_path, env):
     assert by_name["em-pyramid-s2"]["args"] == [cfg_abs, "run", "--scale", "2"]
     run_ = by_name["em-preview-run"]
     assert (run_["array"], run_["cpus-per-task"], run_["mem"], run_["time"]) == ("0-3", "2", "8G", "01:00:00")
-    assert run_["output"] == str(tmp_path / "out" / "logs" / "%x-%A_%a.out")
-    assert by_name["em-preview-merge"]["output"] == str(tmp_path / "out" / "logs" / "%x-%j.out")
+    assert run_["output"] == str(tmp_path / "out" / "work" / "logs" / "%x-%A_%a.out")
+    assert by_name["em-preview-merge"]["output"] == str(tmp_path / "out" / "work" / "logs" / "%x-%j.out")
     assert "array" not in by_name["em-preview-merge"]
     assert by_name["em-render-run"]["array"] == "0-2" and by_name["em-render-run"]["gres"] == "gpu:1"
     assert by_name["em-render-init"]["mem"] == "16G" and "array" not in by_name["em-render-init"]
     assert by_name["em-align-run"]["array"] == "0-19"   # config.py default
     assert all(j["mail-user"] == "someone@example.org" for j in jobs)
-    assert (tmp_path / "out" / "logs").is_dir()
+    assert (tmp_path / "out" / "work" / "logs").is_dir()
 
 
 def test_dry_run_prints_without_submitting(tmp_path, env):
@@ -137,8 +137,8 @@ def test_config_cli(tmp_path, capsys):
     assert capsys.readouterr().out.splitlines() == ["false", "3", "256", "x"]
     assert config._main(["--config", str(cfg), "--sbatch-args", "check", "render"]) == 0
     lines = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
-    assert lines == [["check", f"--output={tmp_path / 'out' / 'logs' / '%x-%j.out'}", "--mail-user=someone@example.org"],
-                     ["render", f"--output={tmp_path / 'out' / 'logs' / '%x-%A_%a.out'}", "--array=0-2",
+    assert lines == [["check", f"--output={tmp_path / 'out' / 'work' / 'logs' / '%x-%j.out'}", "--mail-user=someone@example.org"],
+                     ["render", f"--output={tmp_path / 'out' / 'work' / 'logs' / '%x-%A_%a.out'}", "--array=0-2",
                       "--partition=ga100", "--gres=gpu:1", "--mail-user=someone@example.org"]]
     assert config._main(["--config", str(cfg), "--sbatch-args"]) == 0
     assert [line.split("\t")[0] for line in capsys.readouterr().out.splitlines()] == list(config.JOBS)

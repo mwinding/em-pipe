@@ -32,12 +32,12 @@ def run(cfg_path, *extra):
 def outputs(cfg_path):
     """(files, slices, issues, report) as written by the last run."""
     cfg = load_config(cfg_path)
-    out = Path(cfg["output_dir"]) / "check"
+    out = Path(cfg["output_dir"]) / "work" / "check"
     files = pd.read_csv(out / "files.csv", dtype={"tile": str}, keep_default_na=False)
     issues = pd.read_csv(out / "issues.csv", dtype={"file": str, "z": "Int64"})
     issues["file"] = issues["file"].fillna("")
     slices = load_slices(cfg, include_excluded=True, apply_selection=False)
-    return files, slices, issues, (out / "report.md").read_text()
+    return files, slices, issues, (out.parent.parent / "qc" / "check_report.md").read_text()
 
 
 def pairs(issues, severity=None):

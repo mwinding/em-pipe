@@ -19,7 +19,7 @@ import pandas as pd  # noqa: E402
 
 from . import features  # noqa: E402
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info  # noqa: E402
-from .config import step_dir  # noqa: E402
+from .config import qc_path, step_dir, step_path  # noqa: E402
 from .slices import StackCache, load_slices  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -163,7 +163,7 @@ def merge(cfg, args):
         ax.set_ylabel(f"{col} (uint16)")
     axes[0].legend(title="tile", fontsize=8, loc="upper left", bbox_to_anchor=(1.0, 1.0))
     axes[0].set_title("Preview intensity per tile (grey lines: seams)")
-    save(fig, step_dir(cfg, "preview", "stats.png"))
+    save(fig, qc_path(cfg, "preview_stats.png"))
 
 
 def contact_sheets(cfg, df, n):
@@ -189,7 +189,7 @@ def contact_sheets(cfg, df, n):
             ts = g.loc[g["z"] == z, "timestamp"].iloc[0]
             ax.set_title(f"z {z}   {ts:%Y-%m-%d %H:%M:%S}", fontsize=10)
         fig.suptitle(f"{cfg.get('name') or ''} {day}".strip())
-        save(fig, step_dir(cfg, "preview", "sheets", f"{day}.png"))
+        save(fig, qc_path(cfg, f"sheet_{day}.png"))
     log.info("contact sheets for %d days", df["timestamp"].dt.date.nunique())
 
 

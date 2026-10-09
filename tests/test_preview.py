@@ -31,9 +31,9 @@ def run_preview(config, num_tasks=1):
 
 
 def read_outputs(out):
-    stats = pd.read_csv(out / "preview" / "stats.csv", dtype={"tile": str})
-    index = pd.read_csv(out / "preview" / "thumbs" / "index.csv", dtype={"tile": str})
-    thumbs = {(r.z, r.tile): np.load(out / "preview" / "thumbs" / r.npy)[r.i] for r in index.itertuples()}
+    stats = pd.read_csv(out / "work" / "preview" / "stats.csv", dtype={"tile": str})
+    index = pd.read_csv(out / "work" / "preview" / "thumbs" / "index.csv", dtype={"tile": str})
+    thumbs = {(r.z, r.tile): np.load(out / "work" / "preview" / "thumbs" / r.npy)[r.i] for r in index.itertuples()}
     return stats, thumbs
 
 
@@ -106,12 +106,12 @@ def test_chunks_follow_segments_and_selection_and_match_single_task(synth_2x2, t
     run_preview(cfg_single)
 
     # Chunks are blocks of 4 global z (0-3, 4-7, ...) split at the segment change at 10.
-    names = sorted(p.name for p in (multi / "preview" / "stats").glob("chunk_*.csv"))
+    names = sorted(p.name for p in (multi / "work" / "preview" / "stats").glob("chunk_*.csv"))
     assert names == [f"chunk_{a:06d}-{b:06d}.csv" for a, b in
                      [(0, 3), (4, 8), (8, 10), (10, 12), (12, 16), (16, 20), (20, 22)]]
-    assert np.load(multi / "preview" / "thumbs" / "z000004-000008_tile1-0.npy").shape == (4, 48, 56)
-    assert np.load(multi / "preview" / "thumbs" / "z000004-000008_tile1-1.npy").shape == (2, 48, 56)
-    assert sorted(p.name for p in (single / "preview" / "stats").glob("chunk_*.csv")) == \
+    assert np.load(multi / "work" / "preview" / "thumbs" / "z000004-000008_tile1-0.npy").shape == (4, 48, 56)
+    assert np.load(multi / "work" / "preview" / "thumbs" / "z000004-000008_tile1-1.npy").shape == (2, 48, 56)
+    assert sorted(p.name for p in (single / "work" / "preview" / "stats").glob("chunk_*.csv")) == \
         ["chunk_000000-000010.csv", "chunk_000010-000022.csv"]
 
     stats_m, thumbs_m = read_outputs(multi)
@@ -126,9 +126,9 @@ def test_chunks_follow_segments_and_selection_and_match_single_task(synth_2x2, t
         for tile in ("1-1", "0-0"):
             assert_thumb(thumbs_m[(z, tile)], true_small(t, z, tile))
 
-    assert sorted(p.name for p in (multi / "preview" / "sheets").glob("*.png")) == \
-        ["2026-09-24.png", "2026-09-25.png"]
-    assert (multi / "preview" / "stats.png").stat().st_size > 0
+    assert sorted(p.name for p in (multi / "qc").glob("sheet_*.png")) == \
+        ["sheet_2026-09-24.png", "sheet_2026-09-25.png"]
+    assert (multi / "qc" / "preview_stats.png").stat().st_size > 0
 
 
 def test_run_skips_existing_and_merge_needs_all_chunks(synth_2x2, make_config, tmp_path):
@@ -136,7 +136,7 @@ def test_run_skips_existing_and_merge_needs_all_chunks(synth_2x2, make_config, t
     write_slices(synth_2x2, out)
     cfg = str(make_config(synth_2x2, preview={"factor": FACTOR, "chunk_slices": 10}))
     run_preview(cfg)
-    chunk = out / "preview" / "stats" / "chunk_000000-000010.csv"
+    chunk = out / "work" / "preview" / "stats" / "chunk_000000-000010.csv"
     before = chunk.stat().st_mtime_ns
     preview.main(["run", "--config", cfg])
     assert chunk.stat().st_mtime_ns == before
@@ -152,7 +152,7 @@ def test_chunks_stay_put_and_late_tiles_are_filled_in(synth_2x2, tmp_path):
     a chunk lacking tile slices that are selected now (a late file) is recomputed without --overwrite."""
     t = synth_2x2
     out = tmp_path / "out"
-    stats_dir = out / "preview" / "stats"
+    stats_dir = out / "work" / "preview" / "stats"
 
     def config(**selection):
         return str(synth.write_config(tmp_path / "c.yaml", t.raw_dir, out, selection=selection,
@@ -197,7 +197,7 @@ def test_segments_with_different_tile_shapes(tmp_path):
     save_slices(out, slice_rows(t3) + slice_rows(t2, z0=8, segment_starts=(8,)))
     run_preview(synth.write_config(tmp_path / "c.yaml", t3.raw_dir, out,
                                    preview={"factor": FACTOR, "chunk_slices": 5}), num_tasks=2)
-    thumbs_dir = out / "preview" / "thumbs"
+    thumbs_dir = out / "work" / "preview" / "thumbs"
     assert np.load(thumbs_dir / "z000005-000008_tile2-2.npy").shape == (3, 32, 36)
     assert np.load(thumbs_dir / "z000008-000010_tile0-0.npy").shape == (2, 48, 56)
     stats, thumbs = read_outputs(out)
@@ -206,5 +206,5 @@ def test_segments_with_different_tile_shapes(tmp_path):
         for local in (0, 6):
             for tile in ("0-0", "1-1"):
                 assert_thumb(thumbs[(z0 + local, tile)], true_small(truth, local, tile))
-    assert sorted(p.name for p in (out / "preview" / "sheets").glob("*.png")) == \
-        ["2026-09-20.png", "2026-09-24.png"]
+    assert sorted(p.name for p in (out / "qc").glob("sheet_*.png")) == \
+        ["sheet_2026-09-20.png", "sheet_2026-09-24.png"]

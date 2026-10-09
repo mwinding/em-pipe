@@ -7,13 +7,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .config import step_path
 from .imagej_tiff import ImageJStack
 
 log = logging.getLogger(__name__)
 
 
 def slices_path(cfg):
-    return Path(cfg["output_dir"]) / "check" / "slices.csv"
+    return step_path(cfg, "check", "slices.csv")
 
 
 def load_slices(cfg, include_excluded=False, apply_selection=True):
@@ -74,7 +75,7 @@ def voxel_size_nm(cfg, files):
 
     render spaces its planes by this and zcorrect's positions are in units of it, so both use it.
     """
-    path = Path(cfg["output_dir"]) / "check" / "files.csv"
+    path = step_path(cfg, "check", "files.csv")
     df = pd.read_csv(path, dtype={"file": str}) if path.exists() else pd.DataFrame({"file": []})
     df = df[df["file"].isin(set(files))]
     vox, unknown = [], []

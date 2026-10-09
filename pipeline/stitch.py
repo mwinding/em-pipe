@@ -19,7 +19,7 @@ from scipy import ndimage
 
 from . import features, transforms
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info
-from .config import step_dir
+from .config import qc_path, step_dir, step_path
 from .slices import StackCache, load_slices, z_values
 
 log = logging.getLogger(__name__)
@@ -601,7 +601,7 @@ def merge(cfg):
     atomic_write(step_dir(cfg, "stitch", "pairs.csv"), lambda p: pairs.to_csv(p, index=False))
     atomic_write(step_dir(cfg, "stitch", "layout.json"),
                  lambda p: Path(p).write_text(json.dumps({"segments": layouts}, indent=1)))
-    plot(step_dir(cfg, "stitch", "stitch.png"), tiles, pd.concat(points, ignore_index=True), failed)
+    plot(qc_path(cfg, "stitch.png"), tiles, pd.concat(points, ignore_index=True), failed)
     log.info("wrote %d tile transforms for %d slices, %d pair measurements (%d failed samples)",
              len(tiles), tiles["z"].nunique(), len(pairs), len(failed))
 

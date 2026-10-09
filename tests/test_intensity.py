@@ -30,15 +30,15 @@ def gained(tmp_path_factory):
     run_preview(synth.write_config(root / "preview.yaml", truth.raw_dir, out, preview={"factor": 4}))
     recs = [({"z": z, "tile": t, "segment": 0}, transforms.translation(*truth.tile_origin[t]))
             for z in range(len(truth.timestamps)) for t in truth.tiles]
-    (out / "stitch").mkdir()
-    transforms.to_frame(recs).to_csv(out / "stitch" / "tiles.csv", index=False)
+    (out / "work" / "stitch").mkdir()
+    transforms.to_frame(recs).to_csv(out / "work" / "stitch" / "tiles.csv", index=False)
     return truth, root, out
 
 
 def run_intensity(root, raw_dir, out, **params):
     cfg = synth.write_config(root / "intensity.yaml", raw_dir, out, intensity=params)
     assert intensity.main(["--config", str(cfg)]) == 0
-    return pd.read_csv(out / "intensity" / "levels.csv", dtype={"tile": str})
+    return pd.read_csv(out / "work" / "intensity" / "levels.csv", dtype={"tile": str})
 
 
 def overlap_diffs(truth, levels, z0=0):
@@ -80,7 +80,7 @@ def test_balancing_removes_tile_seams(gained):
     bal = run_intensity(root, truth.raw_dir, out, smooth_slices=5, balance_every=3)
     assert list(bal.columns) == ["z", "tile", "lo", "hi"]
     assert len(bal) == len(truth.timestamps) * len(truth.tiles)
-    assert (out / "intensity" / "intensity.png").stat().st_size > 0
+    assert (out / "qc" / "intensity.png").stat().st_size > 0
     d_bal = overlap_diffs(truth, bal)
     assert d_bal.max() < 3 and d_bal.mean() < 1.2
 
@@ -96,7 +96,7 @@ def test_balancing_removes_tile_seams(gained):
 def test_falls_back_without_stitch(gained, tmp_path, caplog):
     truth, root, out = gained
     for step in ("check", "preview"):
-        shutil.copytree(out / step, tmp_path / step)
+        shutil.copytree(out / "work" / step, tmp_path / "work" / step)
     with caplog.at_level(logging.WARNING):
         fallback = run_intensity(tmp_path, truth.raw_dir, tmp_path, smooth_slices=5)
     assert "without tile balancing" in caplog.text
@@ -107,9 +107,9 @@ def test_falls_back_without_stitch(gained, tmp_path, caplog):
 def test_tile_without_overlap_measurement_keeps_own_levels(gained, tmp_path, caplog):
     truth, root, out = gained
     for step in ("check", "preview", "stitch"):
-        shutil.copytree(out / step, tmp_path / step)
-    tiles = pd.read_csv(out / "stitch" / "tiles.csv", dtype={"tile": str})
-    tiles[tiles["tile"] != "1-1"].to_csv(tmp_path / "stitch" / "tiles.csv", index=False)
+        shutil.copytree(out / "work" / step, tmp_path / "work" / step)
+    tiles = pd.read_csv(out / "work" / "stitch" / "tiles.csv", dtype={"tile": str})
+    tiles[tiles["tile"] != "1-1"].to_csv(tmp_path / "work" / "stitch" / "tiles.csv", index=False)
     with caplog.at_level(logging.WARNING):
         lv = run_intensity(tmp_path, truth.raw_dir, tmp_path, smooth_slices=5, balance_every=3)
     assert "left unbalanced" in caplog.text
@@ -122,10 +122,10 @@ def test_no_overlap_anywhere_leaves_every_tile_unbalanced(gained, tmp_path, capl
     """Regression: no tile pair overlapping at any sampled slice used to crash (empty measurements)."""
     truth, root, out = gained
     for step in ("check", "preview", "stitch"):
-        shutil.copytree(out / step, tmp_path / step)
-    tiles = pd.read_csv(out / "stitch" / "tiles.csv", dtype={"tile": str})
+        shutil.copytree(out / "work" / step, tmp_path / "work" / step)
+    tiles = pd.read_csv(out / "work" / "stitch" / "tiles.csv", dtype={"tile": str})
     tiles[["tx", "ty"]] *= 10   # tiles far apart
-    tiles.to_csv(tmp_path / "stitch" / "tiles.csv", index=False)
+    tiles.to_csv(tmp_path / "work" / "stitch" / "tiles.csv", index=False)
     with caplog.at_level(logging.WARNING):
         lv = run_intensity(tmp_path, truth.raw_dir, tmp_path, smooth_slices=5, balance_every=3)
     assert "left unbalanced" in caplog.text
@@ -146,8 +146,8 @@ def segments(tmp_path_factory):
                                    preview={"factor": 4, "chunk_slices": 4}), num_tasks=2)
     recs = [({"z": z0 + z, "tile": tile, "segment": seg}, transforms.translation(*t.tile_origin[tile]))
             for seg, (t, z0) in enumerate([(t3, 0), (t2, 8)]) for z in range(len(t.timestamps)) for tile in t.tiles]
-    (out / "stitch").mkdir()
-    transforms.to_frame(recs).to_csv(out / "stitch" / "tiles.csv", index=False)
+    (out / "work" / "stitch").mkdir()
+    transforms.to_frame(recs).to_csv(out / "work" / "stitch" / "tiles.csv", index=False)
     return t3, t2, root, out
 
 
@@ -172,10 +172,10 @@ def test_tiles_not_linked_by_overlaps_are_not_balanced_together(gained, tmp_path
     set (here the first, column 0) is balanced; column 1 keeps its own levels rather than arbitrary ones."""
     truth, root, out = gained
     for step in ("check", "preview", "stitch"):
-        shutil.copytree(out / step, tmp_path / step)
-    tiles = pd.read_csv(out / "stitch" / "tiles.csv", dtype={"tile": str})
+        shutil.copytree(out / "work" / step, tmp_path / "work" / step)
+    tiles = pd.read_csv(out / "work" / "stitch" / "tiles.csv", dtype={"tile": str})
     tiles.loc[tiles["tile"].str.endswith("-1"), "tx"] += 1000
-    tiles.to_csv(tmp_path / "stitch" / "tiles.csv", index=False)
+    tiles.to_csv(tmp_path / "work" / "stitch" / "tiles.csv", index=False)
     lv = run_intensity(tmp_path, truth.raw_dir, tmp_path, smooth_slices=5, balance_every=3)
     base = run_intensity(root, truth.raw_dir, out, smooth_slices=5, balance_tiles=False)
     right = lv["tile"].str.endswith("-1")
@@ -204,10 +204,10 @@ def write_stats_only(out, seam_z, segment_z, excluded, outlier_z):
                            "excluded": z in excluded, "exclude_reason": "", "label": ""})
             stats.append({"z": z, "tile": tile, **{k: lo + p for k, p in PERCENTILES.items()},
                           "p0_5": lo, "p1": lo + 50, "p99_5": lo + 10000})
-    (out / "check").mkdir(parents=True)
-    (out / "preview").mkdir()
-    pd.DataFrame(slices).to_csv(out / "check" / "slices.csv", index=False)
-    pd.DataFrame(stats).to_csv(out / "preview" / "stats.csv", index=False)
+    (out / "work" / "check").mkdir(parents=True)
+    (out / "work" / "preview").mkdir()
+    pd.DataFrame(slices).to_csv(out / "work" / "check" / "slices.csv", index=False)
+    pd.DataFrame(stats).to_csv(out / "work" / "preview" / "stats.csv", index=False)
     return zs, expected
 
 

@@ -25,7 +25,7 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.sparse.linalg import spsolve
 
 from . import cli, features, transforms
-from .config import step_dir
+from .config import qc_path, step_dir, step_path
 from .slices import StackCache, load_slices, z_values
 
 log = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ def run(cfg, task_id, num_tasks, overwrite=False):
 
 def _stitch_transforms(cfg, df):
     """stitch/tiles.csv as {(z, tile): A}; every selected (z, tile) in ``df`` must have one."""
-    path = Path(cfg["output_dir"]) / "stitch" / "tiles.csv"
+    path = step_path(cfg, "stitch", "tiles.csv")
     if not path.exists():
         raise FileNotFoundError(f"{path} not found: run the stitch step first")
     stitch = transforms.read_csv(path, ["z", "tile"])
@@ -260,7 +260,7 @@ def solve(cfg):
     frame = transforms.to_frame(({"z": int(z), "timestamp": t}, A) for z, t, A in zip(zs, ts, mats))
     cli.atomic_write(step_dir(cfg, "align", "transforms.csv"), lambda tmp: frame.to_csv(tmp, index=False))
     cli.atomic_write(step_dir(cfg, "align", "residuals.csv"), lambda tmp: res.to_csv(tmp, index=False))
-    cli.atomic_write(step_dir(cfg, "align", "drift.png"), lambda tmp: _plot(tmp, zs, mats, res, seams))
+    cli.atomic_write(qc_path(cfg, "align_drift.png"), lambda tmp: _plot(tmp, zs, mats, res, seams))
     used = res[~res["rejected"]]
     log.info("rejected %d of %d slice pairs and %d of %d points; median pair rms %.2f px",
              int(res["rejected"].sum()), len(res), int((~keep).sum()), len(keep),
@@ -276,7 +276,7 @@ def _load_matches(cfg, df, zs, a):
     """
     stitch = _stitch_transforms(cfg, df)
     tiles_by_z = df.groupby("z")["tile"].agg(list).to_dict()
-    out_dir = Path(cfg["output_dir"]) / "align" / "matches"
+    out_dir = step_path(cfg, "align", "matches")
     size, settings = int(a["chunk_slices"]), _settings(a)
     parts, missing = [], []
     for core, ext in _chunks(zs.tolist(), size, int(a["neighbors"])):

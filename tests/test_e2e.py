@@ -68,7 +68,7 @@ def run_pipeline(cfg, zcorrect=False):
 
 
 def read_scales(out):
-    root = out / "render" / "volume.ome.zarr"
+    root = out / "synthetic.ome.zarr"
     return [omezarr.open_scale(root, s).read().result() for s in range(SMALL["render"]["num_scales"])]
 
 
@@ -124,17 +124,17 @@ def main_run(tmp_path_factory):
 
 def test_check_acknowledges_the_copy(main_run):
     truth, out = main_run
-    assert sorted(truth.files) == sorted(pd.read_csv(out / "check" / "files.csv")["file"])
+    assert sorted(truth.files) == sorted(pd.read_csv(out / "work" / "check" / "files.csv")["file"])
     assert {"M09_D25_tile0-0_part1.tif", "M09_D25_tile0-0_part2.tif"} <= set(truth.files)
-    issues = pd.read_csv(out / "check" / "issues.csv")
+    issues = pd.read_csv(out / "work" / "check" / "issues.csv")
     errors = issues[issues["severity"] == "ERROR"]
     assert len(errors) and (errors["file"] == COPY).all() and errors["known"].all()
     assert "DUPLICATE_CONTENT" in set(errors["code"])
-    files = pd.read_csv(out / "check" / "files.csv").set_index("file")
+    files = pd.read_csv(out / "work" / "check" / "files.csv").set_index("file")
     assert files.loc[COPY, "excluded"] and files.loc[COPY, "exclude_reason"] == "byte copy of tile1-0"
     assert files["excluded"].sum() == 1
 
-    sl = pd.read_csv(out / "check" / "slices.csv", dtype={"tile": str})
+    sl = pd.read_csv(out / "work" / "check" / "slices.csv", dtype={"tile": str})
     per_z = sl.drop_duplicates("z")
     assert list(per_z["z"]) == list(range(N))
     assert list(per_z["timestamp"]) == [t.isoformat() for t in truth.timestamps]
@@ -146,8 +146,8 @@ def test_check_acknowledges_the_copy(main_run):
 
 def test_stitch_matches_true_tile_offsets(main_run):
     truth, out = main_run
-    tiles = pd.read_csv(out / "stitch" / "tiles.csv", dtype={"tile": str})
-    sl = pd.read_csv(out / "check" / "slices.csv", dtype={"tile": str})
+    tiles = pd.read_csv(out / "work" / "stitch" / "tiles.csv", dtype={"tile": str})
+    sl = pd.read_csv(out / "work" / "check" / "slices.csv", dtype={"tile": str})
     assert len(tiles) == (~sl["excluded"]).sum()
     # The default affine_rigid model fits a near-identity affine to these pure-translation tiles:
     # every tile corner must land within 0.5 px of the truth.
@@ -156,13 +156,13 @@ def test_stitch_matches_true_tile_offsets(main_run):
     for row in tiles.itertuples():
         got = transforms.apply(transforms.from_row(row._asdict()), corners)
         assert np.abs(got - (corners + truth.tile_origin[row.tile])).max() < 0.5, (row.z, row.tile)
-    layout = json.loads((out / "stitch" / "layout.json").read_text())["segments"]["0"]
+    layout = json.loads((out / "work" / "stitch" / "layout.json").read_text())["segments"]["0"]
     assert layout["grid_shape"] == [2, 2] and layout["row_axis"] == "y"
 
 
 def test_align_recovers_drift(main_run):
     truth, out = main_run
-    al = pd.read_csv(out / "align" / "transforms.csv")
+    al = pd.read_csv(out / "work" / "align" / "transforms.csv")
     zs = al["z"].to_numpy()
     assert list(zs) == list(range(N))
     t = al[["tx", "ty"]].to_numpy()
@@ -173,10 +173,10 @@ def test_align_recovers_drift(main_run):
 
 def test_render_matches_truth_without_tile_seams(main_run):
     truth, out = main_run
-    meta = json.loads((out / "render" / "volume" / "render.json").read_text())
+    meta = json.loads((out / "work" / "render" / "synthetic" / "render.json").read_text())
     s0 = read_scales(out)[0]
     assert s0.shape == tuple(meta["shape"]) and s0.shape[0] == N
-    sl = pd.read_csv(out / "check" / "slices.csv", dtype={"tile": str})
+    sl = pd.read_csv(out / "work" / "check" / "slices.csv", dtype={"tile": str})
     present = sl[~sl["excluded"]].groupby("z")["tile"].agg(set)
     for k, plane in enumerate(meta["planes"]):
         (z, w), = plane
@@ -207,7 +207,7 @@ def test_render_matches_truth_without_tile_seams(main_run):
 
 def test_missing_tile_area_filled_by_neighbours(main_run):
     truth, out = main_run
-    meta = json.loads((out / "render" / "volume" / "render.json").read_text())
+    meta = json.loads((out / "work" / "render" / "synthetic" / "render.json").read_text())
     s0 = read_scales(out)[0]
     for z, t in enumerate(truth.timestamps):
         if t.day != 24:   # tile 1-1 is the excluded copy on day 1 only
@@ -228,8 +228,8 @@ def test_pyramid_scales_are_means_of_s0(main_run):
     for s in range(1, len(scales)):
         np.testing.assert_array_equal(scales[s], pyramid.downsample(scales[s - 1]))
         n_shards = len(omezarr.shard_boxes(scales[s].shape, omezarr.shard_shape(
-            omezarr.open_scale(out / "render" / "volume.ome.zarr", s))))
-        assert len(list((out / "render" / "volume" / "done").glob(f"s{s}_*"))) == n_shards
+            omezarr.open_scale(out / "synthetic.ome.zarr", s))))
+        assert len(list((out / "work" / "render" / "synthetic" / "done").glob(f"s{s}_*"))) == n_shards
 
 
 # ----- second run: destreak and zcorrect inside render -----------------------------------------
@@ -252,12 +252,12 @@ def corrected_run(tmp_path_factory):
 def test_zcorrect_positions_drive_the_planes(corrected_run):
     truth, out = corrected_run
     n = len(truth.timestamps)
-    pos = pd.read_csv(out / "zcorrect" / "positions.csv")
+    pos = pd.read_csv(out / "work" / "zcorrect" / "positions.csv")
     assert list(pos["z"]) == list(range(n))
     p = pos["position_nm"].to_numpy()
     assert p[0] == 0 and (np.diff(p) > 0).all()
     assert p[-1] == pytest.approx(8.0 * (n - 1), rel=0.02)   # mean spacing is held at nominal
-    meta = json.loads((out / "render" / "volume" / "render.json").read_text())
+    meta = json.loads((out / "work" / "render" / "synthetic" / "render.json").read_text())
     assert meta["zcorrected"] and meta["voxel_nm"] == [8.0, 8.0, 8.0]
     assert len(meta["planes"]) == int(np.floor((p[-1] - p[0]) / 8.0 + 1e-6)) + 1
     for k, plane in enumerate(meta["planes"]):
@@ -269,7 +269,7 @@ def test_zcorrect_positions_drive_the_planes(corrected_run):
 
 def test_destreak_removes_stripes_in_render(corrected_run):
     truth, out = corrected_run
-    meta = json.loads((out / "render" / "volume" / "render.json").read_text())
+    meta = json.loads((out / "work" / "render" / "synthetic" / "render.json").read_text())
     assert meta["destreak"]["enabled"]
     s0 = read_scales(out)[0]
     raw = tifffile.imread(truth.raw_dir / "M09_D24_tile0-0.tif").astype(float)

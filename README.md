@@ -38,7 +38,7 @@ with its default.
 ```bash
 ./run_pipeline.sh configs/P667_test_2day.yaml --dry-run   # show the job chain
 ./run_pipeline.sh configs/P667_test_2day.yaml             # submit it
-squeue --me                                               # follow; logs in <output_dir>/logs/
+squeue --me                                               # follow; logs in <output_dir>/work/logs/
 ./run_pipeline.sh configs/P667_test_2day.yaml --from align   # re-run from a step
 ```
 
@@ -55,25 +55,28 @@ python -m pipeline.check --config configs/P667_test_2day.yaml \
 
 ## Outputs (in `output_dir`)
 
-- `check/report.md`: what was found in the raw data. Acknowledge known problems in
-  `check.known_issues` (`action: exclude` drops a file), otherwise check stops the pipeline.
-- `preview/sheets/*.png`, `preview/stats.png`: thumbnails and intensity over time.
-- `stitch/stitch.png`, `stitch/layout.json`: tile offsets over time, measured overlap.
-- `align/drift.png`: drift correction over time and match residuals.
-- `intensity/intensity.png`
-- `render/volume.ome.zarr`: the volume.
+```
+<name>.ome.zarr        the stitched volume: open in neuroglancer (below)
+<name>_<voxel>nm.tif   quick look in Fiji (finest scale under export.max_gb)
+qc/                    check_report.md and plots: stitch, align_drift, intensity, preview_stats, daily sheets
+work/                  working files of every step and the Slurm logs (work/logs/); no need to open
+```
+
+`qc/check_report.md` lists what was found in the raw data. Acknowledge known problems in
+`check.known_issues` (`action: exclude` drops a file), otherwise check stops the pipeline.
 
 ## Viewing in neuroglancer
 
-On a NEMO compute node (e.g. `srun --pty bash`), then from your Mac:
+On a Mac with the share mounted, or on a NEMO node:
 
 ```bash
-python -m pipeline.serve --config configs/P667_test_2day.yaml --bind 0.0.0.0   # on the node
-ssh -L 8000:<node>:8000 <user>@login.nemo.thecrick.org                         # on the Mac
+python -m pipeline.serve --config configs/P667_test_2day.yaml \
+    --output-dir /Volumes/lab-windingm/home/users/windinm/em-pipe_P667_test-M10-D01-D02
 ```
 
-In https://neuroglancer-demo.appspot.com add a layer with source
-`zarr3://http://localhost:8000/volume.ome.zarr/` (the server prints the exact URL).
+It prints the source to add in https://neuroglancer-demo.appspot.com, e.g.
+`zarr3://http://localhost:8000/P667_M10-D01-D02.ome.zarr/`. On a NEMO compute node, start it
+with `--bind 0.0.0.0` and tunnel from the Mac: `ssh -L 8000:<node>:8000 <user>@login.nemo.thecrick.org`.
 
 ## Things to know
 

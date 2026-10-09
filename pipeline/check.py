@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 from .cli import atomic_write, base_parser, setup
-from .config import step_dir
+from .config import qc_path, step_dir, step_path
 from .imagej_tiff import ImageJStack
 
 log = logging.getLogger(__name__)
@@ -632,7 +632,7 @@ def main(argv=None):
         json.dumps({"timezone": cfg["check"].get("timezone")})))
     _write_csv(out / "issues.csv", issues.assign(timestamp=issues["timestamp"].dt.strftime(TIME_FMT)))
     text = report(cfg, files, slices, issues, per, ignored)
-    atomic_write(out / "report.md", lambda tmp: Path(tmp).write_text(text))
+    atomic_write(qc_path(cfg, "check_report.md"), lambda tmp: Path(tmp).write_text(text))
 
     new = issues[(issues["severity"] == "ERROR") & ~issues["known"]]
     log.info("%d slices, %d tile images; %d issues (%d unacknowledged errors); report: %s",

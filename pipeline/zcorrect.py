@@ -21,7 +21,7 @@ from scipy.sparse.linalg import spsolve
 
 from . import transforms
 from .cli import atomic_write, base_parser, chunks, my_chunks, setup, task_info
-from .config import step_dir
+from .config import qc_path, step_dir, step_path
 from .features import downsample
 from .slices import StackCache, load_slices, voxel_size_nm, z_values
 
@@ -131,8 +131,8 @@ def _chunk_is_current(path, ext, zc=None):
         return zc is None or (int(f["crop_px"]), float(f["factor"])) == (int(zc["crop_px"]), float(zc["factor"]))
 
 
-def _read_transforms(out_dir):
-    paths = {step: Path(out_dir) / step / name for step, name in (("stitch", "tiles.csv"), ("align", "transforms.csv"))}
+def _read_transforms(cfg):
+    paths = {step: step_path(cfg, step, name) for step, name in (("stitch", "tiles.csv"), ("align", "transforms.csv"))}
     for step, path in paths.items():
         if not path.exists():
             raise FileNotFoundError(f"{path} not found: run the {step} step first")
@@ -143,7 +143,7 @@ def run(cfg, args):
     zc = cfg["zcorrect"]
     df = load_slices(cfg)
     zs = z_values(df)
-    stitch, align = _read_transforms(cfg["output_dir"])
+    stitch, align = _read_transforms(cfg)
     origins = _crop_origins(df, stitch, align, zc["crop_px"])
     rows = {(r["z"], r["tile"]): r for r in df.to_dict("records")}
     segment = dict(zip(df["z"], df["segment"]))
@@ -292,7 +292,7 @@ def solve(cfg, args):
                           "position_nm": vz * (zs[0] + pos)})
     atomic_write(out / "positions.csv", lambda p: frame.to_csv(p, index=False))
     seams = zs[1:][brk]
-    _plot(out / "zcorrect.png", zs, vz * s / nominal, vz, seams, pos[ib] - pos[ia], ncc, xs, ys)
+    _plot(qc_path(cfg, "zcorrect.png"), zs, vz * s / nominal, vz, seams, pos[ib] - pos[ia], ncc, xs, ys)
     log.info("wrote %s (voxel z %.2f nm)", out / "positions.csv", vz)
 
 

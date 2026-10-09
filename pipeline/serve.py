@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .cli import base_parser, setup
+from .render import volume_name
 
 log = logging.getLogger(__name__)
 
@@ -153,17 +154,17 @@ def main(argv=None):
     p = base_parser(__doc__.splitlines()[0])
     p.add_argument("--port", type=int, help="HTTP port (default: serve.port, 8000; 0 picks a free port)")
     p.add_argument("--bind", help="listen address (default: serve.bind, 127.0.0.1)")
-    p.add_argument("--dir", help="directory to serve (default: output_dir/render)")
+    p.add_argument("--dir", help="directory to serve (default: output_dir)")
     args = p.parse_args(argv)
     cfg = setup(args, DEFAULTS)
-    root = Path(args.dir or Path(cfg["output_dir"]) / "render")
+    root = Path(args.dir or cfg["output_dir"])
     if not root.is_dir():
         log.error("%s does not exist: run render first or pass --dir", root)
         return 1
     port = int(cfg["serve"]["port"] if args.port is None else args.port)
     bind = args.bind or cfg["serve"]["bind"]
     # Advertise the directory itself if it is the Zarr group, else the rendered volume in it.
-    name = "" if (root / "zarr.json").exists() else cfg.get("render", {}).get("name", "volume.ome.zarr")
+    name = "" if (root / "zarr.json").exists() else volume_name(cfg)
     if name and not (root / name / "zarr.json").exists():
         log.warning("%s has no Zarr volume %s (yet): check render.name or pass --dir", root, name)
     try:

@@ -35,18 +35,18 @@ def write_inputs(truth, out, parts=(), excluded=(), excluded_tiles=()):
                          "tile_col": c, "file": name, "index": i, "height": truth.tile_shape[0],
                          "width": truth.tile_shape[1], "segment": 0, "seam": z in parts,
                          "excluded": ex, "exclude_reason": "test" if ex else "", "label": ""})
-    (out / "check").mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).sort_values(["z", "tile"]).to_csv(out / "check" / "slices.csv", index=False)
+    (out / "work" / "check").mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).sort_values(["z", "tile"]).to_csv(out / "work" / "check" / "slices.csv", index=False)
     tiles = transforms.to_frame(({"z": z, "tile": t}, transforms.translation(*truth.tile_origin[t]))
                                 for z in range(len(truth.timestamps)) for t in truth.tiles
                                 if (z, t) not in excluded_tiles)
     tiles["segment"] = 0
-    (out / "stitch").mkdir(parents=True, exist_ok=True)
-    tiles.to_csv(out / "stitch" / "tiles.csv", index=False)
+    (out / "work" / "stitch").mkdir(parents=True, exist_ok=True)
+    tiles.to_csv(out / "work" / "stitch" / "tiles.csv", index=False)
 
 
 def read_transforms(out):
-    df = pd.read_csv(out / "align" / "transforms.csv")
+    df = pd.read_csv(out / "work" / "align" / "transforms.csv")
     return df, df[transforms.COLUMNS].to_numpy().reshape(-1, 2, 3)
 
 
@@ -69,7 +69,7 @@ def load_npz(path):
 
 def edit_stitch(out, fn):
     """Replace every transform A in stitch/tiles.csv by fn(z, tile, A)."""
-    path = out / "stitch" / "tiles.csv"
+    path = out / "work" / "stitch" / "tiles.csv"
     df = pd.read_csv(path, dtype={"tile": str})
     mats = [fn(z, t, transforms.from_row(r)) for z, t, (_, r) in zip(df["z"], df["tile"], df.iterrows())]
     df[transforms.COLUMNS] = np.array(mats).reshape(-1, 6)
@@ -95,9 +95,9 @@ def solve_copy(drift_data, tmp_path, edit=None, stitch=None, **overrides):
     truth, out = drift_data
     new = tmp_path / "out"
     for step in ("check", "stitch", "align/matches"):
-        shutil.copytree(out / step, new / step)
+        shutil.copytree(out / "work" / step, new / "work" / step)
     if edit:
-        path = new / "align" / "matches" / CHUNK0
+        path = new / "work" / "align" / "matches" / CHUNK0
         m = load_npz(path)
         edit(m)
         np.savez(path, **m)
@@ -110,7 +110,7 @@ def solve_copy(drift_data, tmp_path, edit=None, stitch=None, **overrides):
 
 def test_recovers_drift_with_jump(drift_data):
     truth, out = drift_data
-    m = load_npz(out / "align" / "matches" / CHUNK0)
+    m = load_npz(out / "work" / "align" / "matches" / CHUNK0)
     # Points are in montage coordinates: montage -> volume is +drift, so matched points agree there.
     gap = m["z_b"] - m["z_a"]
     assert set(gap.tolist()) == {1, 2, 3, 4}
@@ -135,10 +135,10 @@ def test_recovers_drift_with_jump(drift_data):
     np.testing.assert_allclose(mats[:, :, :2], np.tile(np.eye(2), (N, 1, 1)))
     np.testing.assert_allclose(mats[0], transforms.identity())
     assert drift_error(truth.drift, df, mats) < 0.5
-    res = pd.read_csv(out / "align" / "residuals.csv")
+    res = pd.read_csv(out / "work" / "align" / "residuals.csv")
     assert list(res.columns) == ["z_a", "z_b", "n", "rms_px", "max_px", "rejected"]
     assert not res["rejected"].any() and res["rms_px"].median() < 1.0
-    assert (out / "align" / "drift.png").stat().st_size > 0
+    assert (out / "qc" / "align_drift.png").stat().st_size > 0
 
 
 def test_chunked_tasks_equal_single_task(drift_data, tmp_path):
@@ -148,7 +148,7 @@ def test_chunked_tasks_equal_single_task(drift_data, tmp_path):
     write_inputs(truth, out2, parts=[PART])
     run = lambda cfg, *args: align.main(["run", "--config", str(cfg), *args])
     task = lambda i: ["--task-id", str(i), "--num-tasks", "3"]
-    matches = out2 / "align" / "matches"
+    matches = out2 / "work" / "align" / "matches"
     mtimes = lambda: {p.name: p.stat().st_mtime_ns for p in matches.glob("*.npz")}
     changed = lambda before: {k for k, t in mtimes().items() if before.get(k) != t}
     chunked = {**ALIGN, "chunk_slices": 7}
@@ -177,7 +177,7 @@ def test_chunked_tasks_equal_single_task(drift_data, tmp_path):
 
     # Excluding a slice, or one tile of a slice, later redoes only the chunk holding it: chunk bounds
     # are fixed in global z, and a chunk records which (z, tile) it read.
-    path = out2 / "check" / "slices.csv"
+    path = out2 / "work" / "check" / "slices.csv"
     sl = pd.read_csv(path)
     sl.loc[(sl["z"] == 19) | ((sl["z"] == 3) & (sl["tile"] == "1-0")), "excluded"] = True
     sl.to_csv(path, index=False)
@@ -238,12 +238,12 @@ def test_corrupted_and_excluded_slices(tmp_path, caplog):
     df, mats = read_transforms(out)
     zs = df["z"].tolist()
     assert skipped not in zs and len(zs) == 19
-    res = pd.read_csv(out / "align" / "residuals.csv")
+    res = pd.read_csv(out / "work" / "align" / "residuals.csv")
     # Neighbours are by position in the selected list: 4 and 6 are adjacent once 5 is excluded.
     assert ((res["z_a"] == skipped - 1) & (res["z_b"] == skipped + 1)).any()
     assert not ((res["z_a"] == bad) | (res["z_b"] == bad))[~res["rejected"]].any()
     # z 8 lacks one tile: it is still matched with the other three.
-    m = load_npz(out / "align" / "matches" / "chunk_000006-000012.npz")
+    m = load_npz(out / "work" / "align" / "matches" / "chunk_000006-000012.npz")
     at8 = m["z_a"] == no_tile[0]
     assert set(m["tiles"][m["ta"][at8]]) == set(truth.tiles) - {no_tile[1]}
     assert ((res["z_a"] == no_tile[0]) & ~res["rejected"]).sum() >= 3
@@ -261,7 +261,7 @@ def test_outlier_pair_rejected(drift_data, tmp_path):
         m["qb"][(m["z_a"] == 8) & (m["z_b"] == 10)] += np.float32([25, -18])
 
     new = solve_copy(drift_data, tmp_path, edit=wrong_pair)
-    res = pd.read_csv(new / "align" / "residuals.csv")
+    res = pd.read_csv(new / "work" / "align" / "residuals.csv")
     assert res.loc[res["rejected"], ["z_a", "z_b"]].values.tolist() == [[8, 10]]
     df, mats = read_transforms(new)
     assert drift_error(truth.drift, df, mats) < 0.5
@@ -317,7 +317,7 @@ def test_remove_trend_linear(drift_data, tmp_path):
     assert np.abs(mats[:, :, 2] - expected).max() < 0.5
     np.testing.assert_allclose(mats[0], transforms.identity(), atol=1e-9)
     # Residuals describe the fit, not the trend that was removed afterwards (regression).
-    res = pd.read_csv(new / "align" / "residuals.csv")
+    res = pd.read_csv(new / "work" / "align" / "residuals.csv")
     assert res["rms_px"].median() < 1.0
 
 
@@ -361,15 +361,15 @@ def test_segment_change(tmp_path):
                          "tile_col": c, "file": name, "index": i, "height": H, "width": w, "segment": 1,
                          "seam": z == seg, "excluded": False, "exclude_reason": "", "label": ""})
             stitch.append(({"z": z, "tile": tile, "segment": 1}, transforms.translation(*(np.add((x0, y0), frame)))))
-    sl = pd.read_csv(out / "check" / "slices.csv")
-    pd.concat([sl[sl["z"] < seg], pd.DataFrame(rows)]).to_csv(out / "check" / "slices.csv", index=False)
-    tl = pd.read_csv(out / "stitch" / "tiles.csv", dtype={"tile": str})
-    pd.concat([tl[tl["z"] < seg], transforms.to_frame(stitch)]).to_csv(out / "stitch" / "tiles.csv", index=False)
+    sl = pd.read_csv(out / "work" / "check" / "slices.csv")
+    pd.concat([sl[sl["z"] < seg], pd.DataFrame(rows)]).to_csv(out / "work" / "check" / "slices.csv", index=False)
+    tl = pd.read_csv(out / "work" / "stitch" / "tiles.csv", dtype={"tile": str})
+    pd.concat([tl[tl["z"] < seg], transforms.to_frame(stitch)]).to_csv(out / "work" / "stitch" / "tiles.csv", index=False)
 
     cfg = synth.write_config(tmp_path / "config.yaml", truth.raw_dir, out, align={**ALIGN, "scale": 0.5})
     align.main(["run", "--config", str(cfg)])
     expected = truth.drift - np.where(np.arange(n)[:, None] >= seg, frame, 0)   # montage' = montage + frame
-    m = load_npz(out / "align" / "matches" / CHUNK0)
+    m = load_npz(out / "work" / "align" / "matches" / CHUNK0)
     z_a, z_b = m["z_a"], m["z_b"]
     err = (m["pa"] + expected[z_a]) - (m["pb"] + expected[z_b])
     assert np.abs(err.mean(0)).max() < 0.05 and np.median(np.linalg.norm(err, axis=1)) < 1.0

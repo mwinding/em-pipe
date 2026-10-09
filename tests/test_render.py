@@ -47,7 +47,7 @@ def _setup(path, truth, *, exclude=(), levels=True, shift=None, align=None, voxe
     """
     out = path / "out"
     for d in ("check", "stitch", "align", "intensity", "zcorrect"):
-        (out / d).mkdir(parents=True, exist_ok=True)
+        (out / "work" / d).mkdir(parents=True, exist_ok=True)
     align = align or transforms.translation
     parts = truth if isinstance(truth, list) else [(truth, (0, 0))]
     rows, stitch, aligned, z0 = [], [], [], 0
@@ -70,16 +70,16 @@ def _setup(path, truth, *, exclude=(), levels=True, shift=None, align=None, voxe
                     for zl, ts in enumerate(t.timestamps)]
         z0 += len(t.timestamps)
     sl = pd.DataFrame(rows).sort_values(["z", "tile"])
-    sl.to_csv(out / "check" / "slices.csv", index=False)
-    transforms.to_frame(stitch).to_csv(out / "stitch" / "tiles.csv", index=False)
-    transforms.to_frame(aligned).to_csv(out / "align" / "transforms.csv", index=False)
+    sl.to_csv(out / "work" / "check" / "slices.csv", index=False)
+    transforms.to_frame(stitch).to_csv(out / "work" / "stitch" / "tiles.csv", index=False)
+    transforms.to_frame(aligned).to_csv(out / "work" / "align" / "transforms.csv", index=False)
     if levels:
         span = np.array([GAIN.get(t, 1.0) * (HI - LO) for t in sl["tile"]])
         lo = LO + span * np.array([(shift or {}).get(t, 0.0) for t in sl["tile"]])
-        sl[["z", "tile"]].assign(lo=lo, hi=lo + span).to_csv(out / "intensity" / "levels.csv", index=False)
+        sl[["z", "tile"]].assign(lo=lo, hi=lo + span).to_csv(out / "work" / "intensity" / "levels.csv", index=False)
     if voxel:
         pd.DataFrame({"file": sorted(sl["file"].unique()), "voxel_x_nm": voxel[0], "voxel_y_nm": voxel[1],
-                      "voxel_z_nm": voxel[2]}).to_csv(out / "check" / "files.csv", index=False)
+                      "voxel_z_nm": voxel[2]}).to_csv(out / "work" / "check" / "files.csv", index=False)
     cfg = synth.write_config(path / "config.yaml", parts[0][0].raw_dir, out,
                              render={**SMALL, **sections.pop("render", {})}, **sections)
     return cfg, out
@@ -91,11 +91,11 @@ def _render(cfg, *extra):
 
 
 def _read(out):
-    return omezarr.open_scale(out / "render" / "volume.ome.zarr", 0).read().result()
+    return omezarr.open_scale(out / "synthetic.ome.zarr", 0).read().result()
 
 
 def _meta(out):
-    return json.loads((out / "render" / "volume" / "render.json").read_text())
+    return json.loads((out / "work" / "render" / "synthetic" / "render.json").read_text())
 
 
 def _aligned(truth, zs):
@@ -143,9 +143,9 @@ def test_render_matches_ground_truth(truth, full):
     assert meta["origin_xy"] == [0, 0] and meta["shape"] == list(vol.shape)
     assert meta["voxel_nm"] == [8.0, 8.0, 8.0] and meta["downsample"] == 1 and not meta["zcorrected"]
     assert meta["planes"] == [[[z, 1.0]] for z in range(N)]
-    assert sorted(p.name for p in (out / "render" / "volume" / "done").iterdir()) == ["slab_000000", "slab_000001",
+    assert sorted(p.name for p in (out / "work" / "render" / "synthetic" / "done").iterdir()) == ["slab_000000", "slab_000001",
                                                                           "slab_000002"]
-    root = out / "render" / "volume.ome.zarr"
+    root = out / "synthetic.ome.zarr"
     ome = json.loads((root / "zarr.json").read_text())["attributes"]["ome"]
     assert ome["version"] == "0.5"
     ds = ome["multiscales"][0]["datasets"]
@@ -231,7 +231,7 @@ def test_downsample_matches_block_means(truth, full, tmp_path, f):
         inner = full_b.all(axis=0)
         assert _corr(vol[k][inner], truth_k[inner]) > 0.995
         assert np.abs(vol[k][inner] - truth_k[inner]).mean() < 1.5
-    ds = json.loads((out / "render" / "volume.ome.zarr" / "zarr.json").read_text())
+    ds = json.loads((out / "synthetic.ome.zarr" / "zarr.json").read_text())
     scale = ds["attributes"]["ome"]["multiscales"][0]["datasets"][0]["coordinateTransformations"][0]["scale"]
     assert scale == [10.0 * f, 8.0 * f, 8.0 * f]    # (z, y, x) = voxel from files.csv x f
 
@@ -287,7 +287,7 @@ def test_zcorrect_plane_mapping(truth, tmp_path, monkeypatch):
     assert len(_meta(out)["planes"]) == len(zs) and not _meta(out)["zcorrected"]
     rng = np.random.default_rng(4)
     pos = 8 * np.concatenate([[3.0], 3 + np.cumsum(rng.uniform(0.4, 1.7, N - 1))])
-    pd.DataFrame({"z": range(N), "position_nm": pos}).to_csv(out / "zcorrect" / "positions.csv", index=False)
+    pd.DataFrame({"z": range(N), "position_nm": pos}).to_csv(out / "work" / "zcorrect" / "positions.csv", index=False)
     assert render.main(["init", "--config", str(cfg)]) == 1      # inputs changed: needs --overwrite
     _render(cfg, "--overwrite")
     meta, vol = _meta(out), _read(out)
@@ -313,13 +313,13 @@ def test_tasks_markers_and_reinit(truth, full, tmp_path):
     args = ["--config", str(cfg)]
     assert render.main(["init", *args]) == 0
     assert render.main(["run", *args, "--task-id", "1", "--num-tasks", "2"]) == 0
-    done = out / "render" / "volume" / "done"
+    done = out / "work" / "render" / "synthetic" / "done"
     assert [p.name for p in done.iterdir()] == ["slab_000001"]
     assert render.main(["run", *args, "--task-id", "0", "--num-tasks", "2"]) == 0
     np.testing.assert_array_equal(_read(out), ref)
 
     # Finished slabs are skipped: blank slab 0 behind the marker's back, re-run, still blank.
-    arr = omezarr.open_scale(out / "render" / "volume.ome.zarr", 0)
+    arr = omezarr.open_scale(out / "synthetic.ome.zarr", 0)
     arr[0:8].write(np.zeros((8, *ref.shape[1:]), np.uint8)).result()
     assert render.main(["run", *args]) == 0
     assert not _read(out)[0:8].any()
@@ -434,9 +434,9 @@ def test_fractional_shift_far_from_canvas_origin(truth, tmp_path, caplog):
     planes = []
     for far in (0, 15000):
         cfg, out = _setup(tmp_path / str(far), truth, selection={"z_end": 1}, render={"integer_shifts": False})
-        tf = pd.read_csv(out / "align" / "transforms.csv")
+        tf = pd.read_csv(out / "work" / "align" / "transforms.csv")
         tf.loc[tf["z"] == 1, "tx"] += far + 0.1
-        tf.to_csv(out / "align" / "transforms.csv", index=False)
+        tf.to_csv(out / "work" / "align" / "transforms.csv", index=False)
         caplog.clear()
         with caplog.at_level(logging.WARNING, logger="pipeline.render"):
             _render(cfg)
@@ -490,12 +490,12 @@ def test_two_volumes_share_output_dir(truth, full, tmp_path):
     cfg_roi.write_text(yaml.safe_dump(roi))
     _render(cfg_roi)
 
-    small = omezarr.open_scale(out / "render" / "roi.ome.zarr", 0).read().result()
+    small = omezarr.open_scale(out / "roi.ome.zarr", 0).read().result()
     full_out, full_vol = full
     ox, oy = _meta(full_out)["origin_xy"]
     x0, y0 = 10 - int(ox), 10 - int(oy)
     assert small.shape == (N, 40, 50)
     assert np.abs(small.astype(int) - full_vol[:, y0:y0 + 40, x0:x0 + 50]).max() <= 1
-    assert json.loads((out / "render" / "roi" / "render.json").read_text())["downsample"] == 1
+    assert json.loads((out / "work" / "render" / "roi" / "render.json").read_text())["downsample"] == 1
     assert _meta(out)["downsample"] == 2 and _read(out).shape[1] < full_vol.shape[1]
     assert render.main(["init", "--config", str(cfg)]) == 0   # overview plan untouched: kept

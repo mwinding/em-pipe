@@ -155,7 +155,7 @@ def test_main_rejects_missing_dir(make_config, tmp_path):
 
 def test_main_reports_port_in_use(make_config, tmp_path, caplog):
     cfg = make_config(tmp_path / "raw")
-    (tmp_path / "out" / "render").mkdir(parents=True)
+    (tmp_path / "out").mkdir(parents=True)
     with socket.socket() as taken:
         taken.bind(("127.0.0.1", 0))
         taken.listen()
@@ -166,7 +166,7 @@ def test_main_reports_port_in_use(make_config, tmp_path, caplog):
 
 def test_main_prints_viewing_instructions(make_config, tmp_path, capsys, monkeypatch):
     cfg = make_config(tmp_path / "raw", render={"name": "v.ome.zarr"})
-    (tmp_path / "out" / "render").mkdir(parents=True)
+    (tmp_path / "out").mkdir(parents=True)
 
     def interrupt(self):
         raise KeyboardInterrupt
@@ -175,7 +175,7 @@ def test_main_prints_viewing_instructions(make_config, tmp_path, capsys, monkeyp
     assert serve.main(["--config", str(cfg), "--port", "0"]) == 0
     out = capsys.readouterr().out
     port = re.search(r"zarr3://http://localhost:(\d+)/v\.ome\.zarr/", out).group(1)
-    assert int(port) > 0 and str(tmp_path / "out" / "render") in out
+    assert int(port) > 0 and str(tmp_path / "out") in out
 
 
 def test_tensorstore_reads_sharded_volume_over_http(tmp_path):

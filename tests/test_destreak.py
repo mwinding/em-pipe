@@ -70,13 +70,13 @@ def test_cli_writes_before_after(tmp_path, make_config):
             rows.append(dict(z=z, timestamp=truth.timestamps[z].isoformat(), tile=tile, tile_row=r, tile_col=c,
                              file=name, index=i, height=256, width=300, segment=0, seam=False, excluded=False,
                              exclude_reason="", label=""))
-    (out / "check").mkdir(parents=True)
-    pd.DataFrame(rows).sort_values(["z", "tile"]).to_csv(out / "check" / "slices.csv", index=False)
+    (out / "work" / "check").mkdir(parents=True)
+    pd.DataFrame(rows).sort_values(["z", "tile"]).to_csv(out / "work" / "check" / "slices.csv", index=False)
     cfg = make_config(truth, destreak={"levels": 4})
 
     assert destreak.main(["test", "--config", str(cfg), "--z", "2", "--tile", "1-0",
                           "--crop", "10", "210", "20", "260"]) == 0
-    d = out / "destreak"
+    d = out / "work" / "destreak"
     images = {p.name: cv2.imread(str(p), cv2.IMREAD_UNCHANGED) for p in d.glob("*.png")}
     assert set(images) == {f"z2_tile1-0_{k}{s}.png" for k in ("before", "after") for s in ("", "_crop", "_fft")}
     assert images["z2_tile1-0_before.png"].shape == (256, 300)

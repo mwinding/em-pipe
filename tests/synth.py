@@ -228,7 +228,7 @@ def slice_rows(truth, z0=0, segment_starts=(), seams=(), excluded=()):
 
 
 def save_slices(output_dir, rows):
-    path = Path(output_dir) / "check" / "slices.csv"
+    path = Path(output_dir) / "work" / "check" / "slices.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).sort_values(["z", "tile"]).to_csv(path, index=False)
     return path

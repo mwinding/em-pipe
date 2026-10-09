@@ -3,9 +3,10 @@
 # falls back to these defaults (defined in pipeline/config.py and each pipeline/<step>.py).
 # Run everything on Slurm:  ./run_pipeline.sh configs/<dataset>.yaml [--dry-run]
 
-name: null                   # dataset name for report and plot titles and the OME-Zarr metadata
+name: null                   # dataset name: names the volume (<name>.ome.zarr), titles and OME-Zarr metadata
 raw_dir: /path/to/raw        # folder of daily ImageJ TIFF exports (searched recursively); never written to
-output_dir: /path/to/output  # every step writes into output_dir/<step>/
+# output_dir holds the volume, a quick-look TIFF and qc/ (report, plots); working files go to work/
+output_dir: /path/to/output
 
 raw:
   # Daily export files, e.g. M10_D06_tile1-1.tif or M09_D23_tile0-0_part2.tif
@@ -105,7 +106,7 @@ zcorrect:
 
 # render writes scale 0; pyramid builds scales 1..num_scales-1 from it.
 render:
-  name: volume.ome.zarr      # output folder under output_dir/render/
+  name: null                 # volume folder in output_dir; null: <name>.ome.zarr
   downsample: 1              # integer binning factor f in x, y and z (1 = full resolution)
   bbox: null                 # [xmin, ymin, xmax, ymax] in aligned px to render a region; null = all
   integer_shifts: true       # round translation-only transforms to whole px (no interpolation blur)
@@ -123,6 +124,9 @@ render:
 
 pyramid: {}                  # no settings: scales, chunks and shards are fixed by render init
 
+export:
+  max_gb: 4.0                # quick-look TIFF from the finest scale up to this size (uint8, uncompressed)
+
 serve:
   port: 8000                 # HTTP port (--port overrides)
   bind: 127.0.0.1            # listen address (--bind overrides); 0.0.0.0 to tunnel via the login host
@@ -130,7 +134,7 @@ serve:
 # Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
 # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch.
 # Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, intensity, zcorrect,
-# zcorrect_solve, render_init, render, pyramid (one job per scale, each with this array size).
+# zcorrect_solve, render_init, render, pyramid (one job per scale, each with this array size), export.
 slurm:
   mail_user: null            # sbatch --mail-user (failure mails); null: Slurm's default
   preview: {array: 20}

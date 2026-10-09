@@ -45,12 +45,12 @@ def write_inputs(truths, out, seams=(), excluded=(), align=None):
                          transforms.compose(extra, transforms.translation(*truth.drift[z]))))
         z0 += len(truth.timestamps)
     for step in ("check", "stitch", "align"):
-        (out / step).mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).sort_values(["z", "tile"]).to_csv(out / "check" / "slices.csv", index=False)
+        (out / "work" / step).mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).sort_values(["z", "tile"]).to_csv(out / "work" / "check" / "slices.csv", index=False)
     seg_of = {r["z"]: r["segment"] for r in rows}
     frame = transforms.to_frame(tiles)
-    frame.assign(segment=frame["z"].map(seg_of)).to_csv(out / "stitch" / "tiles.csv", index=False)
-    transforms.to_frame(mats).to_csv(out / "align" / "transforms.csv", index=False)
+    frame.assign(segment=frame["z"].map(seg_of)).to_csv(out / "work" / "stitch" / "tiles.csv", index=False)
+    transforms.to_frame(mats).to_csv(out / "work" / "align" / "transforms.csv", index=False)
 
 
 def _cfg(path):
@@ -66,14 +66,14 @@ def run_all(cfg, num_tasks=1):
 def load_pairs(out):
     """Every (z_a, z_b, ncc) row of every chunk file, NaN included."""
     frames = []
-    for p in sorted((out / "zcorrect" / "ncc").glob("chunk_*.npz")):
+    for p in sorted((out / "work" / "zcorrect" / "ncc").glob("chunk_*.npz")):
         with np.load(p) as f:
             frames.append(pd.DataFrame({k: f[k] for k in ("z_a", "z_b", "ncc")}))
     return pd.concat(frames)
 
 
 def spacings(out):
-    pos = pd.read_csv(out / "zcorrect" / "positions.csv")
+    pos = pd.read_csv(out / "work" / "zcorrect" / "positions.csv")
     return pos["z"].to_numpy(), np.diff(pos["position_nm"].to_numpy()) / VOXEL_Z
 
 
@@ -102,12 +102,12 @@ def test_recovers_alternating_spacing(tmp_path, make_config):
     true = true / true.mean()
     assert np.corrcoef(est, true)[0, 1] > 0.8
     assert np.abs(est - true).mean() < 0.15
-    assert (out / "zcorrect" / "zcorrect.png").stat().st_size > 0
+    assert (out / "qc" / "zcorrect.png").stat().st_size > 0
 
     # Existing chunks are skipped unless --overwrite.
-    mtimes = {p: p.stat().st_mtime_ns for p in (out / "zcorrect" / "ncc").iterdir()}
+    mtimes = {p: p.stat().st_mtime_ns for p in (out / "work" / "zcorrect" / "ncc").iterdir()}
     zcorrect.main(["run", "--config", str(cfg)])
-    assert {p: p.stat().st_mtime_ns for p in (out / "zcorrect" / "ncc").iterdir()} == mtimes
+    assert {p: p.stat().st_mtime_ns for p in (out / "work" / "zcorrect" / "ncc").iterdir()} == mtimes
     zcorrect.main(["run", "--config", str(cfg), "--overwrite"])
     assert all(p.stat().st_mtime_ns != t for p, t in mtimes.items())
 
@@ -198,13 +198,13 @@ def test_growing_selection_and_stale_chunks(tmp_path, make_config):
     truth = synth.make_dataset(tmp_path / "raw", n_slices=n)
     out = tmp_path / "out"
     write_inputs(truth, out)
-    pd.DataFrame({"file": list(truth.files), "voxel_z_nm": 10.0}).to_csv(out / "check" / "files.csv", index=False)
+    pd.DataFrame({"file": list(truth.files), "voxel_z_nm": 10.0}).to_csv(out / "work" / "check" / "files.csv", index=False)
     zc = {"crop_px": 64, "chunk_slices": 16, "max_distance": 4}
 
     # Data "so far" ends at z=22: chunk 5..20 can only pair 17..20 with 21..22.
     cfg = make_config(truth, zcorrect=zc, selection={"z_start": z_start, "z_end": 22})
     run_all(cfg)
-    pos = pd.read_csv(out / "zcorrect" / "positions.csv")
+    pos = pd.read_csv(out / "work" / "zcorrect" / "positions.csv")
     assert list(pos.columns) == ["z", "timestamp", "position_nm"]
     assert list(pos["timestamp"]) == [truth.timestamps[z].isoformat() for z in range(z_start, 23)]
     assert pos["position_nm"].iloc[0] == pytest.approx(z_start * 10.0)   # same origin as z * voxel_z
@@ -216,18 +216,18 @@ def test_growing_selection_and_stale_chunks(tmp_path, make_config):
     pairs = zcorrect._load_pairs(c, zs, c["zcorrect"])
     expected = {(a, b) for a in zs for b in zs if 0 < b - a <= 4}
     assert len(pairs) == len(expected) and set(zip(pairs["z_a"], pairs["z_b"])) == expected
-    pos = pd.read_csv(out / "zcorrect" / "positions.csv")
+    pos = pd.read_csv(out / "work" / "zcorrect" / "positions.csv")
     assert list(pos["z"]) == list(zs)
     assert np.abs(pos["position_nm"] / 10.0 - pos["z"]).max() < 1.0      # uniform spacing: ~z * voxel_z
 
     # A leftover chunk of an older chunking (here with bogus NCC) is ignored...
-    bogus = out / "zcorrect" / "ncc" / "chunk_000021-000099.npz"
+    bogus = out / "work" / "zcorrect" / "ncc" / "chunk_000021-000099.npz"
     a = np.arange(21, 40)
     np.savez(bogus, z_a=a, z_b=a + 1, ncc=np.full(len(a), 0.999), zs=np.arange(21, 44))
     assert zcorrect.main(["solve", "--config", str(cfg)]) == 0
-    pd.testing.assert_frame_equal(pd.read_csv(out / "zcorrect" / "positions.csv"), pos)
+    pd.testing.assert_frame_equal(pd.read_csv(out / "work" / "zcorrect" / "positions.csv"), pos)
     # ...a missing one is an error...
-    (out / "zcorrect" / "ncc" / "chunk_000021-000037.npz").unlink()
+    (out / "work" / "zcorrect" / "ncc" / "chunk_000021-000037.npz").unlink()
     with pytest.raises(FileNotFoundError, match="chunk_000021-000037"):
         zcorrect.main(["solve", "--config", str(cfg)])
     # ...and changed crop settings re-measure every chunk without --overwrite.
@@ -250,7 +250,7 @@ def test_segment_change_and_missing_tiles(tmp_path, make_config):
 
     # Crops: every tile of each segment, including the one excluded at the first z.
     c = _cfg(cfg)
-    stitch, align = zcorrect._read_transforms(out)
+    stitch, align = zcorrect._read_transforms({"output_dir": str(out)})
     origins = zcorrect._crop_origins(load_slices(c), stitch, align, 64)
     assert sorted(origins[0]) == sorted(seg0.tiles) and sorted(origins[1]) == sorted(seg1.tiles)
     # Seg 0 crops are centred on the 128 x 144 tiles, seg 1 crops on the 192 x 224 tiles.
@@ -276,8 +276,8 @@ def test_segment_change_and_missing_tiles(tmp_path, make_config):
 def test_voxel_z_from_files_csv(tmp_path):
     """The rule render shares: median of usable values over the used files, else 8 nm."""
     cfg = {"output_dir": str(tmp_path)}
-    (tmp_path / "check").mkdir()
-    path = tmp_path / "check" / "files.csv"
+    (tmp_path / "work" / "check").mkdir(parents=True)
+    path = tmp_path / "work" / "check" / "files.csv"
 
     def voxel_z(files):
         return voxel_size_nm(cfg, files)[0]

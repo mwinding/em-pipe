@@ -65,9 +65,13 @@ destreak has no batch stage: it is a function applied per tile inside render whe
 
 ## Output files
 
-All paths are relative to `output_dir`.
+`output_dir` itself holds only what people look at: the volume `<name>.ome.zarr`
+(render.name, default from the config name), the quick-look TIFF `<stem>_<voxel>nm.tif` (export) and
+`qc/` (check_report.md, stitch.png, align_drift.png, intensity.png, preview_stats.png, sheet_<day>.png,
+zcorrect.png). Everything below lives in `output_dir/work/` (`pipeline.config.step_dir/step_path`),
+as do the Slurm logs (`work/logs/`).
 
-### check/
+### work/check/
 - `files.csv` — one row per raw TIFF matching `raw.file_pattern`:
   `file` (path relative to `raw_dir`), `month, day, part, tile, tile_row, tile_col,
   n_slices, height, width, dtype, byteorder, data_offset, contiguous, size_bytes, mtime,
@@ -96,7 +100,7 @@ All paths are relative to `output_dir`.
   `ignore` only acknowledges. `file` is the path relative to `raw_dir` or the file name.
 - Exit code: 1 if any ERROR that is not listed in `check.known_issues`, else 0.
 
-### preview/
+### work/preview/
 - `stats.csv` — per (z, tile): `z, timestamp, tile, mean, std, p0_5, p1, p50, p99, p99_5, min, max,
   frac_zero, frac_saturated` computed on the downsampled tile (uint16 values).
 - `thumbs/z{z0:06d}-{z1:06d}_tile{r}-{c}.npy` — uint8 stack `[n, h/f, w/f]` (z0 = first selected z
@@ -108,7 +112,7 @@ All paths are relative to `output_dir`.
   stats lack a selected (z, tile); `merge` reads only the chunks of the current selection.
 - `sheets/{YYYY-MM-DD}.png` — contact sheet per day; `stats.png` — intensity over time.
 
-### stitch/
+### work/stitch/
 - `samples/z{z:06d}.json` — one per sampled slice (every `stitch.sample_every`-th selected z of a
   segment, its first and last, and the slices either side of each seam): `z, timestamp, segment,
   model, reference` (the segment's smallest tile id, fixed at identity), `settings, ok, reason,
@@ -126,7 +130,7 @@ All paths are relative to `output_dir`.
   all its slices at (0, 0).
 - `stitch.png` — offsets over z.
 
-### align/
+### work/align/
 - `matches/chunk_{z0:06d}-{z1:06d}.npz` — the selected z in the global-z block `[z0, z1)` of
   `align.chunk_slices`, each paired with its next `align.neighbors` selected z (by position, so
   `z_b - z_a` can exceed `neighbors`). Arrays `z_a, z_b, w`; points in tile pixels `qa, qb` (N×2) with
@@ -140,11 +144,11 @@ All paths are relative to `output_dir`.
   when fewer than half its points survive outlier rejection.
 - `drift.png` — tx, ty vs z with seams marked; residuals vs z.
 
-### intensity/
+### work/intensity/
 - `levels.csv` — per (z, tile): `z, tile, lo, hi` — uint16 values that render maps to 0 and 255
   (before CLAHE). Smooth over z.
 
-### zcorrect/
+### work/zcorrect/
 - `ncc/chunk_{z0:06d}-{z1:06d}.npz` — arrays `z_a, z_b, ncc`, plus `zs` (the z measured over),
   `crop_px, factor`; chunks are runs of `zcorrect.chunk_slices` selected z (z1 = last + 1).
 - `positions.csv` — `z, timestamp, position_nm` with position_nm = voxel_z × (first selected z +
@@ -153,11 +157,11 @@ All paths are relative to `output_dir`.
   mean spacing is held at nominal per seam-free block and over a rolling `zcorrect.nominal_window`.
 - `zcorrect.png`.
 
-### destreak/
+### work/destreak/
 - `z{Z}_tile{r-c}_{before,after}.png` (whole slice, ≤ 2000 px), `_{before,after}_crop.png` (full
   resolution), `_{before,after}_fft.png` (log spectrum of the crop); before and after share contrast.
 
-### render/
+### work/render/
 - `<render.name>` (default `volume.ome.zarr`) — OME-Zarr 0.5 (Zarr v3, `sharding_indexed`), uint8,
   scales `s0..sN`, axes z, y, x in nanometres; written with tensorstore.
 - `<stem>/` — the volume's work folder (`<stem>` = render.name without `.ome.zarr`, e.g. `volume/`),
