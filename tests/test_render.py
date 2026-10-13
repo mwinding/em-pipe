@@ -536,3 +536,41 @@ def test_seam_weights_switch_at_equal_edge_distance():
         mid = overlap / 2
         assert abs(np.interp(0.5, share[::-1], x[::-1]) - mid) < 1
         assert (share[x < mid - 32] > 0.98).all() and (share[x > mid + 32] < 0.02).all()
+
+
+def test_fixed_window_ignores_intensity_levels(truth, tmp_path):
+    """render.intensity false: every tile slice goes through one raw window, so the levels file
+    (here making tile 0-1 0.1 of the range darker) has no effect, and the raw tile gains of the
+    synthetic data (0-1 x1.2, 1-0 x0.85) stay visible instead of being balanced away."""
+    zs = list(range(4))
+    fixed = {"intensity": False, "window": [26000, 41000]}
+    cfg_a, out_a = _setup(tmp_path / "a", truth, selection={"z_end": zs[-1]}, shift={"0-1": 0.1}, render=fixed)
+    cfg_b, out_b = _setup(tmp_path / "b", truth, selection={"z_end": zs[-1]}, render=fixed)
+    _render(cfg_a)
+    _render(cfg_b)
+    np.testing.assert_array_equal(_read(out_a), _read(out_b))
+    plan = pd.read_csv(out_a / "work" / "render" / "synthetic" / "tiles.csv")
+    assert (plan["lo"] == 26000).all() and (plan["hi"] == 41000).all()
+    # Raw = 26000 + 15000 x gain x truth: in tile 1-0's own area the render is ~0.85 x 255 x truth.
+    vol = _read(out_a).astype(float)
+    img, cov = _aligned(truth, zs)
+    th, tw = truth.tile_shape
+    x0, y0 = truth.tile_origin["1-0"]
+    own = np.zeros(cov.shape[1:], bool)
+    own[y0 + 20:y0 + th - 5, x0 + 5:x0 + tw - 25] = True       # away from its overlaps (dy, dx < 5 here)
+    ratio = np.median(vol[0][own & cov[0]] / np.maximum(255.0 * img[0][own & cov[0]], 1))
+    assert ratio == pytest.approx(GAIN["1-0"], abs=0.05)
+
+
+def test_fixed_window_defaults_to_preview_stats(truth, tmp_path):
+    cfg, out = _setup(tmp_path, truth, render={"intensity": False})
+    sl = pd.read_csv(out / "work" / "check" / "slices.csv", dtype={"tile": str})
+    rng = np.random.default_rng(0)
+    st = sl[["z", "tile"]].assign(p0_5=rng.uniform(26000, 27000, len(sl)), p99_5=rng.uniform(39000, 41000, len(sl)))
+    (out / "work" / "preview").mkdir(parents=True, exist_ok=True)
+    st.to_csv(out / "work" / "preview" / "stats.csv", index=False)
+    assert render.main(["init", "--config", str(cfg)]) == 0
+    plan = pd.read_csv(out / "work" / "render" / "synthetic" / "tiles.csv")
+    sel = st.merge(plan[["z", "tile"]].astype({"tile": str}), on=["z", "tile"])
+    assert plan["lo"].nunique() == 1 and plan["lo"].iloc[0] == pytest.approx(np.percentile(sel["p0_5"], 1))
+    assert plan["hi"].iloc[0] == pytest.approx(np.percentile(sel["p99_5"], 99))

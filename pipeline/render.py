@@ -43,6 +43,11 @@ DEFAULTS = {
         "downsample": 1,            # integer binning factor f in x, y and z (1 = full resolution)
         "bbox": None,               # [xmin, ymin, xmax, ymax] in aligned px to render a region; null = all
         "integer_shifts": True,     # round translation-only transforms to whole px (no interpolation blur)
+        # Grey levels: true uses intensity/levels.csv (per-tile windows, balanced, smoothed, per-slice).
+        # false maps every tile slice through one fixed raw window (render.window), so the raw data's
+        # own tile-to-tile and slice-to-slice differences show.
+        "intensity": True,
+        "window": None,             # [lo, hi] raw values for intensity false; null: from preview stats
         # How overlapping tiles combine. seam: each pixel from the tile whose own edge is farthest,
         # switching along the middle of the overlap over ~seam_px (sharp, no ghosting where tiles
         # disagree by a few px). feather: linear crossfade over blend_px from each tile edge.
@@ -131,6 +136,10 @@ def _tile_plan(cfg):
         mats.append(T)
     plan = sl[["z", "tile", "file", "index", "height", "width"]].copy()
     plan[transforms.COLUMNS] = np.array(mats).reshape(-1, 6)
+    if not cfg["render"]["intensity"]:
+        plan["lo"], plan["hi"] = _fixed_window(cfg, plan)
+        log.info("render.intensity false: one raw window %g-%g for every tile slice", *plan[["lo", "hi"]].iloc[0])
+        return plan
     levels = step_path(cfg, "intensity", "levels.csv")
     if levels.exists():
         lv = pd.read_csv(levels, dtype={"tile": str})[["z", "tile", "lo", "hi"]]
@@ -142,6 +151,23 @@ def _tile_plan(cfg):
         log.warning("%s has no levels for %d of %d (z, tile): those tile slices are scaled to their "
                     "own p0.5/p99.5", levels, n, len(plan))
     return plan
+
+
+def _fixed_window(cfg, plan):
+    """render.window, else the 1st percentile of the selected tile slices' p0.5 and the 99th
+    percentile of their p99.5 in preview/stats.csv (covers nearly every tile slice, clips few)."""
+    window = cfg["render"]["window"]
+    if window is not None:
+        lo, hi = (float(v) for v in window)
+    else:
+        path = _require(step_path(cfg, "preview", "stats.csv"), "preview")
+        st = pd.read_csv(path, dtype={"tile": str}).merge(plan[["z", "tile"]], on=["z", "tile"])
+        if st.empty:
+            raise ValueError(f"{path} has none of the selected tile slices: run preview")
+        lo, hi = np.percentile(st["p0_5"], 1), np.percentile(st["p99_5"], 99)
+    if not hi > lo:
+        raise ValueError(f"render.window must be [lo, hi] with hi > lo, got [{lo}, {hi}]")
+    return lo, hi
 
 
 def _canvas(plan, bbox):
