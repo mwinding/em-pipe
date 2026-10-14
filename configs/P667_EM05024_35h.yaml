@@ -1,16 +1,16 @@
-# P667 EM05024 35h: the whole acquisition so far (~11,500 slices, 2x2 grid of 12751 x 13875 px tiles at
-# 8 nm after an earlier 3x3 segment of 8626 x 8833 px tiles; ~16 TB, growing daily).
+# P667 EM05024 35h: the whole acquisition, 17 Sep - 14 Oct 2026 (~15,700 slices exported up to 12 Oct,
+# ~17,000 in all; ~21 TB). 3x3 tiles of ~8700 x 8900 px (17-23 Sep, in Approach/), then 2x2 tiles of
+# 12751 x 13875 px, shrinking in steps from 8 Oct to 9001 x 10375 px: 6 tile layouts, 8 nm voxels.
 # Settings not listed here use the defaults in configs/example.yaml.
 #   ./run_pipeline.sh configs/P667_EM05024_35h.yaml --dry-run    # check the job chain first
 
 name: P667_EM05024_35h
 raw_dir: /camp/project/proj-efibsem/WindingM/P667_EM05024_35h
-output_dir: /camp/project/proj-efibsem/WindingM/P667_EM05024_35h_em-pipe    # confirm path
+output_dir: /camp/lab/windingm/home/shared/electron_microscopy/35_h/P667_EM05024_35h_stitched
 
 check:
   voxel_size_nm: [8, 8, 8]
-  # If the label clock is UK local time, set Europe/London before the clocks go back on 2026-10-25
-  # (labels would otherwise repeat an hour: NON_MONOTONIC). selection start/end stay local time.
+  # Acquisition ended before the clocks went back (2026-10-25), so local label times are monotonic.
   timezone: null
   # M09_D28_tile0-1.tif and Approach/M09_D18_tile2-1_part2.tif were copies of other tiles until they
   # were re-exported (by 14 Oct 2026); check flags any copy (DUPLICATE_CONTENT).
@@ -30,19 +30,19 @@ zcorrect:
 render:
   downsample: 1
 
-# ~11,500 slices x 4 tiles of ~354 MB. Arrays are task counts; chunks are spread over the tasks.
+# ~17,000 slices of ~1.4 GB (4 or 9 tiles). Arrays are task counts; chunks are spread over the tasks.
 slurm:
   mail_user: null            # your email, for failure mails
   check: {cpus: 4, mem: 16G, time: "02:00:00"}
-  preview: {array: 40, cpus: 2, mem: 8G, time: "04:00:00"}        # ~230 chunks of 50 slices (~70 GB read each)
+  preview: {array: 40, cpus: 2, mem: 8G, time: "04:00:00"}        # ~340 chunks of 50 slices (~70 GB read each)
   preview_merge: {cpus: 2, mem: 16G, time: "01:00:00"}
-  stitch: {array: 20, cpus: 8, mem: 8G, time: "04:00:00"}        # ~300 sampled slices, ~1 min each
+  stitch: {array: 30, cpus: 8, mem: 16G, time: "04:00:00"}       # ~350 sampled slices + refinement (~20 s each)
   stitch_merge: {cpus: 2, mem: 8G, time: "01:00:00"}
-  align: {array: 40, cpus: 8, mem: 16G, time: "12:00:00"}         # ~115 chunks of 100 slices, ~30 min each
+  align: {array: 40, cpus: 8, mem: 16G, time: "12:00:00"}         # ~170 chunks of 100 slices, ~30 min each
   align_solve: {cpus: 4, mem: 32G, time: "02:00:00"}
   intensity: {cpus: 2, mem: 16G, time: "01:00:00"}
   zcorrect: {array: 20, cpus: 2, mem: 8G, time: "04:00:00"}
   zcorrect_solve: {cpus: 2, mem: 8G, time: "01:00:00"}
   render_init: {cpus: 2, mem: 16G, time: "01:00:00"}
-  render: {array: 30, cpus: 8, mem: 160G, time: "24:00:00"}       # ~180 slabs of 64 planes, 5-10 min each
+  render: {array: 30, cpus: 8, mem: 160G, time: "24:00:00"}       # ~265 slabs of 64 planes, 5-10 min each
   pyramid: {array: 20, cpus: 4, mem: 8G, time: "06:00:00"}        # s1: ~16k shards of ~0.5 s
