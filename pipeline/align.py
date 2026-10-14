@@ -7,6 +7,12 @@ at once (sparse least squares with outlier rejection), as in Janelia's render pi
 Solving globally over several neighbours avoids the random-walk error of chaining adjacent
 slices.
 
+At a change of tile layout (a new stitch segment, e.g. 3x3 -> 2x2 tiles) the two montage frames
+differ by an offset and, when the scan settings changed, a slight stretch or rotation. ``solve``
+first fits one transform (``align.segment_change_model``) between the frames on either side of each
+change, from the matches across it, and maps every segment into the frame of one reference segment;
+the per-slice solve then only corrects drift. The fits are written to ``align/segment_changes.csv``.
+
 Chunk files also keep the points in tile pixels (``qa``, ``qb`` with tile indices ``ta``, ``tb``
 into ``tiles``); ``solve`` maps those with the current stitch/tiles.csv, so re-running stitch
 never requires re-matching.
@@ -45,6 +51,9 @@ DEFAULTS = {
         "affine_regularization": 0.1,  # affine: pull of the linear part toward identity, relative to the data
         "robust_iterations": 3,        # rounds of outlier rejection + re-solve
         "reject_px": 4.0,              # never reject points whose residual is below this (full-res px)
+        "segment_change_model": "affine",  # none | translation | similarity | affine: fitted between the
+                                           # montage frames either side of each tile layout change
+        "segment_reference": "largest",    # largest | first: segment whose montage frame the volume keeps
         "anchor": "first",             # first (first selected slice = identity) | mean (mean translation 0)
         "remove_trend": "none",        # none | linear | lowpass: remove slow drift (steps at seams are kept)
         "trend_window_slices": 2000,   # lowpass: Gaussian FWHM in slices
@@ -56,8 +65,17 @@ DEFAULTS = {
 SMOOTHNESS = 1e-3
 # A pair is rejected as a whole when less than this fraction of its points survive rejection.
 MIN_PAIR_FRACTION = 0.5
+# Fewest matched points across a tile layout change to fit its frame transform.
+MIN_CHANGE_POINTS = 50
+# A layout change fit beyond these is reported as implausible (the solve still uses it).
+CHANGE_WARN = {"scale": 0.02, "rotation_deg": 1.0, "median_px": 10.0}
+CHANGE_COLUMNS = ["z_before", "z_after", "segment_before", "segment_after", "model", "points", "used",
+                  "median_px", "p90_px", "translation_median_px", "scale_x", "scale_y", "rotation_deg",
+                  *transforms.COLUMNS]
 OPTIONS = {"model": ("translation", "affine"), "anchor": ("first", "mean"),
-           "remove_trend": ("none", "linear", "lowpass"), "ransac_model": features.MODELS}
+           "remove_trend": ("none", "linear", "lowpass"), "ransac_model": features.MODELS,
+           "segment_change_model": ("none", "translation", "similarity", "affine"),
+           "segment_reference": ("largest", "first")}
 # Settings that change a chunk's matches: run redoes chunks made with other values, solve refuses them.
 _RUN_KEYS = ("scale", "neighbors", "max_features", "ratio", "ransac_model", "ransac_px", "min_inliers",
              "max_points_per_pair")
@@ -246,6 +264,9 @@ def solve(cfg):
         raise ValueError("no selected slices")
     m = _load_matches(cfg, df, zs, a)
     log.info("%d points in %d slice pairs over %d slices", len(m["pid"]), len(m["pairs"]), len(zs))
+    run, run_seg = _runs(df, zs)
+    frames, changes = segment_frames(m, run, run_seg, zs, a)
+    _to_common_frame(m, frames, run)
 
     mats, keep, rejected = solve_transforms(m, len(zs), a)
     # Residuals of the fit itself: trend removal deliberately breaks agreement between slices.
@@ -255,12 +276,15 @@ def solve(cfg):
     mats = _remove_trend(mats, zs, seam_pos, a["remove_trend"], float(a["trend_window_slices"]))
     mats = _apply_gauge(mats, a["anchor"])
     _report_gaps(m, keep, zs, int(a["min_inliers"]))
+    drift = mats   # in the reference segment's frame
+    mats = np.array([transforms.compose(T, frames[r]) for T, r in zip(drift, run)])
 
     ts = df.groupby("z")["timestamp"].first().loc[zs].dt.strftime("%Y-%m-%dT%H:%M:%S")
     frame = transforms.to_frame(({"z": int(z), "timestamp": t}, A) for z, t, A in zip(zs, ts, mats))
     cli.atomic_write(step_dir(cfg, "align", "transforms.csv"), lambda tmp: frame.to_csv(tmp, index=False))
     cli.atomic_write(step_dir(cfg, "align", "residuals.csv"), lambda tmp: res.to_csv(tmp, index=False))
-    cli.atomic_write(qc_path(cfg, "align_drift.png"), lambda tmp: _plot(tmp, zs, mats, res, seams))
+    cli.atomic_write(step_dir(cfg, "align", "segment_changes.csv"), lambda tmp: changes.to_csv(tmp, index=False))
+    cli.atomic_write(qc_path(cfg, "align_drift.png"), lambda tmp: _plot(tmp, zs, drift, res, seams))
     used = res[~res["rejected"]]
     log.info("rejected %d of %d slice pairs and %d of %d points; median pair rms %.2f px",
              int(res["rejected"].sum()), len(res), int((~keep).sum()), len(keep),
@@ -299,6 +323,133 @@ def _load_matches(cfg, df, zs, a):
     return {"pa": cat["pa"][order].astype(np.float64), "pb": cat["pb"][order].astype(np.float64),
             "w": cat["w"][order].astype(np.float64), "pid": pid,
             "pairs": np.column_stack([keys // len(zs), keys % len(zs)])}
+
+
+def _runs(df, zs):
+    """Tile layout run of each slice in ``zs`` (consecutive selected slices of one stitch segment),
+    and the segment of each run."""
+    seg = df.groupby("z")["segment"].first().loc[zs].to_numpy()
+    start = np.r_[True, seg[1:] != seg[:-1]]
+    return np.cumsum(start) - 1, seg[start]
+
+
+def segment_frames(m, run, run_seg, zs, a):
+    """One transform per run, from its montage frame into the reference run's, and the fits.
+
+    At each layout change, ``align.segment_change_model`` is fitted (robustly, as the solve) to the
+    points matched across it, mapping the new run's frame into the previous run's; the reference run
+    (``align.segment_reference``) keeps its frame and the others are chained to it. ``none`` keeps
+    every frame as stitched and leaves the change to the per-slice solve.
+    """
+    model = a["segment_change_model"]
+    ra, rb = run[m["pairs"][m["pid"], 0]], run[m["pairs"][m["pid"], 1]]
+    steps, rows = [transforms.identity()], []   # steps[k]: run k's frame -> run k-1's
+    for k in range(1, int(run.max()) + 1):
+        sel = (ra == k - 1) & (rb == k)
+        row = {"z_before": int(zs[run == k - 1][-1]), "z_after": int(zs[run == k][0]),
+               "segment_before": int(run_seg[k - 1]), "segment_after": int(run_seg[k]),
+               "model": model, "points": int(sel.sum())}
+        A = transforms.identity()
+        if model != "none" and sel.sum() < MIN_CHANGE_POINTS:
+            log.warning("layout change at z %d -> %d: only %d points matched across it (need %d); "
+                        "segment %d keeps its stitched frame", row["z_before"], row["z_after"],
+                        row["points"], MIN_CHANGE_POINTS, row["segment_after"])
+            row["model"] = "none"
+        elif model != "none":
+            src, dst, pair = m["pb"][sel], m["pa"][sel], m["pid"][sel]
+            gap = np.diff(m["pairs"], axis=1)[:, 0]
+            fit = dict(reject_px=float(a["reject_px"]), iterations=int(a["robust_iterations"]))
+            A, used, err = _fit_frame(src, dst, pair, gap, model, **fit)
+            _, _, err_t = _fit_frame(src, dst, pair, gap, "translation", **fit)
+            row.update(used=int(used.sum()), median_px=float(np.median(err[used])),
+                       p90_px=float(np.percentile(err[used], 90)), translation_median_px=float(np.median(err_t)),
+                       **_describe(A), **transforms.to_row(A))
+            log.info("layout change at z %d -> %d (segment %d -> %d): %s fit to %d of %d points, median "
+                     "%.2f px (a translation alone: %.2f px); scale x %.5f, y %.5f, rotation %.4f deg",
+                     row["z_before"], row["z_after"], row["segment_before"], row["segment_after"], model,
+                     row["used"], row["points"], row["median_px"], row["translation_median_px"],
+                     row["scale_x"], row["scale_y"], row["rotation_deg"])
+            if (max(abs(row["scale_x"] - 1), abs(row["scale_y"] - 1)) > CHANGE_WARN["scale"]
+                    or abs(row["rotation_deg"]) > CHANGE_WARN["rotation_deg"]
+                    or row["median_px"] > CHANGE_WARN["median_px"]):
+                log.warning("layout change at z %d -> %d: implausible fit (see align/segment_changes.csv); "
+                            "check the matches across it", row["z_before"], row["z_after"])
+        steps.append(A)
+        rows.append(row)
+    sizes = np.bincount(run)
+    ref = 0 if a["segment_reference"] == "first" else int(np.argmax(sizes))   # ties: the first
+    frames = [transforms.identity() for _ in sizes]
+    for k in range(ref + 1, len(sizes)):
+        frames[k] = transforms.compose(frames[k - 1], steps[k])
+    for k in range(ref - 1, -1, -1):
+        frames[k] = transforms.compose(frames[k + 1], transforms.invert(steps[k + 1]))
+    if len(sizes) > 1:
+        log.info("montage frame of segment %d (z %d-%d) kept; %d layout change(s)", int(run_seg[ref]),
+                 int(zs[run == ref][0]), int(zs[run == ref][-1]), len(sizes) - 1)
+    return frames, pd.DataFrame(rows, columns=CHANGE_COLUMNS)
+
+
+def _fit_frame(src, dst, pair, gap, model, reject_px, iterations):
+    """``model`` mapping src -> dst points matched between slice pairs ``pair`` (``gap[pair]`` slices
+    apart) across a layout change.
+
+    The linear part is shared; each slice pair gets its own translation, as the slices drift (the
+    per-slice solve corrects that afterwards). The returned translation is that of the closest pairs.
+    Refitted ``iterations`` times without points beyond max(reject_px, median + 3 MAD) of the
+    residuals. Returns (A, used mask, residual per point).
+    """
+    used = np.ones(len(src), bool)
+    for it in range(iterations + 1):
+        L, t = _shared_linear(src[used], dst[used], pair[used], model)
+        err = np.linalg.norm(dst - src @ L.T - t[pair], axis=1)
+        if it == iterations:
+            break
+        med = np.median(err[used])
+        new = err <= max(reject_px, med + 3 * 1.4826 * np.median(np.abs(err[used] - med)))
+        if new.sum() < MIN_CHANGE_POINTS // 2 or np.array_equal(new, used):
+            break
+        used = new
+    present = np.unique(pair[used])
+    closest = present[gap[present] == gap[present].min()]
+    return np.column_stack([L, t[closest].mean(0)]), used, err
+
+
+def _shared_linear(src, dst, pair, model):
+    """Linear part L (identity | similarity | affine) shared by all pairs, and per pair translation t
+    (indexed by pair id), with dst ≈ L src + t[pair] in the least-squares sense."""
+    n_pairs = int(pair.max()) + 1
+    count = np.maximum(np.bincount(pair, minlength=n_pairs), 1)[:, None]
+    ms = np.column_stack([np.bincount(pair, src[:, j], minlength=n_pairs) for j in (0, 1)]) / count
+    md = np.column_stack([np.bincount(pair, dst[:, j], minlength=n_pairs) for j in (0, 1)]) / count
+    p, q = src - ms[pair], dst - md[pair]
+    if model == "translation":
+        L = np.eye(2)
+    elif model == "similarity":   # x' = a x - b y, y' = b x + a y
+        M = np.zeros((2 * len(p), 2))
+        M[0::2] = np.column_stack([p[:, 0], -p[:, 1]])
+        M[1::2] = np.column_stack([p[:, 1], p[:, 0]])
+        (ca, cb), *_ = np.linalg.lstsq(M, q.ravel(), rcond=None)
+        L = np.array([[ca, -cb], [cb, ca]])
+    else:
+        X, *_ = np.linalg.lstsq(p, q, rcond=None)
+        L = X.T
+    return L, md - ms @ L.T
+
+
+def _describe(A):
+    L = np.asarray(A)[:, :2]
+    return {"scale_x": float(np.hypot(L[0, 0], L[1, 0])), "scale_y": float(np.hypot(L[0, 1], L[1, 1])),
+            "rotation_deg": float(np.degrees(np.arctan2(L[1, 0], L[0, 0])))}
+
+
+def _to_common_frame(m, frames, run):
+    """Map the matched points of every run into the reference frame (in place)."""
+    for col, side in (("pa", 0), ("pb", 1)):
+        r = run[m["pairs"][m["pid"], side]]
+        for k, F in enumerate(frames):
+            sel = r == k
+            if sel.any() and not np.allclose(F, transforms.identity()):
+                m[col][sel] = transforms.apply(F, m[col][sel])
 
 
 def solve_transforms(m, n, a):

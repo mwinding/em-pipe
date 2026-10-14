@@ -333,13 +333,11 @@ def test_remove_trend_lowpass_keeps_fast_drift(drift_data, tmp_path):
     assert np.abs(steps - steps0).mean() < 0.5 * np.abs(steps0).mean()
 
 
-def test_segment_change(tmp_path):
-    """From z 6 the slices are re-acquired as a 1×2 grid of tall tiles (other ids, other shape) whose
-    montage frame is offset from the first segment's; every tile combination is matched across the change.
-
-    Features are detected at half resolution, so points must be mapped back to full-res pixels.
-    """
-    n, seg, frame = 12, 6, np.array([37.0, -21.0])
+def _layout_change(tmp_path, n=12, seg=6, frame=(37.0, -21.0), L=np.eye(2)):
+    """From z ``seg`` the slices are re-acquired as a 1×2 grid of tall tiles (other ids, other shape)
+    whose montage frame is the first segment's mapped by ``L`` and offset by ``frame``
+    (stitch: tile pixel q -> L (q + tile origin) + frame). Returns (truth, out, montage map of segment 1)."""
+    frame = np.asarray(frame, float)
     truth = synth.make_dataset(tmp_path / "raw", n_slices=n, drift_jumps={seg: (-8, 5)}, seed=5,
                                z_positions=np.arange(n) * DZ)
     out = tmp_path / "out"
@@ -356,16 +354,24 @@ def test_segment_change(tmp_path):
         r, c = map(int, tile.split("-"))
         synth.write_imagej(truth.raw_dir / name, np.clip(26000 + img * 15000, 0, 65535).astype(np.uint16),
                            [synth.LABEL.format(ts=truth.timestamps[z], r=r, c=c) for z in zs])
+        A = np.column_stack([L, L @ np.array([x0, y0], float) + frame])
         for i, z in enumerate(zs):
             rows.append({"z": z, "timestamp": truth.timestamps[z].isoformat(), "tile": tile, "tile_row": r,
                          "tile_col": c, "file": name, "index": i, "height": H, "width": w, "segment": 1,
                          "seam": z == seg, "excluded": False, "exclude_reason": "", "label": ""})
-            stitch.append(({"z": z, "tile": tile, "segment": 1}, transforms.translation(*(np.add((x0, y0), frame)))))
+            stitch.append(({"z": z, "tile": tile, "segment": 1}, A))
     sl = pd.read_csv(out / "work" / "check" / "slices.csv")
     pd.concat([sl[sl["z"] < seg], pd.DataFrame(rows)]).to_csv(out / "work" / "check" / "slices.csv", index=False)
     tl = pd.read_csv(out / "work" / "stitch" / "tiles.csv", dtype={"tile": str})
     pd.concat([tl[tl["z"] < seg], transforms.to_frame(stitch)]).to_csv(out / "work" / "stitch" / "tiles.csv", index=False)
+    return truth, out, np.column_stack([L, frame])
 
+
+def test_segment_change(tmp_path):
+    """Features are detected at half resolution, so points must be mapped back to full-res pixels;
+    every tile combination is matched across the change."""
+    n, seg, frame = 12, 6, np.array([37.0, -21.0])
+    truth, out, _ = _layout_change(tmp_path, n, seg, frame)
     cfg = synth.write_config(tmp_path / "config.yaml", truth.raw_dir, out, align={**ALIGN, "scale": 0.5})
     align.main(["run", "--config", str(cfg)])
     expected = truth.drift - np.where(np.arange(n)[:, None] >= seg, frame, 0)   # montage' = montage + frame
@@ -379,10 +385,76 @@ def test_segment_change(tmp_path):
     assert {("0-0", "0-0"), ("1-0", "0-0"), ("0-1", "0-1"), ("1-1", "0-1")} <= combos
     assert np.all(m["ta"][~across] == m["tb"][~across])
     assert "1-1" not in m["tiles"][m["ta"][z_a == 3]]
-    align.main(["solve", "--config", str(cfg)])
-    df, mats = read_transforms(out)
-    assert drift_error(expected, df, mats) < 0.5
-    assert drift_error(truth.drift, df, mats) > 10   # the frame offset is really in the result
+    for model in ("affine", "none"):
+        cfg = synth.write_config(tmp_path / f"{model}.yaml", truth.raw_dir, out,
+                                 align={**ALIGN, "scale": 0.5, "segment_change_model": model})
+        align.main(["solve", "--config", str(cfg)])
+        df, mats = read_transforms(out)
+        assert drift_error(expected, df, mats) < 0.5, model
+        assert drift_error(truth.drift, df, mats) > 10   # the frame offset is really in the result
+
+
+def test_segment_change_with_stretch(tmp_path):
+    """The new layout's frame is also 3% wider (the 35h 2x2 tiles are ~0.17% wider than the 3x3 ones):
+    no translation fits across the change. Without the frame fit the solve can only compromise (on the
+    35h 3x3 -> 2x2 change it rejected every pair across it, leaving a ~890 px jump); the affine fit
+    recovers the stretch."""
+    n, seg = 12, 6
+    L = np.array([[1.03, 0.0], [0.0, 1.0]])
+    truth, out, S = _layout_change(tmp_path, n, seg, L=L)
+    cfg = synth.write_config(tmp_path / "config.yaml", truth.raw_dir, out, align={**ALIGN, "scale": 0.5})
+    align.main(["run", "--config", str(cfg)])
+    H, W = truth.montage_shape
+    corners = np.array([[0, 0], [W, 0], [0, H], [W, H]], float)
+
+    def worst_error(**opts):
+        """Max error at the montage corners, relative to the first slice (px)."""
+        cfg = synth.write_config(tmp_path / "solve.yaml", truth.raw_dir, out,
+                                 align={**ALIGN, "scale": 0.5, **opts})
+        assert align.main(["solve", "--config", str(cfg)]) == 0
+        df, mats = read_transforms(out)
+        err = np.array([transforms.apply(A, corners if z < seg else transforms.apply(S, corners))
+                        - (corners + truth.drift[z]) for z, A in zip(df["z"], mats)])
+        return np.abs(err - err[0]).max()
+
+    assert worst_error() < 0.5
+    ch = pd.read_csv(out / "work" / "align" / "segment_changes.csv")
+    assert ch[["z_before", "z_after", "segment_before", "segment_after"]].values.tolist() == [[seg - 1, seg, 0, 1]]
+    assert abs(ch["scale_x"][0] - 1 / 1.03) < 1e-3 and abs(ch["scale_y"][0] - 1) < 1e-3
+    assert ch["median_px"][0] < 1.0 < ch["translation_median_px"][0]
+    assert worst_error(segment_change_model="translation") > 3
+    assert worst_error(segment_change_model="none") > 3
+    # Reference = the first segment's frame either way here (6 slices each: ties go to the first).
+    assert worst_error(segment_reference="first") < 0.5
+
+
+def test_segment_frames_chain_to_reference():
+    """Each run's frame maps into the reference run's (the largest), through the fits at every change."""
+    rng = np.random.default_rng(0)
+    zs = np.arange(10)
+    run = np.array([0, 0, 0, 1, 1, 1, 1, 1, 2, 2])
+    true = [np.array([[1.002, 0.001, -40.0], [-0.001, 0.999, 15.0]]), transforms.identity(),
+            np.array([[0.998, 0.0, 300.0], [0.0, 1.001, -7.0]])]   # run k frame -> run 1 frame
+    pa, pb, pid, pairs = [], [], [], []
+    for i, (za, zb) in enumerate([(2, 3), (1, 3), (7, 8), (6, 9)]):
+        world = rng.uniform(0, 20000, (200, 2))
+        pa.append(transforms.apply(transforms.invert(true[run[za]]), world))
+        pb.append(transforms.apply(transforms.invert(true[run[zb]]), world))
+        pid.append(np.full(200, i))
+        pairs.append((za, zb))
+    # Pairs must be sorted by (z_a, z_b) like _load_matches makes them.
+    order = sorted(range(len(pairs)), key=lambda i: pairs[i])
+    pid = [np.full(200, order.index(i)) for i in range(len(pairs))]
+    m = {"pa": np.concatenate(pa), "pb": np.concatenate(pb), "pid": np.concatenate(pid),
+         "pairs": np.array([pairs[i] for i in order])}
+    a = {**align.DEFAULTS["align"]}
+    frames, ch = align.segment_frames(m, run, np.array([4, 5, 7]), zs, a)
+    for F, T in zip(frames, true):
+        np.testing.assert_allclose(F, T, atol=1e-6)
+    assert ch["segment_after"].tolist() == [5, 7] and ch["median_px"].max() < 1e-6
+    frames, _ = align.segment_frames(m, run, np.array([4, 5, 7]), zs, {**a, "segment_reference": "first"})
+    np.testing.assert_allclose(frames[0], transforms.identity(), atol=1e-9)
+    np.testing.assert_allclose(transforms.compose(transforms.invert(true[0]), true[2]), frames[2], atol=1e-6)
 
 
 def test_anchor_mean(drift_data, tmp_path):

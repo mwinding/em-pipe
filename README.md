@@ -14,7 +14,7 @@ check → preview → stitch → align → intensity → [zcorrect] → render �
 | check | Inventory of the raw files: truncated or unreadable files, copied tiles, label/filename mismatches, missing tiles, time gaps, restarts and grid changes. Writes the global slice list every later step uses. |
 | preview | Per-slice intensity statistics and thumbnails (contact sheet per day). |
 | stitch | Tile layout within each slice: SIFT matches in the tile overlaps (overlap found automatically) and a least-squares solve. |
-| align | Slice-to-slice drift: SIFT matches between each slice and its next few neighbours, then one global least-squares solve. |
+| align | Slice-to-slice drift: SIFT matches between each slice and its next few neighbours, then one global least-squares solve. Where the tile layout changes (e.g. 3×3 → 2×2 tiles), one affine transform between the two montage frames is fitted first (`align.segment_change_model`; results in `work/align/segment_changes.csv`). |
 | intensity | Per-tile contrast levels, balanced across tile overlaps and smoothed over time. |
 | zcorrect | Optional slice-thickness correction (off by default). |
 | render | Applies everything in one pass and writes OME-Zarr (Zarr v3, sharded), optionally downsampled; CLAHE; optional destreaking. |

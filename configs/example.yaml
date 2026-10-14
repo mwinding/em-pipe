@@ -73,6 +73,9 @@ align:
   affine_regularization: 0.1 # affine: pull of the linear part toward identity, relative to the data
   robust_iterations: 3       # rounds of outlier rejection + re-solve
   reject_px: 4.0             # never reject points whose residual is below this (full-res px)
+  segment_change_model: affine  # none | translation | similarity | affine: fitted between the montage
+                             # frames either side of each tile layout change (align/segment_changes.csv)
+  segment_reference: largest # largest | first: segment whose montage frame the volume keeps
   anchor: first              # first (first selected slice = identity) | mean (mean translation 0)
   remove_trend: none         # none | linear | lowpass: remove slow drift (steps at seams are kept)
   trend_window_slices: 2000  # lowpass: Gaussian FWHM in slices
