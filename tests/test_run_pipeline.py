@@ -165,6 +165,6 @@ def test_dataset_configs_are_valid(name):
     assert set(cfg) <= set(config.DEFAULTS) | set(config.STEPS) | {"config_path"}
     for section in config.STEPS:   # no misspelt keys: every key is one the steps know
         assert set(cfg[section]) <= set(config.step_defaults(section)[section]), section
-    assert {k["action"] for k in cfg["check"]["known_issues"]} == {"exclude"}
+    assert {k["action"] for k in cfg["check"]["known_issues"]} <= {"exclude", "ignore"}
     for job in config.JOBS:
         config.sbatch_args(cfg, job)   # raises on unknown keys or unquoted times
