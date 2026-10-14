@@ -158,7 +158,8 @@ def test_example_config_is_the_defaults():
     assert example == defaults
 
 
-@pytest.mark.parametrize("name", ["P667_EM05024_35h.yaml", "P667_test_2day.yaml"])
+@pytest.mark.parametrize("name", ["P667_EM05024_35h.yaml", "P667_test_2day.yaml", "P667_test_3x3.yaml",
+                                  "P667_test_small_tiles.yaml"])
 def test_dataset_configs_are_valid(name):
     cfg = config.load_config(ROOT / "configs" / name, step_defaults=config.step_defaults())
     assert set(cfg) <= set(config.DEFAULTS) | set(config.STEPS) | {"config_path"}

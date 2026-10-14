@@ -12,13 +12,9 @@ check:
   # If the label clock is UK local time, set Europe/London before the clocks go back on 2026-10-25
   # (labels would otherwise repeat an hour: NON_MONOTONIC). selection start/end stay local time.
   timezone: null
-  known_issues:
-    - file: M09_D28_tile0-1.tif
-      action: exclude
-      note: byte copy of M09_D28_tile1-0.tif
-    - file: Approach/M09_D18_tile2-1_part2.tif
-      action: exclude
-      note: byte copy of M09_D18_tile2-2_part2.tif
+  # M09_D28_tile0-1.tif and Approach/M09_D18_tile2-1_part2.tif were copies of other tiles until they
+  # were re-exported (by 14 Oct 2026); check flags any copy (DUPLICATE_CONTENT).
+  known_issues: []
 
 # Tile overlap search at 1/4 resolution: more margin than the default 8 for small (~1%) overlaps.
 stitch:
