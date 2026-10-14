@@ -211,6 +211,40 @@ def test_layout_change_per_slice_and_fixed(tmp_path):
         np.testing.assert_allclose(g[["tx", "ty"]].iloc[0], mid, atol=0.5)
 
 
+def test_refinement_locates_tile_jump(tmp_path):
+    """The tiles jump 14 px at z 6 with no restart (as the 35h 2x2 tiles did between two samples):
+    refinement stitches slices between the samples until the jump is between adjacent ones, so every
+    slice gets its true layout; without it the jump is spread over the interval."""
+    common = dict(n_slices=6, grid=(2, 2), tile_shape=(160, 192))
+    a = synth.make_dataset(tmp_path / "raw", overlap=(30, 40), start=datetime(2026, 9, 24, 12), seed=3, **common)
+    b = synth.make_dataset(tmp_path / "raw", overlap=(44, 26), start=datetime(2026, 9, 25, 12), seed=4, **common)
+
+    def run(name, **opts):
+        cfg, out, origin = setup_run(tmp_path, name, [(a, 0), (b, 0)], sample_every=8, **opts)
+        path = out / "work" / "check" / "slices.csv"
+        pd.read_csv(path).assign(seam=False).to_csv(path, index=False)   # no restart at the jump
+        for i in range(2):
+            assert stitch.main(["run", "--config", str(cfg), "--task-id", str(i), "--num-tasks", "2"]) == 0
+        assert stitch.main(["merge", "--config", str(cfg)]) == 0
+        return out, origin
+
+    out, origin = run("refined")
+    sampled = sorted(int(p.stem[1:]) for p in (out / "work" / "stitch" / "samples").glob("z*.json"))
+    assert {0, 8, 11} < set(sampled) and {5, 6} <= set(sampled)   # the jump is between 5 and 6
+    assert_matches_truth(read_tiles(out), origin)
+
+    out, origin = run("interpolated", refine_px=None)
+    assert sorted(int(p.stem[1:]) for p in (out / "work" / "stitch" / "samples").glob("z*.json")) == [0, 8, 11]
+    with pytest.raises(AssertionError):
+        assert_matches_truth(read_tiles(out), origin, tol=3)
+
+
+def test_blocks_share_one_sample():
+    assert stitch._blocks([0, 8, 16, 24, 32], 2) == [[0, 8, 16], [16, 24, 32]]
+    assert stitch._blocks([0, 8], 4) == [[0, 8], [8]]
+    assert stitch._blocks([], 3) == []
+
+
 def _replace_slice(truth, z, tiles, fn):
     """Overwrite slice z of the given tiles' raw files with fn(shape) (uint16)."""
     for name, zs in truth.files.items():

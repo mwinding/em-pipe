@@ -3,8 +3,11 @@
 ``run`` (array over sampled slices) measures every tile pair of a sampled slice in two passes:
 coarse SIFT on whole downsampled tiles finds the unknown overlap, then fine SIFT on only the
 overlap strips (read at full resolution) gives the point matches. A least-squares solve over
-all pairs gives tile -> montage per slice (stitch/samples/z{z:06d}.json). ``merge`` turns the
-samples of each segment into a transform for every selected (z, tile), fixed or per slice.
+all pairs gives tile -> montage per slice (stitch/samples/z{z:06d}.json). Where the tiles of two
+consecutive samples differ by more than ``stitch.refine_px`` (tiles can jump between restarts of
+the stage moves), ``run`` also stitches the slice halfway between, repeatedly, so a jump is located
+to the slice instead of being interpolated over the whole interval. ``merge`` turns the samples of
+each segment into a transform for every selected (z, tile), fixed or per slice.
 """
 
 import json
@@ -18,7 +21,7 @@ import pandas as pd
 from scipy import ndimage
 
 from . import features, transforms
-from .cli import atomic_write, base_parser, my_chunks, setup, task_info
+from .cli import atomic_write, base_parser, setup, task_info
 from .config import qc_path, step_dir, step_path
 from .slices import StackCache, load_slices, z_values
 
@@ -27,6 +30,8 @@ log = logging.getLogger(__name__)
 DEFAULTS = {
     "stitch": {
         "sample_every": 50,          # stitch every n-th selected z of a segment (plus its ends and seams)
+        "refine_px": 5.0,            # stitch more slices between two samples whose tiles differ by more than
+                                     # this (px at a tile corner), down to adjacent slices; null = off
         "coarse_factor": 8,          # downsampling of whole tiles for the overlap search
         "min_coarse_factor": 2,      # if tiles stay unconnected, retry the search at half the factor down to this
         "fine_factor": 2,            # downsampling of the full-res overlap strips for the final matches
@@ -428,30 +433,78 @@ def _stale(rec, opts, segment, reference):
     return f"made with different stitch.{', stitch.'.join(changed)}" if changed else ""
 
 
+def _blocks(samples, num_tasks):
+    """Contiguous runs of sampled z per task; each run also holds the next run's first z, so every
+    interval between consecutive samples belongs to exactly one task (which refines it)."""
+    n = len(samples)
+    bounds = np.linspace(0, n, min(num_tasks, n) + 1).round().astype(int) if n else [0]
+    return [samples[a:min(b + 1, n)] for a, b in zip(bounds[:-1], bounds[1:])]
+
+
+def _sample(cfg, z, by_z, cache, gauge, overwrite):
+    """The stored sample record of z if it is current, else a new one (stitched and saved)."""
+    opts = cfg["stitch"]
+    path = _sample_path(cfg, z)
+    if path.exists() and not overwrite:
+        rec = json.loads(path.read_text())
+        why = _stale(rec, opts, *gauge[z])
+        if not why:
+            return rec
+        log.info("z %d: redoing sample (%s)", z, why)
+    rec = stitch_slice(by_z[z], cache, opts, gauge[z][1])
+    if rec["ok"]:
+        used = [p for p in rec["pairs"] if p["used"]]
+        log.info("z %d: %d pairs, max solve residual %.2f px", z, len(used),
+                 max((p["solve_residual_px"] for p in used), default=0.0))
+    else:
+        log.warning("z %d: %s; sample skipped", z, rec["reason"])
+    atomic_write(path, lambda p: Path(p).write_text(json.dumps(rec, indent=1)))
+    return rec
+
+
+def moved_px(rec_a, rec_b, shape):
+    """Largest distance a tile corner moves between two sample records (tiles in both)."""
+    h, w = shape
+    corners = transforms.corners(w, h)
+    common = set(rec_a["tiles"]) & set(rec_b["tiles"])
+    return max((float(np.linalg.norm(transforms.apply(rec_a["tiles"][t], corners)
+                                      - transforms.apply(rec_b["tiles"][t], corners), axis=1).max())
+                for t in common), default=0.0)
+
+
 def run(cfg, task_id, num_tasks, overwrite=False):
     opts = cfg["stitch"]
     if opts["model"] not in MODELS:
         raise ValueError(f"stitch.model must be one of {list(MODELS)}")
     slices, samples, gauge = _load(cfg)
-    mine = my_chunks(samples, task_id, num_tasks)
+    blocks = _blocks(samples, num_tasks)
+    mine = blocks[task_id] if task_id < len(blocks) else []
     log.info("%d sampled slices, task %d/%d takes %d", len(samples), task_id, num_tasks, len(mine))
     by_z = dict(tuple(slices.groupby("z")))
     cache = StackCache(cfg["raw_dir"])
-    for z in mine:
-        path = _sample_path(cfg, z)
-        if path.exists() and not overwrite:
-            why = _stale(json.loads(path.read_text()), opts, *gauge[z])
-            if not why:
-                continue
-            log.info("z %d: redoing sample (%s)", z, why)
-        rec = stitch_slice(by_z[z], cache, opts, gauge[z][1])
-        if rec["ok"]:
-            used = [p for p in rec["pairs"] if p["used"]]
-            log.info("z %d: %d pairs, max solve residual %.2f px", z, len(used),
-                     max((p["solve_residual_px"] for p in used), default=0.0))
-        else:
-            log.warning("z %d: %s; sample skipped", z, rec["reason"])
-        atomic_write(path, lambda p: Path(p).write_text(json.dumps(rec, indent=1)))
+    recs = {z: _sample(cfg, z, by_z, cache, gauge, overwrite) for z in mine}
+    refine = opts.get("refine_px")
+    if not refine:
+        return
+    seg_z = {seg: z_values(g) for seg, g in slices.groupby("segment")}
+    todo = [(a, b) for a, b in zip(mine[:-1], mine[1:]) if gauge[a][0] == gauge[b][0]]
+    added = 0
+    while todo:
+        a, b = todo.pop()
+        zs = seg_z[gauge[a][0]]
+        ia, ib = zs.index(a), zs.index(b)
+        if ib - ia < 2 or not (recs[a]["ok"] and recs[b]["ok"]):
+            continue
+        row = by_z[a].iloc[0]
+        d = moved_px(recs[a], recs[b], (int(row["height"]), int(row["width"])))
+        if d <= float(refine):
+            continue
+        m = zs[(ia + ib) // 2]
+        log.info("z %d-%d: tiles differ by up to %.1f px; stitching z %d", a, b, d, m)
+        recs[m] = _sample(cfg, m, by_z, cache, gauge, overwrite)
+        added += 1
+        todo += [(a, m), (m, b)]
+    log.info("refinement: %d extra slices stitched (stitch.refine_px %s)", added, refine)
 
 
 # ----- merge ------------------------------------------------------------------------
@@ -581,6 +634,16 @@ def merge(cfg):
         why = _stale(recs[z], opts, *gauge[z])
         if why:
             stale.append(f"z {z}: {why}")
+    # Slices stitched by refinement (current ones only; samples of other settings are ignored).
+    extra = 0
+    for path in sorted(step_path(cfg, "stitch", "samples").glob("z*.json")):
+        z = int(path.stem[1:])
+        if z in gauge and z not in recs:
+            rec = json.loads(path.read_text())
+            if not _stale(rec, opts, *gauge[z]):
+                recs[z], extra = rec, extra + 1
+    if extra:
+        log.info("%d refinement samples", extra)
     if missing:
         raise SystemExit(f"stitch merge: {len(missing)} of {len(samples)} sampled slices have no result "
                          f"(e.g. z {missing[:5]}); run 'stitch run' (all array tasks) first")
@@ -595,10 +658,10 @@ def merge(cfg):
         tiles.append(out)
         points.append(pts.assign(segment=seg))
     tiles = pd.concat(tiles, ignore_index=True)
-    pairs = pd.DataFrame([row for z in samples for row in _pair_rows(recs[z])],
+    pairs = pd.DataFrame([row for z in sorted(recs) for row in _pair_rows(recs[z])],
                          columns=["z", "segment", "tile_a", "tile_b", "model", *transforms.COLUMNS,
                                   "n_inliers", "residual_px", "solve_residual_px", "used"])
-    failed = [z for z in samples if not recs[z]["ok"]]
+    failed = [z for z in sorted(recs) if not recs[z]["ok"]]
 
     atomic_write(step_dir(cfg, "stitch", "tiles.csv"), lambda p: tiles.to_csv(p, index=False))
     atomic_write(step_dir(cfg, "stitch", "pairs.csv"), lambda p: pairs.to_csv(p, index=False))
