@@ -65,18 +65,24 @@ work/                  working files of every step and the Slurm logs (work/logs
 `qc/check_report.md` lists what was found in the raw data. Acknowledge known problems in
 `check.known_issues` (`action: exclude` drops a file), otherwise check stops the pipeline.
 
-## Viewing in neuroglancer
+## Viewing a volume (anyone in the lab)
 
-On a Mac with the share mounted, or on a NEMO node:
+You need the repo (`git clone https://github.com/mwinding/em-pipe`), Python 3 (the Mac's built-in
+`python3` is fine; no conda environment needed), Chrome, and the lab share mounted (Finder → Go →
+Connect to Server → `smb://data2.thecrick.org/lab-windingm`).
 
 ```bash
-python -m pipeline.serve --config configs/P667_test_2day.yaml \
-    --output-dir /Volumes/lab-windingm/home/users/windinm/em-pipe_P667_test-M10-D01-D02
+cd em-pipe
+python3 -m pipeline.serve /Volumes/lab-windingm/home/users/windinm/em-pipe_P667_test-M10-D01-D02
 ```
 
-It prints the source to add in https://neuroglancer-demo.appspot.com, e.g.
-`zarr3://http://localhost:8000/P667_M10-D01-D02.ome.zarr/`. On a NEMO compute node, start it
-with `--bind 0.0.0.0` and tunnel from the Mac: `ssh -L 8000:<node>:8000 <user>@login.nemo.thecrick.org`.
+It prints a neuroglancer link with every volume in that folder as a layer (click a layer's name
+to show or hide it). Keep the terminal open while viewing; Ctrl-C stops it. Pass any folder that
+contains `*.ome.zarr` volumes, or a single volume.
+
+Full resolution streams slowly over the share. For speed, run the same command on a NEMO node with
+`--bind 0.0.0.0` (paths start with `/camp/lab/windingm/...` there) and tunnel from the Mac with
+`ssh -L 8000:<node>:8000 login.nemo.thecrick.org`; the link is the same.
 
 ## Things to know
 

@@ -138,12 +138,12 @@ def test_instructions(monkeypatch):
     monkeypatch.setenv("USER", "alice")
     monkeypatch.setenv("SLURM_SUBMIT_HOST", "login01")
     monkeypatch.setattr(serve.socket, "gethostname", lambda: "ca123")
-    text = serve.instructions("/out/render", 8123, "127.0.0.1", "volume.ome.zarr")
+    text = serve.instructions("/out/render", 8123, "127.0.0.1", ["volume.ome.zarr"])
     assert "zarr3://http://localhost:8123/volume.ome.zarr/" in text
     assert "ssh -L 8123:ca123:8123 alice@login01" in text
     assert "--bind 0.0.0.0" in text
     assert "ssh -J alice@login01 -L 8123:localhost:8123 alice@ca123" in text
-    text = serve.instructions("/out/render/volume.ome.zarr", 8000, "0.0.0.0", "")
+    text = serve.instructions("/out/render/volume.ome.zarr", 8000, "0.0.0.0", [""])
     assert "zarr3://http://localhost:8000/\n" in text and "--bind 0.0.0.0" not in text
     assert "ssh -J" not in text
 
@@ -166,7 +166,8 @@ def test_main_reports_port_in_use(make_config, tmp_path, caplog):
 
 def test_main_prints_viewing_instructions(make_config, tmp_path, capsys, monkeypatch):
     cfg = make_config(tmp_path / "raw", render={"name": "v.ome.zarr"})
-    (tmp_path / "out").mkdir(parents=True)
+    (tmp_path / "out" / "v.ome.zarr").mkdir(parents=True)
+    (tmp_path / "out" / "v.ome.zarr" / "zarr.json").write_text("{}")
 
     def interrupt(self):
         raise KeyboardInterrupt
@@ -198,3 +199,42 @@ def test_tensorstore_reads_sharded_volume_over_http(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_folder_mode_links_every_volume(tmp_path, capsys, monkeypatch):
+    """`serve FOLDER` needs no config; the printed link has one layer per volume, the first visible."""
+    import json
+    from urllib.parse import unquote
+    for name in ("b_8nm.ome.zarr", "a_8nm_raw.ome.zarr"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "zarr.json").write_text("{}")
+    (tmp_path / "work").mkdir()                       # not a volume
+    (tmp_path / "x.zarr").mkdir()                     # no zarr.json: not listed
+
+    def interrupt(self):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(serve.Server, "serve_forever", interrupt)
+    assert serve.main([str(tmp_path), "--port", "0"]) == 0
+    out = capsys.readouterr().out
+    link = re.search(r"https://neuroglancer-demo\.appspot\.com/#!(\S+)", out).group(1)
+    state = json.loads(unquote(link))
+    port = re.search(r"localhost:(\d+)/", out).group(1)
+    assert [(l["name"], l["visible"]) for l in state["layers"]] == [("a_8nm_raw", True), ("b_8nm", False)]
+    assert state["layers"][0]["source"] == f"zarr3://http://localhost:{port}/a_8nm_raw.ome.zarr/"
+
+
+def test_folder_mode_needs_only_the_standard_library(tmp_path):
+    """Lab members can run it with any Python 3 (no conda env): -S hides site-packages."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    r = subprocess.run([sys.executable, "-S", "-m", "pipeline.serve", "--help"], cwd=root,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_requires_folder_or_config():
+    with pytest.raises(SystemExit):
+        serve.main([])

@@ -1,12 +1,18 @@
-"""HTTP server for viewing the rendered volume in neuroglancer.
+"""HTTP server for viewing rendered volumes in neuroglancer.
 
-Neuroglancer reads sharded Zarr v3 from the browser with HTTP range requests, so files are
-served with CORS and single byte-range support (standard library only, no directory
+    python3 -m pipeline.serve FOLDER          # any Python 3, from the repo root; no config needed
+    python -m pipeline.serve --config C      # serves the config's output_dir
+
+Prints a neuroglancer link with every volume in the folder (``*.zarr`` with a zarr.json) as a
+layer. Neuroglancer reads sharded Zarr v3 from the browser with HTTP range requests, so files
+are served with CORS and single byte-range support (standard library only, no directory
 listings). ``--bind 0.0.0.0`` lets anyone who can reach the node read the volume; it is
 needed when tunnelling through the login host to a cluster node, but not with ``ssh -J``
 to the node itself (both are printed on start).
 """
 
+import argparse
+import json
 import logging
 import os
 import posixpath
@@ -15,10 +21,7 @@ import socket
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
-
-from .cli import base_parser, setup
-from .render import volume_name
+from urllib.parse import quote, unquote, urlsplit
 
 log = logging.getLogger(__name__)
 
@@ -127,22 +130,41 @@ class Server(ThreadingHTTPServer):
             super().handle_error(request, client_address)
 
 
-def instructions(root, port, bind, name):
-    """How to open the served volume in neuroglancer, locally and through an SSH tunnel."""
+def volumes(root):
+    """Zarr volumes to show: the folder itself if it is one, else its ``*.zarr`` subfolders."""
+    root = Path(root)
+    if (root / "zarr.json").exists():
+        return [""]
+    return sorted(d.name for d in root.iterdir() if d.name.endswith(".zarr") and (d / "zarr.json").exists())
+
+
+def neuroglancer_link(port, names):
+    """neuroglancer-demo link with one image layer per volume (the first one visible)."""
+    layers = [{"type": "image", "source": f"zarr3://http://localhost:{port}/{name + '/' if name else ''}",
+               "name": name.removesuffix(".zarr").removesuffix(".ome") or "volume", "visible": i == 0}
+              for i, name in enumerate(names)]
+    state = json.dumps({"layers": layers, "layout": "xy"}, separators=(",", ":"))
+    return "https://neuroglancer-demo.appspot.com/#!" + quote(state, safe=":/,")
+
+
+def instructions(root, port, bind, names):
+    """How to open the served volumes in neuroglancer, locally and through an SSH tunnel."""
     node = socket.gethostname()
     user = os.environ.get("USER") or "<user>"
     login = os.environ.get("SLURM_SUBMIT_HOST") or "<login-host>"
-    lines = [
-        f"Serving {root} on http://{bind}:{port}/ (Ctrl-C to stop)",
-        "",
-        "In neuroglancer (e.g. https://neuroglancer-demo.appspot.com) add a layer with source",
-        f"  zarr3://http://localhost:{port}/{name + '/' if name else ''}",
-        "Chrome allows the https neuroglancer app to read from http://localhost",
-        "(allow it if the browser asks for access to apps on this device or the local network).",
-        "",
-        "On a cluster node, first open a tunnel from your own machine:",
-        f"  ssh -L {port}:{node}:{port} {user}@{login}",
-    ]
+    lines = [f"Serving {root} on http://{bind}:{port}/ (Ctrl-C to stop)", ""]
+    if names:
+        lines += ["Open in Chrome (layers: " + ", ".join(n or "volume" for n in names) + "):",
+                  "  " + neuroglancer_link(port, names), "",
+                  "or add a layer by hand in https://neuroglancer-demo.appspot.com with source:"]
+        lines += [f"  zarr3://http://localhost:{port}/{n + '/' if n else ''}" for n in names]
+    else:
+        lines += [f"No Zarr volumes (*.zarr with a zarr.json) found in {root}."]
+    lines += ["Chrome allows the https neuroglancer app to read from http://localhost",
+              "(allow it if the browser asks for access to apps on this device or the local network).",
+              "",
+              "On a cluster node, first open a tunnel from your own machine:",
+              f"  ssh -L {port}:{node}:{port} {user}@{login}"]
     if bind in ("127.0.0.1", "localhost"):
         lines += [f"  (the login host connects to {node}:{port}, so start serve with --bind 0.0.0.0)",
                   f"or, if you may ssh to {node}, keep the default --bind (only you can then connect):",
@@ -151,28 +173,38 @@ def instructions(root, port, bind, name):
 
 
 def main(argv=None):
-    p = base_parser(__doc__.splitlines()[0])
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("folder", nargs="?", help="folder with rendered volumes (or a volume itself)")
+    p.add_argument("--config", help="dataset config: serve its output_dir")
+    p.add_argument("--output-dir", help="with --config: override output_dir")
+    p.add_argument("--dir", help=argparse.SUPPRESS)   # old name for FOLDER
     p.add_argument("--port", type=int, help="HTTP port (default: serve.port, 8000; 0 picks a free port)")
     p.add_argument("--bind", help="listen address (default: serve.bind, 127.0.0.1)")
-    p.add_argument("--dir", help="directory to serve (default: output_dir)")
+    p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
-    cfg = setup(args, DEFAULTS)
-    root = Path(args.dir or cfg["output_dir"])
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    opts = dict(DEFAULTS["serve"])
+    folder = args.folder or args.dir
+    if folder is None:
+        if not args.config:
+            p.error("give a FOLDER to serve, or --config")
+        from .config import load_config   # needs PyYAML: only in config mode
+        cfg = load_config(args.config, output_dir=args.output_dir, step_defaults=DEFAULTS)
+        opts.update(cfg["serve"])
+        folder = cfg["output_dir"]
+    root = Path(folder)
     if not root.is_dir():
-        log.error("%s does not exist: run render first or pass --dir", root)
+        log.error("%s does not exist", root)
         return 1
-    port = int(cfg["serve"]["port"] if args.port is None else args.port)
-    bind = args.bind or cfg["serve"]["bind"]
-    # Advertise the directory itself if it is the Zarr group, else the rendered volume in it.
-    name = "" if (root / "zarr.json").exists() else volume_name(cfg)
-    if name and not (root / name / "zarr.json").exists():
-        log.warning("%s has no Zarr volume %s (yet): check render.name or pass --dir", root, name)
+    port = int(opts["port"] if args.port is None else args.port)
+    bind = args.bind or opts["bind"]
     try:
         server = Server(root, (bind, port))
     except OSError as e:  # typically the port is taken on a shared node
         log.error("cannot listen on %s:%d: %s (choose another --port)", bind, port, e)
         return 1
-    print(instructions(root, server.server_address[1], bind, name), flush=True)
+    print(instructions(root, server.server_address[1], bind, volumes(root)), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
