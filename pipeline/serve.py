@@ -138,16 +138,31 @@ def volumes(root):
     return sorted(d.name for d in root.iterdir() if d.name.endswith(".zarr") and (d / "zarr.json").exists())
 
 
-def neuroglancer_link(port, names):
-    """neuroglancer-demo link with one image layer per volume (the first one visible)."""
+def voxel_nm(volume):
+    """{axis: size in nm} of a volume's finest scale from its OME metadata, or None."""
+    try:
+        ms = json.loads((Path(volume) / "zarr.json").read_text())["attributes"]["ome"]["multiscales"][0]
+        scale = ms["datasets"][0]["coordinateTransformations"][0]["scale"]
+        return {a["name"]: float(v) for a, v in zip(ms["axes"], scale)}
+    except (OSError, KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
+def neuroglancer_link(port, names, root=None):
+    """neuroglancer-demo link with one image layer per volume (the first one visible), opening on
+    the x-y imaging plane.
+
+    The volumes' axes are (z, y, x) and neuroglancer's xy panel shows the first two global
+    dimensions, so the link declares them in x, y, z order (at the finest voxel size of the
+    volumes); otherwise the xy panel is a z-y side view.
+    """
     layers = [{"type": "image", "source": f"zarr3://http://localhost:{port}/{name + '/' if name else ''}",
                "name": name.removesuffix(".zarr").removesuffix(".ome") or "volume", "visible": i == 0}
               for i, name in enumerate(names)]
-    # The volumes' axes are (z, y, x), and the xy panel shows the first two display dimensions:
-    # without this it would be a z-y side view instead of the imaging plane.
-    state = json.dumps({"layers": layers, "layout": "xy", "displayDimensions": ["x", "y", "z"]},
-                       separators=(",", ":"))
-    return "https://neuroglancer-demo.appspot.com/#!" + quote(state, safe=":/,")
+    sizes = [v for v in (voxel_nm(Path(root) / n) for n in names) if v] if root is not None else []
+    dims = {a: [min((v.get(a, 8.0) for v in sizes), default=8.0) * 1e-9, "m"] for a in ("x", "y", "z")}
+    state = {"dimensions": dims, "displayDimensions": ["x", "y", "z"], "layers": layers, "layout": "xy"}
+    return "https://neuroglancer-demo.appspot.com/#!" + quote(json.dumps(state, separators=(",", ":")), safe=":/,")
 
 
 def instructions(root, port, bind, names):
@@ -158,7 +173,7 @@ def instructions(root, port, bind, names):
     lines = [f"Serving {root} on http://{bind}:{port}/ (Ctrl-C to stop)", ""]
     if names:
         lines += ["Open in Chrome (layers: " + ", ".join(n or "volume" for n in names) + "):",
-                  "  " + neuroglancer_link(port, names), "",
+                  "  " + neuroglancer_link(port, names, root), "",
                   "or add a layer by hand in https://neuroglancer-demo.appspot.com with source:"]
         lines += [f"  zarr3://http://localhost:{port}/{n + '/' if n else ''}" for n in names]
     else:

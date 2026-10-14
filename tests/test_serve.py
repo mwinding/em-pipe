@@ -223,6 +223,7 @@ def test_folder_mode_links_every_volume(tmp_path, capsys, monkeypatch):
     assert [(l["name"], l["visible"]) for l in state["layers"]] == [("a_8nm_raw", True), ("b_8nm", False)]
     assert state["layers"][0]["source"] == f"zarr3://http://localhost:{port}/a_8nm_raw.ome.zarr/"
     assert state["layout"] == "xy" and state["displayDimensions"] == ["x", "y", "z"]   # imaging plane
+    assert list(state["dimensions"]) == ["x", "y", "z"]        # global order: the xy panel is x-y
 
 
 def test_folder_mode_needs_only_the_standard_library(tmp_path):
@@ -239,3 +240,17 @@ def test_folder_mode_needs_only_the_standard_library(tmp_path):
 def test_requires_folder_or_config():
     with pytest.raises(SystemExit):
         serve.main([])
+
+
+def test_link_dimensions_use_the_volumes_voxel_size(tmp_path):
+    """Global dimensions in x, y, z order at the finest voxel size found in the volumes' OME metadata."""
+    import json
+    from urllib.parse import unquote
+    from pipeline import omezarr
+    omezarr.create(tmp_path / "a.ome.zarr", (8, 32, 32), (8.0, 8.0, 8.0), num_scales=2, chunk=(8, 32, 32),
+                   shard=(8, 32, 32))
+    omezarr.create(tmp_path / "b.ome.zarr", (8, 32, 32), (32.0, 32.0, 32.0), num_scales=2, chunk=(8, 32, 32),
+                   shard=(8, 32, 32))
+    link = serve.neuroglancer_link(8000, serve.volumes(tmp_path), tmp_path)
+    state = json.loads(unquote(link.split("#!", 1)[1]))
+    assert state["dimensions"] == {"x": [8e-9, "m"], "y": [8e-9, "m"], "z": [8e-9, "m"]}
