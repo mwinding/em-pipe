@@ -579,7 +579,12 @@ def merge_segment(rows, recs, opts):
         if mode == "fixed":
             params[t] = np.repeat(np.median(p, axis=0)[None], len(zs), axis=0)
         else:
-            p = ndimage.median_filter(p, size=(3, 1), mode="nearest")
+            # Without refinement a bad sample would be interpolated over the intervals on either side:
+            # a window-3 median drops it. With refinement, a sample unlike its neighbours gets the
+            # slices around it stitched too, so a bad one only affects its own slice, and the median
+            # would erase real one-slice tile moves (35h z 3405: one tile 28 px off for one slice).
+            if not opts.get("refine_px"):
+                p = ndimage.median_filter(p, size=(3, 1), mode="nearest")
             params[t] = np.column_stack([np.interp(zs, sz, v) for v in p.T])
 
     out = rows[["z", "timestamp", "tile", "height", "width"]].copy()

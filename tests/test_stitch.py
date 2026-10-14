@@ -369,8 +369,9 @@ def test_stale_samples_are_redone(tmp_path):
 
 
 def test_merge_per_slice_and_fixed_from_samples():
-    """per_slice: window-3 median over samples, linear in z between them, constant beyond the ends;
-    fixed: per-tile median. One shift per segment puts the montage min corner at (0, 0)."""
+    """per_slice: linear in z between samples, constant beyond the ends; without refinement a window-3
+    median over the samples first (with it, each sample as measured). fixed: per-tile median. One
+    shift per segment puts the montage min corner at (0, 0)."""
     zs = [0, 1, 2, 4, 5, 7, 8, 9, 10, 12]  # selected z, non-contiguous
     rows = pd.DataFrame([{"z": z, "timestamp": pd.Timestamp(2026, 9, 24) + pd.Timedelta(minutes=z), "tile": t,
                           "tile_row": 0, "tile_col": int(t[-1]), "height": 50, "width": 80, "segment": 3}
@@ -380,7 +381,7 @@ def test_merge_per_slice_and_fixed_from_samples():
              "tiles": {"0-0": transforms.identity().tolist(), "0-1": transforms.translation(x, -2.0).tolist()}}
             for z, x in tx.items()]
     recs.insert(2, {"z": 5, "ok": False, "reason": "too few matches", "reference": "0-0", "tiles": {}})
-    opts = stitch.DEFAULTS["stitch"]
+    opts = {**stitch.DEFAULTS["stitch"], "refine_px": None}
     out, layout, _ = stitch.merge_segment(rows, recs, opts)
     assert layout["mode"] == "per_slice" and layout["failed_samples"] == [5] and layout["n_good_samples"] == 5
     t1 = out[out["tile"] == "0-1"].set_index("z")
@@ -390,6 +391,12 @@ def test_merge_per_slice_and_fixed_from_samples():
     np.testing.assert_allclose(t1["ty"], 0)  # tile 0-1 is 2 px above the reference: all move down by 2
     np.testing.assert_allclose(out.loc[out["tile"] == "0-0", ["tx", "ty"]], [[0, 2]] * len(zs))
     assert (out["segment"] == 3).all() and len(out) == 2 * len(zs)
+
+    # With refinement the samples are used as measured: z 10 keeps its 99.
+    out, _, _ = stitch.merge_segment(rows, recs, {**opts, "refine_px": 5.0})
+    measured = {0: 70, 1: 70, 2: 71, 4: 73, 5: 74, 7: 76, 8: 77, 9: 88, 10: 99, 12: 81}
+    t1 = out[out["tile"] == "0-1"].set_index("z")
+    np.testing.assert_allclose(t1["tx"], [measured[z] for z in t1.index])
 
     out, layout, _ = stitch.merge_segment(rows, recs, {**opts, "mode": "fixed"})
     assert layout["mode"] == "fixed" and layout["overlap_px"]["x"] == 3
