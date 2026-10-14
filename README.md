@@ -67,21 +67,24 @@ work/                  working files of every step and the Slurm logs (work/logs
 
 ## Viewing a volume (anyone in the lab)
 
-You need the repo (`git clone https://github.com/mwinding/em-pipe`), Python 3 (the Mac's built-in
-`python3` is fine; no conda environment needed), Chrome, and the lab share mounted (Finder → Go →
-Connect to Server → `smb://data2.thecrick.org/lab-windingm`).
+A shared copy of this repo lives on the lab share, so there is nothing to install: you need Python 3
+(the Mac's built-in `python3` is fine), Chrome, and the lab share mounted (Finder → Go → Connect to
+Server → `smb://data2.thecrick.org/lab-windingm`).
 
 ```bash
-cd em-pipe
-python3 -m pipeline.serve /Volumes/lab-windingm/home/users/windinm/em-pipe_P667_test-M10-D01-D02
+cd /Volumes/lab-windingm/home/shared/repos/em-pipe
+python3 -B -m pipeline.serve /Volumes/lab-windingm/home/users/windinm/em-pipe_P667_test-M10-D01-D02
 ```
+
+(`-B` stops Python writing cache files into the shared copy. Please don't edit code there: it only
+`git pull`s from GitHub; develop in your own clone.)
 
 It prints a neuroglancer link with every volume in that folder as a layer (click a layer's name
 to show or hide it). Keep the terminal open while viewing; Ctrl-C stops it. Pass any folder that
 contains `*.ome.zarr` volumes, or a single volume.
 
 Full resolution streams slowly over the share. For speed, run the same command on a NEMO node with
-`--bind 0.0.0.0` (paths start with `/camp/lab/windingm/...` there) and tunnel from the Mac with
+`--bind 0.0.0.0` (from `/camp/lab/windingm/home/shared/repos/em-pipe`; data paths start with `/camp/lab/windingm/...` there) and tunnel from the Mac with
 `ssh -L 8000:<node>:8000 login.nemo.thecrick.org`; the link is the same.
 
 ## Things to know
