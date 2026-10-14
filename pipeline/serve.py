@@ -143,7 +143,10 @@ def neuroglancer_link(port, names):
     layers = [{"type": "image", "source": f"zarr3://http://localhost:{port}/{name + '/' if name else ''}",
                "name": name.removesuffix(".zarr").removesuffix(".ome") or "volume", "visible": i == 0}
               for i, name in enumerate(names)]
-    state = json.dumps({"layers": layers, "layout": "xy"}, separators=(",", ":"))
+    # The volumes' axes are (z, y, x), and the xy panel shows the first two display dimensions:
+    # without this it would be a z-y side view instead of the imaging plane.
+    state = json.dumps({"layers": layers, "layout": "xy", "displayDimensions": ["x", "y", "z"]},
+                       separators=(",", ":"))
     return "https://neuroglancer-demo.appspot.com/#!" + quote(state, safe=":/,")
 
 

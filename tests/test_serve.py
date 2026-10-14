@@ -222,6 +222,7 @@ def test_folder_mode_links_every_volume(tmp_path, capsys, monkeypatch):
     port = re.search(r"localhost:(\d+)/", out).group(1)
     assert [(l["name"], l["visible"]) for l in state["layers"]] == [("a_8nm_raw", True), ("b_8nm", False)]
     assert state["layers"][0]["source"] == f"zarr3://http://localhost:{port}/a_8nm_raw.ome.zarr/"
+    assert state["layout"] == "xy" and state["displayDimensions"] == ["x", "y", "z"]   # imaging plane
 
 
 def test_folder_mode_needs_only_the_standard_library(tmp_path):
