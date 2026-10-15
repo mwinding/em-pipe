@@ -78,6 +78,10 @@ align:
   segment_change_model: affine  # none | translation | similarity | affine: fitted between the montage
                              # frames either side of each tile layout change (align/segment_changes.csv)
   segment_reference: largest # largest | first: segment whose montage frame the volume keeps
+  local_at_layout_changes: true  # tile-level affine solve in a window around every tile layout change
+  local_half_width: 50       # slices either side of a layout change
+  local_windows: []          # more windows for the tile-level solve, [[z_first, z_last], ...]
+  local_regularization: 0.001  # pull of each tile toward its global solution, relative to its data
   anchor: first              # first (first selected slice = identity) | mean (mean translation 0)
   remove_trend: none         # none | linear | lowpass: remove slow drift (steps at seams are kept)
   trend_window_slices: 2000  # lowpass: Gaussian FWHM in slices
@@ -124,8 +128,9 @@ render:
   window: null               # [lo, hi] raw values for intensity false; null: from preview stats (p1 of p0.5, p99 of p99.5)
   # How overlapping tiles combine. seam: each pixel from the tile whose own edge is farthest, switching
   # along the middle of the overlap over ~seam_px (sharp; no ghosting where tiles disagree by a few px).
-  # feather: linear crossfade over blend_px from each tile edge.
+  # cut: the same switch with no transition at all. feather: linear crossfade over blend_px from each tile edge.
   blend: seam
+  local_blend: cut           # blend in the slices of align's tile-level solve windows
   seam_px: 32                # seam: width of the switch between tiles, full-resolution px
   blend_px: 256              # feather: ramp width from each tile edge, full-resolution px
   slab: 64                   # planes per run work unit = shard z size

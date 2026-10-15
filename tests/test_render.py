@@ -449,8 +449,8 @@ def test_fractional_shift_far_from_canvas_origin(truth, tmp_path, caplog):
     np.testing.assert_array_equal(near, far)
 
 
-@pytest.mark.parametrize("f", [1, 2])
-def test_rotated_alignment_uses_warp(truth, tmp_path, f):
+@pytest.mark.parametrize("f, blend", [(1, "feather"), (2, "feather"), (1, "cut")])
+def test_rotated_alignment_uses_warp(truth, tmp_path, f, blend):
     theta, centre = 0.02, np.array([100.0, 90.0])
     R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
 
@@ -458,7 +458,8 @@ def test_rotated_alignment_uses_warp(truth, tmp_path, f):
         return np.hstack([R, (centre + (dx, dy) - R @ centre)[:, None]])
 
     zs = list(range(4))
-    cfg, out = _setup(tmp_path, truth, selection={"z_end": zs[-1]}, render={"downsample": f}, align=align)
+    cfg, out = _setup(tmp_path, truth, selection={"z_end": zs[-1]}, render={"downsample": f, "blend": blend},
+                      align=align)
     _render(cfg)
     vol, meta = _read(out), _meta(out)
     ox, oy = meta["origin_xy"]
@@ -574,3 +575,40 @@ def test_fixed_window_defaults_to_preview_stats(truth, tmp_path):
     sel = st.merge(plan[["z", "tile"]].astype({"tile": str}), on=["z", "tile"])
     assert plan["lo"].nunique() == 1 and plan["lo"].iloc[0] == pytest.approx(np.percentile(sel["p0_5"], 1))
     assert plan["hi"].iloc[0] == pytest.approx(np.percentile(sel["p99_5"], 99))
+
+
+def test_cut_switches_tiles_with_no_transition(truth, tmp_path):
+    """blend cut: across the 20 px overlap of tiles 0-0 and 0-1, pixels come from 0-0 up to the
+    middle and from 0-1 after it, with nothing in between."""
+    zs = list(range(4))
+    cfg, out = _setup(tmp_path, truth, selection={"z_end": zs[-1]}, shift={"0-1": 0.1}, render={"blend": "cut"})
+    _render(cfg)
+    vol = _read(out)
+    img, _ = _aligned(truth, zs)
+    tw = truth.tile_shape[1]
+    x1, y1 = truth.tile_origin["0-1"][0], truth.tile_origin["1-0"][1]
+    errs = []
+    for i, (dx, dy) in enumerate(truth.drift[zs] - truth.drift[zs].min(axis=0)):
+        win = (i, slice(dy, dy + y1), slice(dx + x1, dx + tw))
+        errs.append(np.where(img[win] > 0.15, vol[win] - 255.0 * img[win], np.nan))
+    profile = np.nanmean(np.concatenate(errs), axis=0)      # 0 where 0-0 wins, -25.5 where 0-1 wins
+    n = tw - x1
+    assert np.abs(profile[: n // 2]).max() < 1.5
+    assert np.abs(profile[n // 2:] + 25.5).max() < 1.5
+
+
+def test_local_tiles_replace_align_and_stitch(truth, tmp_path):
+    """Slices in align/local_tiles.csv (align's tile-level solve) use those transforms and
+    render.local_blend; the others align o stitch and render.blend."""
+    from pipeline.config import load_config
+    cfg, out = _setup(tmp_path, truth, selection={"z_end": 5}, render={"blend": "seam"})
+    A = transforms.compose(transforms.translation(*truth.drift[2]), transforms.translation(*truth.tile_origin["0-1"]))
+    A = A + [[0.001, 0, 3.0], [0, 0, -2.0]]
+    transforms.to_frame([({"z": 2, "tile": "0-1"}, A)]).to_csv(out / "work" / "align" / "local_tiles.csv", index=False)
+    plan = render._tile_plan(load_config(cfg, step_defaults=render.DEFAULTS))
+    row = plan[(plan["z"] == 2) & (plan["tile"] == "0-1")].iloc[0]
+    np.testing.assert_allclose(transforms.from_row(row), A)
+    assert set(plan.loc[plan["z"] == 2, "blend"]) == {"cut"} and set(plan.loc[plan["z"] != 2, "blend"]) == {"seam"}
+    other = plan[(plan["z"] == 3) & (plan["tile"] == "0-1")].iloc[0]
+    np.testing.assert_allclose(transforms.from_row(other)[:, 2], truth.drift[3] + truth.tile_origin["0-1"])
+    _render(cfg)   # renders with the mixed plan

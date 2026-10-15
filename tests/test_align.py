@@ -333,10 +333,11 @@ def test_remove_trend_lowpass_keeps_fast_drift(drift_data, tmp_path):
     assert np.abs(steps - steps0).mean() < 0.5 * np.abs(steps0).mean()
 
 
-def _layout_change(tmp_path, n=12, seg=6, frame=(37.0, -21.0), L=np.eye(2)):
+def _layout_change(tmp_path, n=12, seg=6, frame=(37.0, -21.0), L=np.eye(2), stitch_fn=None):
     """From z ``seg`` the slices are re-acquired as a 1×2 grid of tall tiles (other ids, other shape)
     whose montage frame is the first segment's mapped by ``L`` and offset by ``frame``
-    (stitch: tile pixel q -> L (q + tile origin) + frame). Returns (truth, out, montage map of segment 1)."""
+    (stitch: tile pixel q -> L (q + tile origin) + frame, or stitch_fn(tile, origin, montage width)).
+    Returns (truth, out, montage map of segment 1)."""
     frame = np.asarray(frame, float)
     truth = synth.make_dataset(tmp_path / "raw", n_slices=n, drift_jumps={seg: (-8, 5)}, seed=5,
                                z_positions=np.arange(n) * DZ)
@@ -354,7 +355,7 @@ def _layout_change(tmp_path, n=12, seg=6, frame=(37.0, -21.0), L=np.eye(2)):
         r, c = map(int, tile.split("-"))
         synth.write_imagej(truth.raw_dir / name, np.clip(26000 + img * 15000, 0, 65535).astype(np.uint16),
                            [synth.LABEL.format(ts=truth.timestamps[z], r=r, c=c) for z in zs])
-        A = np.column_stack([L, L @ np.array([x0, y0], float) + frame])
+        A = (stitch_fn(tile, (x0, y0), W) if stitch_fn else np.column_stack([L, L @ np.array([x0, y0], float) + frame]))
         for i, z in enumerate(zs):
             rows.append({"z": z, "timestamp": truth.timestamps[z].isoformat(), "tile": tile, "tile_row": r,
                          "tile_col": c, "file": name, "index": i, "height": H, "width": w, "segment": 1,
@@ -426,6 +427,59 @@ def test_segment_change_with_stretch(tmp_path):
     assert worst_error(segment_change_model="none") > 3
     # Reference = the first segment's frame either way here (6 slices each: ties go to the first).
     assert worst_error(segment_reference="first") < 0.5
+
+
+def test_local_tile_solve_at_layout_change(tmp_path):
+    """After the change the left tile is stitched 4% too wide and the right one 4% too narrow, both
+    about the middle of their overlap (so their seam still fits, as narrow overlaps allow): no
+    transform for the whole field fits across the change. The tile-level solve, every tile of every
+    slice in the window with its own affine, does, without breaking the seam."""
+    n, seg, frame = 12, 6, np.array([37.0, -21.0])
+
+    def stitch_fn(tile, origin, W):
+        s = {"0-0": 1.04, "0-1": 0.96}[tile]
+        return np.array([[s, 0, s * (origin[0] - W / 2) + W / 2 + frame[0]], [0, 1, origin[1] + frame[1]]])
+
+    truth, out, _ = _layout_change(tmp_path, n, seg, frame, stitch_fn=stitch_fn)
+    cfg = synth.write_config(tmp_path / "config.yaml", truth.raw_dir, out, align={**ALIGN, "scale": 0.5})
+    align.main(["run", "--config", str(cfg)])
+
+    def solve(**opts):
+        cfg = synth.write_config(tmp_path / "solve.yaml", truth.raw_dir, out, align={**ALIGN, "scale": 0.5, **opts})
+        assert align.main(["solve", "--config", str(cfg)]) == 0
+        return (pd.read_csv(out / "work" / "align" / "local_windows.csv"),
+                pd.read_csv(out / "work" / "align" / "local_tiles.csv", dtype={"tile": str}))
+
+    rep, tiles = solve(local_half_width=n)          # the window is the whole stack: nothing held fixed
+    assert len(rep) == 1 and (rep["z_first"][0], rep["z_last"][0]) == (0, n - 1)
+    # Matching noise here is ~0.5-0.8 px (slice pairs within a segment): the change ends up within it.
+    before, after = rep["change_median_before_px"][0], rep["change_median_after_px"][0]
+    assert before > 2 and after < min(1.0, before / 3)
+    assert rep["change_p90_after_px"][0] < rep["change_p90_before_px"][0] / 2
+    assert rep["seam_max_after_px"][0] < 1.5
+    assert len(tiles) == 6 * 4 - 1 + 6 * 2           # z 3 has no tile 1-1
+
+    rep, tiles = solve(local_half_width=3)          # z 3-8; z 0-2 and 9-11 keep their transforms
+    assert (rep["z_first"][0], rep["z_last"][0]) == (3, 8)
+    assert sorted(tiles["z"].unique()) == list(range(3, 9))
+    assert rep["change_median_after_px"][0] < 0.5 * rep["change_median_before_px"][0]
+
+    rep, tiles = solve(local_at_layout_changes=False, local_windows=[[1, 2]])
+    assert rep["reason"].tolist() == ["configured z 1-2"] and sorted(tiles["z"].unique()) == [1, 2]
+    rep, tiles = solve(local_at_layout_changes=False)
+    assert rep.empty and tiles.empty
+
+
+def test_local_windows_merge_and_clip():
+    from pipeline import tilesolve
+    zs = np.arange(100, 200)
+    run = np.r_[np.zeros(30, int), np.ones(40, int), np.full(30, 2)]   # changes at z 130 and 170
+    a = {"local_at_layout_changes": True, "local_half_width": 25, "local_windows": [[190, 250]]}
+    w = tilesolve.windows(zs, run, a)
+    assert [(zs[i0], zs[i1]) for i0, i1, _ in w] == [(105, 199)]    # 105-154, 145-194, 190-199 merged
+    a = {**a, "local_half_width": 5, "local_windows": []}
+    assert [(zs[i0], zs[i1], r) for i0, i1, r in tilesolve.windows(zs, run, a)] == [
+        (125, 134, "layout change z 129->130"), (165, 174, "layout change z 169->170")]
 
 
 def test_segment_frames_chain_to_reference():

@@ -30,7 +30,7 @@ from scipy import sparse
 from scipy.ndimage import gaussian_filter1d
 from scipy.sparse.linalg import spsolve
 
-from . import cli, features, transforms
+from . import cli, features, tilesolve, transforms
 from .config import qc_path, step_dir, step_path
 from .slices import StackCache, load_slices, z_values
 
@@ -54,6 +54,12 @@ DEFAULTS = {
         "segment_change_model": "affine",  # none | translation | similarity | affine: fitted between the
                                            # montage frames either side of each tile layout change
         "segment_reference": "largest",    # largest | first: segment whose montage frame the volume keeps
+        # Tile-level affine solve in windows (see pipeline/tilesolve.py): every tile of every slice
+        # there gets its own affine, from matches with neighbouring slices and the current seams.
+        "local_at_layout_changes": True,   # a window around every tile layout change
+        "local_half_width": 50,            # slices either side of a layout change
+        "local_windows": [],               # more windows, [[z_first, z_last], ...] (problem areas)
+        "local_regularization": 0.001,     # pull of each tile toward its global solution, relative to its data
         "anchor": "first",             # first (first selected slice = identity) | mean (mean translation 0)
         "remove_trend": "none",        # none | linear | lowpass: remove slow drift (steps at seams are kept)
         "trend_window_slices": 2000,   # lowpass: Gaussian FWHM in slices
@@ -289,6 +295,32 @@ def solve(cfg):
     log.info("rejected %d of %d slice pairs and %d of %d points; median pair rms %.2f px",
              int(res["rejected"].sum()), len(res), int((~keep).sum()), len(keep),
              float(used["rms_px"].median()) if len(used) else float("nan"))
+    tilesolve.solve(cfg, df, zs, mats, run, _stitch_transforms(cfg, df),
+                    lambda z_lo, z_hi: _tile_matches(cfg, df, zs, a, z_lo, z_hi))
+
+
+def _tile_matches(cfg, df, zs, a, z_lo, z_hi):
+    """Point matches between slices in [z_lo, z_hi], per tile: arrays za, ta, qa, zb, tb, qb
+    (tile names, tile pixels), from the chunks whose slices overlap that range."""
+    tiles_by_z = df.groupby("z")["tile"].agg(list).to_dict()
+    out_dir = step_path(cfg, "align", "matches")
+    size, settings = int(a["chunk_slices"]), _settings(a)
+    parts = []
+    for core, ext in _chunks(zs.tolist(), size, int(a["neighbors"])):
+        if core[-1] < z_lo or core[0] > z_hi:
+            continue
+        path = _chunk_path(out_dir, core, size)
+        if not _chunk_is_current(path, _signature(ext, tiles_by_z), settings):
+            raise FileNotFoundError(f"{path.name} missing, out of date or made with other align settings "
+                                    "(run 'align run')")
+        with np.load(path) as f:
+            sel = (f["z_a"] >= z_lo) & (f["z_a"] <= z_hi) & (f["z_b"] >= z_lo) & (f["z_b"] <= z_hi)
+            parts.append({"za": f["z_a"][sel], "zb": f["z_b"][sel], "ta": f["tiles"][f["ta"][sel]],
+                          "tb": f["tiles"][f["tb"][sel]], "qa": f["qa"][sel], "qb": f["qb"][sel]})
+    if not parts:
+        return {"za": np.zeros(0, int), "zb": np.zeros(0, int), "ta": np.zeros(0, str), "tb": np.zeros(0, str),
+                "qa": np.zeros((0, 2)), "qb": np.zeros((0, 2))}
+    return {k: np.concatenate([p[k] for p in parts]) for k in parts[0]}
 
 
 def _load_matches(cfg, df, zs, a):

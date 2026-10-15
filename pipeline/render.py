@@ -50,8 +50,10 @@ DEFAULTS = {
         "window": None,             # [lo, hi] raw values for intensity false; null: from preview stats
         # How overlapping tiles combine. seam: each pixel from the tile whose own edge is farthest,
         # switching along the middle of the overlap over ~seam_px (sharp, no ghosting where tiles
-        # disagree by a few px). feather: linear crossfade over blend_px from each tile edge.
+        # disagree by a few px). cut: the same switch with no transition at all. feather: linear
+        # crossfade over blend_px from each tile edge.
         "blend": "seam",
+        "local_blend": "cut",       # blend in the slices of align's tile-level solve windows
         "seam_px": 32,              # seam: width of the switch between tiles, full-resolution px
         "blend_px": 256,            # feather: ramp width from each tile edge, full-resolution px
         "slab": 64,                 # planes per run work unit = shard z size
@@ -83,14 +85,18 @@ def volume_paths(cfg):
 
 # ----- init -----------------------------------------------------------------------------
 
+BLENDS = ("seam", "cut", "feather")
+
+
 def _settings(cfg):
     """Validated render settings that shape the output (all but ``threads``)."""
     r = {k: v for k, v in cfg["render"].items() if k != "threads"}
     r["name"] = name = volume_name(cfg)
     if Path(name).name != name or not name.endswith(".zarr"):
         raise ValueError(f"render.name must be a folder name ending in .zarr, got {name!r}")
-    if r["blend"] not in ("seam", "feather"):
-        raise ValueError(f"render.blend must be seam or feather, got {r['blend']!r}")
+    for key in ("blend", "local_blend"):
+        if r[key] not in BLENDS:
+            raise ValueError(f"render.{key} must be one of {BLENDS}, got {r[key]!r}")
     f = r["downsample"]
     if isinstance(f, bool) or not isinstance(f, int) or f < 1:
         raise ValueError(f"render.downsample must be an integer >= 1, got {f!r}")
@@ -127,15 +133,22 @@ def _tile_plan(cfg):
     if missing:
         raise ValueError(f"{len(missing)} selected (z, tile) lack a stitch or align transform, "
                          f"e.g. {missing[:3]}: re-run stitch merge / align solve")
+    # Slices in align's tile-level solve windows: their own tile -> aligned transforms.
+    local_path = step_path(cfg, "align", "local_tiles.csv")
+    local = transforms.read_csv(local_path, ["z", "tile"]) if local_path.exists() else {}
     mats = []
     for z, tile in keys:
-        T = transforms.compose(align[z], stitch[(z, tile)])
+        T = local[(z, tile)] if (z, tile) in local else transforms.compose(align[z], stitch[(z, tile)])
         if cfg["render"]["integer_shifts"] and transforms.is_translation(T):
             # floor(x + 0.5), not rint: half-pixel shifts must round the same way for every z.
             T = transforms.translation(*np.floor(T[:, 2] + 0.5))
         mats.append(T)
     plan = sl[["z", "tile", "file", "index", "height", "width"]].copy()
     plan[transforms.COLUMNS] = np.array(mats).reshape(-1, 6)
+    local_z = {z for z, _ in local}
+    plan["blend"] = np.where(plan["z"].isin(local_z), cfg["render"]["local_blend"], cfg["render"]["blend"])
+    if local:
+        log.info("%d slices from align's tile-level solve (blend %s there)", len(local_z), cfg["render"]["local_blend"])
     if not cfg["render"]["intensity"]:
         plan["lo"], plan["hi"] = _fixed_window(cfg, plan)
         log.info("render.intensity false: one raw window %g-%g for every tile slice", *plan[["lo", "hi"]].iloc[0])
@@ -400,16 +413,28 @@ class _Renderer:
         return out
 
     def _slice(self, futures):
-        """Blend one slice's placed tiles: (values in [0, 1], valid mask) over the output plane."""
+        """Blend one slice's placed tiles: (values in [0, 1], valid mask) over the output plane.
+
+        Weighted tiles (seam, feather) are averaged; cut tiles give each pixel to the tile with the
+        highest score (in submission order on ties, so the result is reproducible).
+        """
         acc, wsum = np.zeros(self.shape, np.float32), np.zeros(self.shape, np.float32)
+        cut = False
         while futures:   # in submission order (reproducible sums); each result freed once added
             placed = futures.pop(0).result()
-            if placed is not None:
-                win, vw, ww = placed
+            if placed is None:
+                continue
+            win, vw, ww, cut = placed
+            if cut:   # wsum holds the best score so far, acc its value
+                better = ww > wsum[win]
+                acc[win] = np.where(better, vw, acc[win])
+                wsum[win] = np.where(better, ww, wsum[win])
+            else:
                 acc[win] += vw
                 wsum[win] += ww
         valid = wsum > 0
-        np.divide(acc, wsum, out=acc, where=valid)
+        if not cut:
+            np.divide(acc, wsum, out=acc, where=valid)
         return acc, valid
 
     def _tile(self, t):
@@ -443,11 +468,17 @@ class _Renderer:
         if f > 1:
             v = cv2.resize(v, ((c1 - c0) // f, (r1 - r0) // f), interpolation=cv2.INTER_AREA)
         hv, wv = v.shape
-        if self.mode == "seam":
-            wt = _seam_weight(_edge_distance(r0, hv, h, f), _edge_distance(c0, wv, w, f), self.seam)
+        mode = t.get("blend", self.mode)
+        cut = mode == "cut"
+        dr, dc = _edge_distance(r0, hv, h, f), _edge_distance(c0, wv, w, f)
+        if cut:   # score: the seam weight's exponent, so the switch is where seam mode puts it
+            wt = np.add.outer(dr, dc).astype(np.float32)
+        elif mode == "seam":
+            wt = _seam_weight(dr, dc, self.seam)
         else:
             wt = np.outer(_ramp(r0, hv, h, f, self.blend), _ramp(c0, wv, w, f, self.blend))
-        v *= wt
+        if not cut:
+            v *= wt
         # Downsampled crop pixel (i, j) has its centre at tile (c0 + f*j + c, r0 + f*i + c).
         L, c = T[:, :2], (f - 1) / 2
         M = np.hstack([L, ((L @ (np.array([c0, r0]) + c) + T[:, 2] - self.origin - c) / f)[:, None]])
@@ -457,7 +488,7 @@ class _Renderer:
             if xa >= xb or ya >= yb:
                 return None
             src = (slice(ya - y, yb - y), slice(xa - x, xb - x))
-            return (slice(ya, yb), slice(xa, xb)), v[src], wt[src]
+            return (slice(ya, yb), slice(xa, xb)), v[src], wt[src], cut
         # Warp only into the window of the plane the tile covers, never a full-plane temporary.
         p = transforms.apply(M, [[-0.5, -0.5], [wv - 0.5, -0.5], [-0.5, hv - 0.5], [wv - 0.5, hv - 0.5]])
         xa, ya = (int(q) for q in np.maximum(np.floor(p.min(axis=0)), 0))
@@ -469,8 +500,12 @@ class _Renderer:
         def warp(a):
             return cv2.warpAffine(a, Mw, (xb - xa, yb - ya), flags=cv2.INTER_LINEAR,
                                   borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        if cut:   # values renormalised by the warped coverage, so tile edges aren't darkened
+            cover = warp(np.ones_like(v))
+            vals = np.divide(warp(v), cover, out=np.zeros_like(cover), where=cover > 0)
+            return (slice(ya, yb), slice(xa, xb)), vals, np.where(cover > 0.5, warp(wt), 0), cut
         # Warping premultiplied values and weights separately keeps tile edges unbiased.
-        return (slice(ya, yb), slice(xa, xb)), warp(v), warp(wt)
+        return (slice(ya, yb), slice(xa, xb)), warp(v), warp(wt), cut
 
 
 def _done(marker, digest):
