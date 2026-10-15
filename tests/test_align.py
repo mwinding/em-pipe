@@ -474,8 +474,8 @@ def test_local_tile_solve_at_layout_change(tmp_path):
 
 def test_elastic_correction_at_layout_change(tmp_path):
     """Same layout change (new tiles stretched 4% wider and narrower about their shared seam): the
-    elastic field fitted across it removes the mismatch the frame fit leaves, and is split between
-    the slices either side of the change."""
+    elastic field fitted across it removes the mismatch the frame fit leaves, and is applied to every
+    slice of the earlier layout (or, with elastic_side after, of the later one)."""
     from pipeline import elastic
     n, seg, frame = 12, 6, np.array([37.0, -21.0])
 
@@ -485,16 +485,19 @@ def test_elastic_correction_at_layout_change(tmp_path):
 
     truth, out, _ = _layout_change(tmp_path, n, seg, frame, stitch_fn=stitch_fn)
     cfg = synth.write_config(tmp_path / "config.yaml", truth.raw_dir, out,
-                             align={**ALIGN, "scale": 0.5, "elastic_min_px": 1.0, "elastic_half_width": 3,
-                                    "elastic_grid_px": 60})
+                             align={**ALIGN, "scale": 0.5, "elastic_min_px": 1.0, "elastic_grid_px": 60})
     align.main(["run", "--config", str(cfg)])
     assert align.main(["solve", "--config", str(cfg)]) == 0
     rep = pd.read_csv(out / "work" / "align" / "elastic_interfaces.csv")
     assert rep[["z_before", "z_after"]].values.tolist() == [[seg - 1, seg]]
     assert rep["median_before_px"][0] > 1.5 and rep["median_after_px"][0] < rep["median_before_px"][0] / 2
     data = json.loads((out / "work" / "align" / "elastic.json").read_text())
-    w = {int(z): v[0][1] for z, v in data["weights"].items()}
-    assert w == pytest.approx({3: -1 / 6, 4: -1 / 3, 5: -0.5, 6: 0.5, 7: 1 / 3, 8: 1 / 6})
+    assert {int(z): v[0][1] for z, v in data["weights"].items()} == {z: -1.0 for z in range(seg)}
+    cfg = synth.write_config(tmp_path / "after.yaml", truth.raw_dir, out, align={
+        **ALIGN, "scale": 0.5, "elastic_min_px": 1.0, "elastic_grid_px": 60, "elastic_side": "after"})
+    assert align.main(["solve", "--config", str(cfg)]) == 0
+    data = json.loads((out / "work" / "align" / "elastic.json").read_text())
+    assert {int(z): v[0][1] for z, v in data["weights"].items()} == {z: 1.0 for z in range(seg, n)}
     # Off: no interfaces, an empty file (render then uses no field)
     cfg = synth.write_config(tmp_path / "off.yaml", truth.raw_dir, out, align={**ALIGN, "scale": 0.5, "elastic_min_px": None})
     assert align.main(["solve", "--config", str(cfg)]) == 0
@@ -516,9 +519,11 @@ def test_elastic_field_fit_and_weights():
     field = elastic.fit_field(p, true(p) + rng.normal(0, 1, (len(p), 2)), 1000, 0.3)
     q = rng.uniform(1000, 19000, (500, 2))
     assert np.abs(elastic.field_at(field, q) - true(q)).max() < 1.0
-    w = elastic.weights(10, 4, 2)
-    assert w == {2: -0.25, 3: -0.5, 4: 0.5, 5: 0.25}
-    assert elastic.weights(5, 1, 3) == pytest.approx({0: -0.5, 1: 0.5, 2: 1 / 3, 3: 1 / 6})
+    run = np.r_[np.zeros(4, int), np.ones(6, int), np.full(5, 2)]     # layouts change at 4 and 10
+    assert elastic.weights(run, 4, [4], "before") == {0: -1, 1: -1, 2: -1, 3: -1}
+    assert elastic.weights(run, 4, [4], "after") == {i: 1 for i in range(4, 10)}
+    assert elastic.weights(run, 10, [4, 7, 10], "before") == {7: -1, 8: -1, 9: -1}   # back to the previous interface
+    assert elastic.weights(run, 4, [4, 7], "after") == {4: 1, 5: 1, 6: 1}
     changes = pd.DataFrame({"z_before": [9, 19], "z_after": [10, 20], "median_px": [8.9, 2.5]})
     zs = np.arange(30)
     a = {"elastic_min_px": 5.0, "elastic_interfaces": [25]}

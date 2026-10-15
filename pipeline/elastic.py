@@ -6,12 +6,12 @@ or per tile captures (35h: the 3x3 -> 2x2 tile layout change, ~20 px in the midd
 most likely scan distortion along the much longer 2x2 scan lines), align's matches across the
 interface give a displacement at each matched point. A smooth field on a regular grid
 (``align.elastic_grid_px`` apart, differences between neighbouring grid points penalised by
-``align.elastic_smoothness``) is fitted to them and split between the two sides: over
-``align.elastic_half_width`` slices before the interface the old slices bend half way toward the
-new ones, and over as many after it the new slices half way toward the old (linear ramps), so no
-slice moves by more than half the field and the change is spread over the window. Render warps
-each of those slices by its share of the field after placing and blending its tiles, so seams
-within a slice stay intact.
+``align.elastic_smoothness``) is fitted to them. The distortion is a property of how each side was
+imaged, so the whole field is applied to every slice of one side (``align.elastic_side``: before,
+the earlier tile layout, or after), as a constant correction: that side is warped into the other
+side's geometry and the other side is untouched. A side runs from the interface to the end of its
+tile layout run or to the next corrected interface. Render warps each of those slices after
+placing and blending its tiles, so seams within a slice stay intact.
 
 Interfaces: every tile layout change whose frame fit (align/segment_changes.csv) leaves a median
 mismatch above ``align.elastic_min_px``, and the first z after each mismatch listed in
@@ -34,7 +34,7 @@ from .config import step_dir, step_path
 log = logging.getLogger(__name__)
 
 REPORT_COLUMNS = ["z_before", "z_after", "reason", "points", "median_before_px", "p90_before_px",
-                  "median_after_px", "p90_after_px", "max_field_px", "z_first", "z_last"]
+                  "median_after_px", "p90_after_px", "max_field_px", "side", "z_first", "z_last"]
 
 
 def interfaces(zs, run, changes, a):
@@ -54,17 +54,20 @@ def interfaces(zs, run, changes, a):
     return sorted(out.items())
 
 
-def weights(n, k, half_width):
-    """{position: weight} of one interface's field for slices around position k (first new slice):
-    +1/2 (1 - i/hw) for the i-th slice after it, -1/2 (1 - j/hw) for the j-th slice before it."""
-    hw = int(half_width)
-    w = {}
-    for i in range(hw):
-        if k + i < n:
-            w[k + i] = 0.5 * (1 - i / hw)
-        if k - 1 - i >= 0:
-            w[k - 1 - i] = -0.5 * (1 - i / hw)
-    return w
+def weights(run, k, ks, side):
+    """{position: weight} of the field of the interface at position k (first slice after it).
+
+    The field moves the content after the interface onto the content before it. side "after":
+    weight +1 for the slices from k to the end of k's tile layout run or the next interface in ks;
+    "before": -1 (moving the earlier content the other way) for the slices back to the start of
+    k - 1's run or the previous interface.
+    """
+    run = np.asarray(run)
+    if side == "after":
+        hi = min([len(run)] + [j for j in ks if j > k] + [int(np.flatnonzero(run == run[k])[-1]) + 1])
+        return {i: 1.0 for i in range(k, hi)}
+    lo = max([0] + [j for j in ks if j < k] + [int(np.flatnonzero(run == run[k - 1])[0])])
+    return {i: -1.0 for i in range(lo, k)}
 
 
 def fit_field(p, d, spacing, smoothness):
@@ -112,7 +115,9 @@ def solve(cfg, df, zs, mats, run, changes, stitch, load_tile_matches):
     nb = int(a["neighbors"])
     fields, per_z, reports = [], {}, []
     pos = {int(z): i for i, z in enumerate(zs)}
-    for k, reason in interfaces(zs, run, changes, a):
+    found = interfaces(zs, run, changes, a)
+    ks = [k for k, _ in found]
+    for k, reason in found:
         z_old, z_new = int(zs[k - 1]), int(zs[k])
         m = load_tile_matches(int(zs[max(0, k - nb)]), int(zs[min(len(zs) - 1, k + nb - 1)]))
         x = (m["za"] <= z_old) & (m["zb"] >= z_new)
@@ -131,16 +136,16 @@ def solve(cfg, df, zs, mats, run, changes, stitch, load_tile_matches):
         field = fit_field(pb, d, float(a["elastic_grid_px"]), float(a["elastic_smoothness"]))
         before = np.linalg.norm(d, axis=1)
         after = np.linalg.norm(d - field_at(field, pb), axis=1)
-        w = weights(len(zs), k, a["elastic_half_width"])
+        w = weights(run, k, ks, a["elastic_side"])
         for i, wt in w.items():
             per_z.setdefault(int(zs[i]), []).append([len(fields), wt])
         fields.append(field)
         rep.update(median_before_px=float(np.median(before)), p90_before_px=float(np.percentile(before, 90)),
                    median_after_px=float(np.median(after)), p90_after_px=float(np.percentile(after, 90)),
                    max_field_px=float(np.linalg.norm(np.asarray(field["g"]), axis=2).max()),
-                   z_first=int(zs[min(w)]), z_last=int(zs[max(w)]))
+                   side=a["elastic_side"], z_first=int(zs[min(w)]), z_last=int(zs[max(w)]))
         log.info("elastic correction at z %d->%d (%s): %d points, mismatch median %.2f -> %.2f px, p90 %.2f -> "
-                 "%.2f px (all points); field up to %.1f px, split over z %d-%d", z_old, z_new, reason,
+                 "%.2f px (all points); field up to %.1f px, applied to z %d-%d", z_old, z_new, reason,
                  rep["points"], rep["median_before_px"], rep["median_after_px"], rep["p90_before_px"],
                  rep["p90_after_px"], rep["max_field_px"], rep["z_first"], rep["z_last"])
         reports.append(rep)

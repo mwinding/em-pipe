@@ -28,6 +28,7 @@ destreak:
   enabled: false
 
 render:
+  blend: cut                 # one tile per pixel, no transition (Zetta: no blending)
   downsample: 4              # 32 nm voxels
 
 slurm:

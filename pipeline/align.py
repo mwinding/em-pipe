@@ -63,10 +63,10 @@ DEFAULTS = {
         "local_windows": [],               # more windows, [[z_first, z_last], ...] (problem areas)
         "local_regularization": 0.001,     # pull of each tile toward its global solution, relative to its data
         # Smooth (elastic) correction at problem interfaces (see pipeline/elastic.py): a field fitted
-        # to the matches across the interface, split between the slices either side.
+        # to the matches across the interface, applied to every slice of one side.
         "elastic_min_px": 5.0,             # at layout changes whose frame fit leaves a median above this; null: none
         "elastic_interfaces": [],          # more interfaces: the first z after each
-        "elastic_half_width": 50,          # slices either side over which the correction is spread
+        "elastic_side": "before",          # before | after: the side warped into the other's geometry
         "elastic_grid_px": 1000,           # spacing of the field's grid, full-res px
         "elastic_smoothness": 0.3,         # penalty on differences between neighbouring grid values
         "anchor": "first",             # first (first selected slice = identity) | mean (mean translation 0)
@@ -90,7 +90,7 @@ CHANGE_COLUMNS = ["z_before", "z_after", "segment_before", "segment_after", "mod
 OPTIONS = {"model": ("translation", "affine"), "anchor": ("first", "mean"),
            "remove_trend": ("none", "linear", "lowpass"), "ransac_model": features.MODELS,
            "segment_change_model": ("none", "translation", "similarity", "affine"),
-           "segment_reference": ("largest", "first")}
+           "segment_reference": ("largest", "first"), "elastic_side": ("before", "after")}
 # Settings that change a chunk's matches: run redoes chunks made with other values, solve refuses them.
 _RUN_KEYS = ("scale", "neighbors", "max_features", "ratio", "ransac_model", "ransac_px", "min_inliers",
              "max_points_per_pair")

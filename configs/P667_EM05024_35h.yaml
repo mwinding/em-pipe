@@ -28,6 +28,7 @@ zcorrect:
   enabled: false
 
 render:
+  blend: cut                 # one tile per pixel, no transition (Zetta: no blending)
   downsample: 1
 
 # ~17,000 slices of ~1.4 GB (4 or 9 tiles). Arrays are task counts; chunks are spread over the tasks.

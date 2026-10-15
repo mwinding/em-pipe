@@ -85,7 +85,7 @@ align:
   elastic_min_px: 5.0        # smooth (elastic) correction at layout changes whose frame fit leaves a median
                              # mismatch above this (null: none); see pipeline/elastic.py
   elastic_interfaces: []     # more interfaces to correct: the first z after each
-  elastic_half_width: 50     # slices either side over which the correction is spread
+  elastic_side: before       # before | after: the side (to the end of its tile layout) warped into the other's geometry
   elastic_grid_px: 1000      # spacing of the field's grid, full-res px
   elastic_smoothness: 0.3    # penalty on differences between neighbouring grid values
   anchor: first              # first (first selected slice = identity) | mean (mean translation 0)
