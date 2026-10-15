@@ -153,8 +153,9 @@ def solve_window(T0, shapes, matches, inside, a):
     before = np.linalg.norm(r0, axis=1)
     after = np.linalg.norm(r, axis=1)
     rep = {"tile_slices": n, "points": int(n_match), "rejected_points": int((is_match & ~keep).sum())}
+    # Over every match, including those the robust fit set aside: they are mismatch too.
     rep["median_before_px"], rep["p90_before_px"] = stats(before[is_match])
-    rep["median_after_px"], rep["p90_after_px"] = stats(after[is_match & keep])
+    rep["median_after_px"], rep["p90_after_px"] = stats(after[is_match])
     rep["seam_median_after_px"] = float(np.median(after[~is_match])) if (~is_match).any() else np.nan
     rep["seam_max_after_px"] = float(after[~is_match].max()) if (~is_match).any() else np.nan
     return out, rep, (before[:n_match], after[:n_match], keep[:n_match], ok)
@@ -241,9 +242,8 @@ def solve(cfg, df, zs, mats, run, stitch, load_tile_matches):
             if across.any():
                 rep["change_median_before_px"] = float(np.median(before[across]))
                 rep["change_p90_before_px"] = float(np.percentile(before[across], 90))
-                good = across & keep
-                rep["change_median_after_px"] = float(np.median(after[good])) if good.any() else np.nan
-                rep["change_p90_after_px"] = float(np.percentile(after[good], 90)) if good.any() else np.nan
+                rep["change_median_after_px"] = float(np.median(after[across]))
+                rep["change_p90_after_px"] = float(np.percentile(after[across], 90))
         log.info("local tile solve z %d-%d (%s): %d tile slices, %d points; mismatch median %.2f -> %.2f px, "
                  "p90 %.2f -> %.2f px; across the change median %.2f -> %.2f px; seams moved median %.2f, max %.2f px",
                  rep["z_first"], rep["z_last"], reason, rep["tile_slices"], rep["points"],

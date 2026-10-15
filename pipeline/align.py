@@ -30,7 +30,7 @@ from scipy import sparse
 from scipy.ndimage import gaussian_filter1d
 from scipy.sparse.linalg import spsolve
 
-from . import cli, features, tilesolve, transforms
+from . import cli, elastic, features, tilesolve, transforms
 from .config import qc_path, step_dir, step_path
 from .slices import StackCache, load_slices, z_values
 
@@ -56,10 +56,19 @@ DEFAULTS = {
         "segment_reference": "largest",    # largest | first: segment whose montage frame the volume keeps
         # Tile-level affine solve in windows (see pipeline/tilesolve.py): every tile of every slice
         # there gets its own affine, from matches with neighbouring slices and the current seams.
-        "local_at_layout_changes": True,   # a window around every tile layout change
+        # Off by default: at the 35h 3x3 -> 2x2 change it could only align the slices by breaking
+        # seams (the distortion is not affine per tile); elastic_* below handles that interface.
+        "local_at_layout_changes": False,  # a window around every tile layout change
         "local_half_width": 50,            # slices either side of a layout change
         "local_windows": [],               # more windows, [[z_first, z_last], ...] (problem areas)
         "local_regularization": 0.001,     # pull of each tile toward its global solution, relative to its data
+        # Smooth (elastic) correction at problem interfaces (see pipeline/elastic.py): a field fitted
+        # to the matches across the interface, split between the slices either side.
+        "elastic_min_px": 5.0,             # at layout changes whose frame fit leaves a median above this; null: none
+        "elastic_interfaces": [],          # more interfaces: the first z after each
+        "elastic_half_width": 50,          # slices either side over which the correction is spread
+        "elastic_grid_px": 1000,           # spacing of the field's grid, full-res px
+        "elastic_smoothness": 0.3,         # penalty on differences between neighbouring grid values
         "anchor": "first",             # first (first selected slice = identity) | mean (mean translation 0)
         "remove_trend": "none",        # none | linear | lowpass: remove slow drift (steps at seams are kept)
         "trend_window_slices": 2000,   # lowpass: Gaussian FWHM in slices
@@ -295,8 +304,12 @@ def solve(cfg):
     log.info("rejected %d of %d slice pairs and %d of %d points; median pair rms %.2f px",
              int(res["rejected"].sum()), len(res), int((~keep).sum()), len(keep),
              float(used["rms_px"].median()) if len(used) else float("nan"))
-    tilesolve.solve(cfg, df, zs, mats, run, _stitch_transforms(cfg, df),
-                    lambda z_lo, z_hi: _tile_matches(cfg, df, zs, a, z_lo, z_hi))
+    stitch = _stitch_transforms(cfg, df)
+
+    def tile_matches(z_lo, z_hi):
+        return _tile_matches(cfg, df, zs, a, z_lo, z_hi)
+    tilesolve.solve(cfg, df, zs, mats, run, stitch, tile_matches)
+    elastic.solve(cfg, df, zs, mats, run, changes, stitch, tile_matches)
 
 
 def _tile_matches(cfg, df, zs, a, z_lo, z_hi):

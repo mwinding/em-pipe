@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from . import omezarr, transforms
+from . import elastic, omezarr, transforms
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info
 from .config import deep_merge, get, step_path
 from .slices import StackCache, load_slices, voxel_size_nm, z_values
@@ -53,7 +53,7 @@ DEFAULTS = {
         # disagree by a few px). cut: the same switch with no transition at all. feather: linear
         # crossfade over blend_px from each tile edge.
         "blend": "seam",
-        "local_blend": "cut",       # blend in the slices of align's tile-level solve windows
+        "local_blend": "cut",       # blend in slices of align's tile-level solve and elastic windows
         "seam_px": 32,              # seam: width of the switch between tiles, full-resolution px
         "blend_px": 256,            # feather: ramp width from each tile edge, full-resolution px
         "slab": 64,                 # planes per run work unit = shard z size
@@ -146,9 +146,13 @@ def _tile_plan(cfg):
     plan = sl[["z", "tile", "file", "index", "height", "width"]].copy()
     plan[transforms.COLUMNS] = np.array(mats).reshape(-1, 6)
     local_z = {z for z, _ in local}
+    fields = elastic.load(cfg)
+    if fields:
+        local_z |= {int(z) for z in fields["weights"]}
     plan["blend"] = np.where(plan["z"].isin(local_z), cfg["render"]["local_blend"], cfg["render"]["blend"])
-    if local:
-        log.info("%d slices from align's tile-level solve (blend %s there)", len(local_z), cfg["render"]["local_blend"])
+    if local_z:
+        log.info("%d slices from align's tile-level solve or elastic windows (blend %s there)", len(local_z),
+                 cfg["render"]["local_blend"])
     if not cfg["render"]["intensity"]:
         plan["lo"], plan["hi"] = _fixed_window(cfg, plan)
         log.info("render.intensity false: one raw window %g-%g for every tile slice", *plan[["lo", "hi"]].iloc[0])
@@ -270,6 +274,7 @@ def init(cfg, overwrite=False):
         "shard": [s["slab"], s["shard_xy"], s["shard_xy"]],
         "settings": s,
         "destreak": _destreak_settings(cfg),
+        "elastic": elastic.load(cfg),
         "planes": planes,
     }
     digest = hashlib.sha256(json.dumps(meta, sort_keys=True).encode())
@@ -374,6 +379,7 @@ class _Renderer:
         self.pool = pool
         self.cache = StackCache(cfg["raw_dir"])
         self.tiles = {z: g.to_dict("records") for z, g in plan.groupby("z")}
+        self.elastic = meta.get("elastic")
         self.kept = {}
         self.destreak = None
         if meta.get("destreak"):
@@ -393,7 +399,7 @@ class _Renderer:
                 for z, _ in sources if z not in kept}
         slices = []
         for z, w in sources:
-            s = kept[z] if z in kept else self._slice(jobs.pop(z))
+            s = kept[z] if z in kept else self._warp(z, *self._slice(jobs.pop(z)))
             if z in keep:
                 self.kept[z] = s
             slices.append((w, *s))
@@ -436,6 +442,37 @@ class _Renderer:
         if not cut:
             np.divide(acc, wsum, out=acc, where=valid)
         return acc, valid
+
+    def _warp(self, z, val, valid, block=2048, step=16):
+        """Slice z moved by its share of align's elastic fields (unchanged if none applies).
+
+        Output pixel q takes the slice at q - D(q) (D: displacement of the content, full-res px;
+        smooth, so evaluating it at q instead of q - D is exact to well under a pixel). D is
+        evaluated every ``step`` output px and interpolated; rows are remapped in blocks.
+        """
+        if not self.elastic or str(int(z)) not in self.elastic["weights"]:
+            return val, valid
+        f, (H, W) = self.f, self.shape
+        cols = step * np.arange(-(-W // step)) + (step - 1) / 2   # resize's sample centres
+        rows = step * np.arange(-(-H // step)) + (step - 1) / 2
+        dx, dy = elastic.displacement(self.elastic, z, self.origin[0] + f * cols + (f - 1) / 2,
+                                      self.origin[1] + f * rows + (f - 1) / 2)
+        size = (len(cols) * step, len(rows) * step)
+        dx = cv2.resize((dx / f).astype(np.float32), size, interpolation=cv2.INTER_LINEAR)[:H, :W]
+        dy = cv2.resize((dy / f).astype(np.float32), size, interpolation=cv2.INTER_LINEAR)[:H, :W]
+        margin = int(np.ceil(np.abs(dy).max())) + 2
+        out, ok = np.zeros_like(val), np.zeros(valid.shape, bool)
+        src_ok = valid.astype(np.float32)
+        xs = np.arange(W, dtype=np.float32)
+        for r0 in range(0, H, block):
+            r1 = min(H, r0 + block)
+            s0, s1 = max(0, r0 - margin), min(H, r1 + margin)
+            mx = xs[None, :] - dx[r0:r1]
+            my = np.arange(r0, r1, dtype=np.float32)[:, None] - dy[r0:r1] - s0
+            out[r0:r1] = cv2.remap(val[s0:s1], mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            ok[r0:r1] = cv2.remap(src_ok[s0:s1], mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+                                  borderValue=0) > 0.5
+        return out, ok
 
     def _tile(self, t):
         """Read, normalise, downsample and place one tile slice.

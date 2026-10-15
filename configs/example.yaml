@@ -78,10 +78,16 @@ align:
   segment_change_model: affine  # none | translation | similarity | affine: fitted between the montage
                              # frames either side of each tile layout change (align/segment_changes.csv)
   segment_reference: largest # largest | first: segment whose montage frame the volume keeps
-  local_at_layout_changes: true  # tile-level affine solve in a window around every tile layout change
+  local_at_layout_changes: false # tile-level affine solve in a window around every tile layout change
   local_half_width: 50       # slices either side of a layout change
   local_windows: []          # more windows for the tile-level solve, [[z_first, z_last], ...]
   local_regularization: 0.001  # pull of each tile toward its global solution, relative to its data
+  elastic_min_px: 5.0        # smooth (elastic) correction at layout changes whose frame fit leaves a median
+                             # mismatch above this (null: none); see pipeline/elastic.py
+  elastic_interfaces: []     # more interfaces to correct: the first z after each
+  elastic_half_width: 50     # slices either side over which the correction is spread
+  elastic_grid_px: 1000      # spacing of the field's grid, full-res px
+  elastic_smoothness: 0.3    # penalty on differences between neighbouring grid values
   anchor: first              # first (first selected slice = identity) | mean (mean translation 0)
   remove_trend: none         # none | linear | lowpass: remove slow drift (steps at seams are kept)
   trend_window_slices: 2000  # lowpass: Gaussian FWHM in slices
@@ -130,7 +136,7 @@ render:
   # along the middle of the overlap over ~seam_px (sharp; no ghosting where tiles disagree by a few px).
   # cut: the same switch with no transition at all. feather: linear crossfade over blend_px from each tile edge.
   blend: seam
-  local_blend: cut           # blend in the slices of align's tile-level solve windows
+  local_blend: cut           # blend in slices of align's tile-level solve and elastic windows
   seam_px: 32                # seam: width of the switch between tiles, full-resolution px
   blend_px: 256              # feather: ramp width from each tile edge, full-resolution px
   slab: 64                   # planes per run work unit = shard z size

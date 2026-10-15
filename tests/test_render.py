@@ -612,3 +612,22 @@ def test_local_tiles_replace_align_and_stitch(truth, tmp_path):
     other = plan[(plan["z"] == 3) & (plan["tile"] == "0-1")].iloc[0]
     np.testing.assert_allclose(transforms.from_row(other)[:, 2], truth.drift[3] + truth.tile_origin["0-1"])
     _render(cfg)   # renders with the mixed plan
+
+
+def test_elastic_field_moves_slice_content(truth, tmp_path):
+    """A slice with an elastic weight is warped by its share of the field after its tiles are
+    placed: a constant field (6, -4) px at weight 0.5 moves its content by (3, -2) px."""
+    from pipeline import elastic
+    zs = list(range(4))
+    cfg, out = _setup(tmp_path / "a", truth, selection={"z_end": zs[-1]}, render={"blend": "cut"})
+    _render(cfg)
+    plain = _read(out)
+    cfg, out = _setup(tmp_path / "b", truth, selection={"z_end": zs[-1]}, render={"blend": "cut"})
+    field = {"x0": -1000.0, "y0": -1000.0, "spacing": 1000.0, "g": [[[6.0, -4.0]] * 4] * 4}
+    (out / "work" / "align" / "elastic.json").write_text(json.dumps({"fields": [field], "weights": {"2": [[0, 0.5]]}}))
+    _render(cfg)
+    warped = _read(out)
+    np.testing.assert_array_equal(warped[[0, 1, 3]], plain[[0, 1, 3]])
+    a, b = plain[2].astype(float), warped[2].astype(float)
+    np.testing.assert_allclose(b[10:-10, 10:-10], np.roll(a, (-2, 3), axis=(0, 1))[10:-10, 10:-10], atol=1)
+    assert elastic.displacement(json.loads((out / "work" / "align" / "elastic.json").read_text()), 1, [0], [0]) is None
