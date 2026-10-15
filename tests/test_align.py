@@ -521,8 +521,9 @@ def test_elastic_field_fit_and_weights():
     assert np.abs(elastic.field_at(field, q) - true(q)).max() < 1.0
     run = np.r_[np.zeros(4, int), np.ones(6, int), np.full(5, 2)]     # layouts change at 4 and 10
     assert elastic.weights(run, 4, [4], "before") == {0: -1, 1: -1, 2: -1, 3: -1}
-    assert elastic.weights(run, 4, [4], "after") == {i: 1 for i in range(4, 10)}
+    assert elastic.weights(run, 4, [4], "after") == {i: 1 for i in range(4, 15)}   # across the change at 10
     assert elastic.weights(run, 10, [4, 7, 10], "before") == {7: -1, 8: -1, 9: -1}   # back to the previous interface
+    assert elastic.weights(run, 10, [10], "before") == {i: -1 for i in range(10)}     # across the change at 4
     assert elastic.weights(run, 4, [4, 7], "after") == {4: 1, 5: 1, 6: 1}
     changes = pd.DataFrame({"z_before": [9, 19], "z_after": [10, 20], "median_px": [8.9, 2.5]})
     zs = np.arange(30)

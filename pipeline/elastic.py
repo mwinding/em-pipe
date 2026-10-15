@@ -9,8 +9,10 @@ interface give a displacement at each matched point. A smooth field on a regular
 ``align.elastic_smoothness``) is fitted to them. The distortion is a property of how each side was
 imaged, so the whole field is applied to every slice of one side (``align.elastic_side``: before,
 the earlier tile layout, or after), as a constant correction: that side is warped into the other
-side's geometry and the other side is untouched. A side runs from the interface to the end of its
-tile layout run or to the next corrected interface. Render warps each of those slices after
+side's geometry and the other side is untouched. A side runs from the interface to the next
+corrected interface or the end of the selection, across other layout changes: those are joined
+by the frame fit already, and warping both their sides alike keeps them joined (35h: both 3x3
+layouts before the 3x3 -> 2x2 change). Render warps each of those slices after
 placing and blending its tiles, so seams within a slice stay intact.
 
 Interfaces: every tile layout change whose frame fit (align/segment_changes.csv) leaves a median
@@ -58,16 +60,14 @@ def weights(run, k, ks, side):
     """{position: weight} of the field of the interface at position k (first slice after it).
 
     The field moves the content after the interface onto the content before it. side "after":
-    weight +1 for the slices from k to the end of k's tile layout run or the next interface in ks;
-    "before": -1 (moving the earlier content the other way) for the slices back to the start of
-    k - 1's run or the previous interface.
+    weight +1 for the slices from k up to the next interface in ks (or the end); "before": -1
+    (moving the earlier content the other way) for the slices back to the previous interface (or
+    the start). Layout changes in between are crossed: their sides are warped alike.
     """
-    run = np.asarray(run)
+    n = len(run)
     if side == "after":
-        hi = min([len(run)] + [j for j in ks if j > k] + [int(np.flatnonzero(run == run[k])[-1]) + 1])
-        return {i: 1.0 for i in range(k, hi)}
-    lo = max([0] + [j for j in ks if j < k] + [int(np.flatnonzero(run == run[k - 1])[0])])
-    return {i: -1.0 for i in range(lo, k)}
+        return {i: 1.0 for i in range(k, min([n] + [j for j in ks if j > k]))}
+    return {i: -1.0 for i in range(max([0] + [j for j in ks if j < k]), k)}
 
 
 def fit_field(p, d, spacing, smoothness):

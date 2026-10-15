@@ -66,7 +66,8 @@ DEFAULTS = {
         # to the matches across the interface, applied to every slice of one side.
         "elastic_min_px": 5.0,             # at layout changes whose frame fit leaves a median above this; null: none
         "elastic_interfaces": [],          # more interfaces: the first z after each
-        "elastic_side": "before",          # before | after: the side warped into the other's geometry
+        "elastic_side": "before",          # before | after: the side warped into the other's geometry (to the
+                                           # previous / next corrected interface, across other layout changes)
         "elastic_grid_px": 1000,           # spacing of the field's grid, full-res px
         "elastic_smoothness": 0.3,         # penalty on differences between neighbouring grid values
         "anchor": "first",             # first (first selected slice = identity) | mean (mean translation 0)
