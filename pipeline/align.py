@@ -62,6 +62,9 @@ DEFAULTS = {
         "local_half_width": 50,            # slices either side of a layout change
         "local_windows": [],               # more windows, [[z_first, z_last], ...] (problem areas)
         "local_regularization": 0.001,     # pull of each tile toward its global solution, relative to its data
+        # Weight of a seam point relative to a match across slices. 35h, 24 windows: 4 moved seams by up
+        # to 4.1 px; 64 by at most 0.7 px and kept most of the gain (mismatch p90 5.6 -> 4.7 px, vs 4.5).
+        "local_seam_weight": 64.0,
         # Smooth (elastic) correction at problem interfaces (see pipeline/elastic.py): a field fitted
         # to the matches across the interface, applied to every slice of one side.
         "elastic_min_px": 5.0,             # at layout changes whose frame fit leaves a median above this; null: none

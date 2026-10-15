@@ -30,7 +30,6 @@ from .config import step_dir
 
 log = logging.getLogger(__name__)
 
-SEAM_WEIGHT = 4.0    # per seam point, relative to a matched point across slices
 SEAM_GRID = (25, 6)  # seam points along and across each overlap
 WINDOW_COLUMNS = ["z_first", "z_last", "reason", "tile_slices", "points", "median_before_px",
                   "median_after_px", "p90_before_px", "p90_after_px", "change_median_before_px",
@@ -121,7 +120,7 @@ def solve_window(T0, shapes, matches, inside, a):
     if seams:
         qa = np.vstack([qa] + [s[1] for s in seams])
         qb = np.vstack([qb] + [s[3] for s in seams])
-    w = np.r_[np.ones(n_match), np.full(len(ka) - n_match, SEAM_WEIGHT)]
+    w = np.r_[np.ones(n_match), np.full(len(ka) - n_match, float(a["local_seam_weight"]))]
     is_match = np.arange(len(ka)) < n_match
 
     ia = np.array([idx.get(k, -1) for k in ka])

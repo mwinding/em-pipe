@@ -452,16 +452,21 @@ def test_local_tile_solve_at_layout_change(tmp_path):
         return (pd.read_csv(out / "work" / "align" / "local_windows.csv"),
                 pd.read_csv(out / "work" / "align" / "local_tiles.csv", dtype={"tile": str}))
 
-    rep, tiles = solve(local_half_width=n)          # the window is the whole stack: nothing held fixed
+    # Seams held lightly (weight 4): the window is the whole stack, nothing held fixed.
+    rep, tiles = solve(local_half_width=n, local_seam_weight=4.0)
     assert len(rep) == 1 and (rep["z_first"][0], rep["z_last"][0]) == (0, n - 1)
     # Matching noise here is ~0.5-0.8 px (slice pairs within a segment): the change ends up within it.
     before, after = rep["change_median_before_px"][0], rep["change_median_after_px"][0]
     assert before > 2 and after < min(1.0, before / 3)
     assert rep["change_p90_after_px"][0] < rep["change_p90_before_px"][0] / 2
     assert rep["seam_max_after_px"][0] < 1.5
+    # The default (64) holds the seams harder: they move less, the mismatch improves less.
+    held, _ = solve(local_half_width=n)
+    assert held["seam_max_after_px"][0] < rep["seam_max_after_px"][0]
+    assert after < held["change_median_after_px"][0] < before
     assert len(tiles) == 6 * 4 - 1 + 6 * 2           # z 3 has no tile 1-1
 
-    rep, tiles = solve(local_half_width=3)          # z 3-8; z 0-2 and 9-11 keep their transforms
+    rep, tiles = solve(local_half_width=3, local_seam_weight=4.0)   # z 3-8; z 0-2 and 9-11 keep their transforms
     assert (rep["z_first"][0], rep["z_last"][0]) == (3, 8)
     assert sorted(tiles["z"].unique()) == list(range(3, 9))
     assert rep["change_median_after_px"][0] < 0.5 * rep["change_median_before_px"][0]

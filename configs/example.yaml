@@ -82,6 +82,7 @@ align:
   local_half_width: 50       # slices either side of a layout change
   local_windows: []          # more windows for the tile-level solve, [[z_first, z_last], ...]
   local_regularization: 0.001  # pull of each tile toward its global solution, relative to its data
+  local_seam_weight: 64.0    # weight of a seam point relative to a match across slices (higher: seams move less)
   elastic_min_px: 5.0        # smooth (elastic) correction at layout changes whose frame fit leaves a median
                              # mismatch above this (null: none); see pipeline/elastic.py
   elastic_interfaces: []     # more interfaces to correct: the first z after each
