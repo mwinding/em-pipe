@@ -158,8 +158,9 @@ def test_example_config_is_the_defaults():
     assert example == defaults
 
 
-@pytest.mark.parametrize("name", ["P667_EM05024_35h.yaml", "P667_test_2day.yaml", "P667_test_3x3.yaml",
-                                  "P667_test_small_tiles.yaml"])
+@pytest.mark.parametrize("name", ["P667_EM05024_35h.yaml", "P667_EM05024_35h_overview.yaml",
+                                  "P667_EM05024_35h_overview_masked-norm.yaml", "P667_test_2day.yaml",
+                                  "P667_test_3x3.yaml", "P667_test_small_tiles.yaml"])
 def test_dataset_configs_are_valid(name):
     cfg = config.load_config(ROOT / "configs" / name, step_defaults=config.step_defaults())
     assert set(cfg) <= set(config.DEFAULTS) | set(config.STEPS) | {"config_path"}
@@ -168,3 +169,16 @@ def test_dataset_configs_are_valid(name):
     assert {k["action"] for k in cfg["check"]["known_issues"]} <= {"exclude", "ignore"}
     for job in config.JOBS:
         config.sbatch_args(cfg, job)   # raises on unknown keys or unquoted times
+
+
+def test_config_base_is_merged_under_the_file(tmp_path):
+    """A config with base: other.yaml gets other.yaml's settings, its own merged over them."""
+    (tmp_path / "main.yaml").write_text("name: m\nraw_dir: /r\noutput_dir: /o\nrender: {downsample: 1, blend: cut}\n"
+                                        "align: {local_windows: [[1, 2]]}\n")
+    (tmp_path / "variant.yaml").write_text("base: main.yaml\noutput_dir: /o2\nrender: {downsample: 4}\n")
+    cfg = config.load_config(tmp_path / "variant.yaml", step_defaults=config.step_defaults())
+    assert cfg["output_dir"] == "/o2" and cfg["render"]["downsample"] == 4 and cfg["render"]["blend"] == "cut"
+    assert cfg["align"]["local_windows"] == [[1, 2]] and "base" not in cfg
+    (tmp_path / "main.yaml").write_text("base: variant.yaml\n")
+    with pytest.raises(ValueError, match="loops"):
+        config.load_config(tmp_path / "variant.yaml")

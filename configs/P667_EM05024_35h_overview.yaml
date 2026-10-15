@@ -1,0 +1,11 @@
+# P667 EM05024 35h at 32 nm: a quick look at the whole volume (everything as in the 8 nm config).
+#   ./run_pipeline.sh configs/P667_EM05024_35h_overview.yaml --steps render,pyramid
+base: P667_EM05024_35h.yaml
+
+render:
+  name: P667_EM05024_35h_32nm.ome.zarr
+  downsample: 4
+
+slurm:
+  render: {array: 20, cpus: 8, mem: 64G, time: "06:00:00"}       # ~65 slabs of 64 planes at f=4
+  pyramid: {array: 10, cpus: 4, mem: 8G, time: "02:00:00"}

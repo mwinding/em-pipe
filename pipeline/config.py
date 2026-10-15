@@ -67,13 +67,26 @@ def deep_merge(base, override):
     return out
 
 
+def _read_user(path, seen=()):
+    """A config file's settings; ``base: other.yaml`` (relative to the file) is read first and the
+    file's own settings are merged over it, so a variant lists only what it changes."""
+    path = Path(path).resolve()
+    if path in seen:
+        raise ValueError(f"config {path}: 'base' chain loops back to itself")
+    with open(path) as fh:
+        user = yaml.safe_load(fh) or {}
+    base = user.pop("base", None)
+    if base:
+        user = deep_merge(_read_user(path.parent / base, (*seen, path)), user)
+    return user
+
+
 def load_config(path, raw_dir=None, output_dir=None, step_defaults=None):
     """Load a dataset config, apply defaults and command-line path overrides.
 
     step_defaults: {section_name: defaults_dict} for the step(s) being run.
     """
-    with open(path) as fh:
-        user = yaml.safe_load(fh) or {}
+    user = _read_user(path)
     defaults = deep_merge(DEFAULTS, step_defaults or {})
     cfg = deep_merge(defaults, user)
     if raw_dir:
