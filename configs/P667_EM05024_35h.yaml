@@ -16,6 +16,11 @@ check:
   # were re-exported (by 14 Oct 2026); check flags any copy (DUPLICATE_CONTENT).
   known_issues: []
 
+# Tile-level affine solve (pipeline/tilesolve.py) on the stretches flagged by rejected align pairs or
+# tile jumps > 15 px (qc/spots, 15 Oct 2026), except those at tile layout changes (frame fit / elastic).
+align:
+  local_windows: [[113, 134], [621, 638], [677, 693], [1052, 1070], [1077, 1094], [2233, 2249], [2390, 2406], [3366, 3386], [3399, 3418], [3520, 3547], [4567, 4583], [6470, 6486], [6769, 6789], [8020, 8048], [10871, 10889], [11219, 11235], [11356, 11393], [11471, 11487], [13669, 13686], [13693, 13710], [15068, 15111], [15245, 15257], [15265, 15296], [15302, 15318]]
+
 # Tile overlap search at 1/4 resolution: more margin than the default 8 for small (~1%) overlaps.
 stitch:
   coarse_factor: 4
