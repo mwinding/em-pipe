@@ -259,3 +259,18 @@ def test_background_mask_catches_shaded_and_striped_resin_not_tissue():
     bg = background.mask(np.clip(img, 0, 255).astype(np.uint8))
     assert bg[:, 250:].mean() > 0.95                      # shaded, striped resin: background
     assert bg[:, 5:110].mean() < 0.01 and bg[:, 130:230].mean() < 0.01   # tissue: not
+
+
+def test_background_mask_catches_streaky_black_edges_not_dark_granules():
+    """A black band at the tile edge with horizontal streaks (texture along y) is background; dark
+    granules inside the tissue are not."""
+    from pipeline import background
+    rng = np.random.default_rng(2)
+    h, w = 240, 300
+    img = 120 + 25 * rng.standard_normal((h, w))                         # tissue
+    img[:, -30:] = 5 + 6 * (np.arange(h) % 7 == 0)[:, None] + rng.standard_normal((h, 30))   # streaky black edge
+    for y, x in [(50, 60), (120, 150), (200, 90)]:                       # dark granules in the tissue
+        img[y - 6:y + 6, x - 6:x + 6] = 8
+    bg = background.mask(np.clip(img, 0, 255).astype(np.uint8))
+    assert bg[:, -25:].mean() > 0.95
+    assert not bg[44:56, 54:66].any() and not bg[114:126, 144:156].any() and not bg[194:206, 84:96].any()
