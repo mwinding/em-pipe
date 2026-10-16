@@ -2,7 +2,9 @@
 
 ``run`` (array over z-chunks): every (z, tile) slice is area-averaged down by ``preview.factor``;
 stats are computed on the downsampled uint16 values and a uint8 thumbnail is autoscaled to its
-own p0.5-p99.5. ``merge``: preview/stats.csv, thumbs/index.csv, one contact sheet per calendar
+own p0.5-p99.5. Tissue-only percentiles (t_p*) leave out the background (pipeline/background.py:
+large uniform off-sample areas), so display levels from them don't depend on how much of a tile is
+off-sample. ``merge``: preview/stats.csv, thumbs/index.csv, one contact sheet per calendar
 day (sheets/YYYY-MM-DD.png) and stats.png.
 """
 
@@ -17,7 +19,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from . import features  # noqa: E402
+from . import background, features  # noqa: E402
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info  # noqa: E402
 from .config import qc_path, step_dir, step_path  # noqa: E402
 from .slices import StackCache, load_slices  # noqa: E402
@@ -38,7 +40,10 @@ DEFAULTS = {
 
 # stats.csv percentile columns -> percentile
 PERCENTILES = {"p0_5": 0.5, "p1": 1.0, "p50": 50.0, "p99": 99.0, "p99_5": 99.5}
-STATS = ["mean", "std", *PERCENTILES, "min", "max", "frac_zero", "frac_saturated"]
+# ... of the tissue only (background left out), and the fraction of the tile that is tissue
+TISSUE = {"t_p1": 1.0, "t_p5": 5.0, "t_p25": 25.0, "t_p50": 50.0, "t_p75": 75.0, "t_p95": 95.0, "t_p99": 99.0}
+MIN_TISSUE = 0.05   # below this tissue fraction the tissue percentiles are those of the whole tile
+STATS = ["mean", "std", *PERCENTILES, "min", "max", "frac_zero", "frac_saturated", *TISSUE, "tissue_fraction"]
 SATURATED = np.iinfo(np.uint16).max
 MAX_POINTS = 5000   # per plotted series
 # Categorical tile colours in fixed order; past 8 tiles the line style changes instead.
@@ -58,6 +63,18 @@ def slice_stats(small, margin=0):
     return {"mean": float(v.mean()), "std": float(v.std()), **dict(zip(PERCENTILES, pct.tolist())),
             "min": int(v.min()), "max": int(v.max()),
             "frac_zero": float(np.mean(v == 0)), "frac_saturated": float(np.mean(v == SATURATED))}
+
+
+def tissue_stats(small, thumb, margin=0):
+    """Tissue-only percentiles (TISSUE) and tissue_fraction of a downsampled slice, its background
+    found on ``thumb`` (the slice scaled to its own p0.5-p99.5); ``margin`` px left out as in slice_stats."""
+    my, mx = (min(int(margin), n // 8) for n in small.shape)
+    crop = (slice(my, small.shape[0] - my), slice(mx, small.shape[1] - mx))
+    tissue = ~background.mask(thumb[crop])
+    frac = float(tissue.mean())
+    v = small[crop][tissue] if frac >= MIN_TISSUE else small[crop].ravel()
+    pct = np.percentile(v, list(TISSUE.values()))
+    return {**dict(zip(TISSUE, pct.tolist())), "tissue_fraction": frac}
 
 
 def thumb_values(thumb, lo, hi):
@@ -105,18 +122,23 @@ def run(cfg, args):
         want = slices[slices["z"].isin(zs)]
         out = step_dir(cfg, "preview", "stats", f"chunk_{name}.csv")
         if out.exists() and not args.overwrite:
-            if has_rows(read_chunk(out), want):
+            done = read_chunk(out)
+            if has_rows(done, want) and set(TISSUE) <= set(done.columns):
                 log.info("chunk %s exists, skipping", name)
                 continue
-            log.info("chunk %s lacks some selected tile slices (e.g. a late file): recomputing", name)
+            log.info("chunk %s lacks some selected tile slices (e.g. a late file) or tissue statistics: "
+                     "recomputing", name)
         # The stats file marks a complete chunk, so it must not outlive the thumbnails it indexes.
         out.unlink(missing_ok=True)
         rows, thumbs = [], {}
         for rec in want.to_dict("records"):   # sorted by (z, tile)
             small = downsample(cache.read(rec), p["factor"])
-            st = slice_stats(small, round(p["edge_margin_px"] / p["factor"]))
+            margin = round(p["edge_margin_px"] / p["factor"])
+            st = slice_stats(small, margin)
+            thumb = features.to_uint8(small, st["p0_5"], st["p99_5"])
+            st.update(tissue_stats(small, thumb, margin))
             rows.append({"z": rec["z"], "timestamp": rec["timestamp"].isoformat(), "tile": rec["tile"], **st})
-            thumbs.setdefault(rec["tile"], []).append(features.to_uint8(small, st["p0_5"], st["p99_5"]))
+            thumbs.setdefault(rec["tile"], []).append(thumb)
         for tile, stack in thumbs.items():
             data = np.stack(stack)
             atomic_write(step_dir(cfg, "preview", "thumbs", thumb_name(name, tile)), lambda t: np.save(t, data))

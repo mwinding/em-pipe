@@ -39,6 +39,7 @@ def run_intensity(root, raw_dir, out, **params):
     # Synthetic tiles are tiny (~200 px), so their median changes with content from slice to slice;
     # per_slice (following acquisition jumps of real 177 Mpx tiles) is tested on its own below.
     params.setdefault("per_slice", False)
+    params.setdefault("window", "percentile")   # the median windows are tested on their own below
     cfg = synth.write_config(root / "intensity.yaml", raw_dir, out, intensity=params)
     assert intensity.main(["--config", str(cfg)]) == 0
     return pd.read_csv(out / "work" / "intensity" / "levels.csv", dtype={"tile": str})
@@ -242,7 +243,7 @@ def test_smoothing_outlier_seams_and_segments(tmp_path):
 @pytest.mark.parametrize("bad", [{"lo_percentile": 2}, {"lo_percentile": 99.5, "hi_percentile": 1},
                                  {"balance_every": 0}, {"smooth_slices": 0}])
 def test_invalid_percentiles_rejected(tmp_path, bad):
-    cfg = synth.write_config(tmp_path / "c.yaml", tmp_path, tmp_path / "out", intensity=bad)
+    cfg = synth.write_config(tmp_path / "c.yaml", tmp_path, tmp_path / "out", intensity={"window": "percentile", **bad})
     with pytest.raises(ValueError):
         intensity.main(["--config", str(cfg)])
 
@@ -284,3 +285,39 @@ def test_per_slice_follows_tile_brightness_jumps(tmp_path):
         assert lv.loc[(z, "0-0"), "lo"] == pytest.approx(expected[z, "0-0"])
     off = run_intensity(tmp_path, tmp_path, out, smooth_slices=11, balance_tiles=False, per_slice=False)
     assert off.set_index(["z", "tile"]).loc[(7, "0-1"), "lo"] == pytest.approx(expected[7, "0-1"])
+
+
+def test_median_windows_hit_targets_and_ignore_a_dark_tail(tmp_path):
+    """window median: the tissue median renders at target_median and the tissue p5-p95 spans
+    target_span greys. A tile whose darkest 0.5 % of pixels gets much darker (as more dense dark
+    structures entering a bigger field of view do) moves the percentile window's black point, so
+    its tissue renders brighter; the median window doesn't move."""
+    out = tmp_path / "out"
+    zs, _ = write_stats_only(out, seam_z=100, segment_z=100, excluded=(), outlier_z=-1)
+    stats = pd.read_csv(out / "work" / "preview" / "stats.csv", dtype={"tile": str})
+    stats["t_p5"], stats["t_p50"], stats["t_p95"] = stats["p0_5"] + 2000, stats["p0_5"] + 5000, stats["p0_5"] + 8000
+    stats.loc[stats["z"] >= 20, "p0_5"] -= 3000   # a dark tail from z 20 on
+    stats.to_csv(out / "work" / "preview" / "stats.csv", index=False)
+
+    def grey(lv, col):
+        m = lv.merge(stats, on=["z", "tile"])
+        return 255 * (m[col] - m["lo"]) / (m["hi"] - m["lo"])
+
+    med = run_intensity(tmp_path, tmp_path, out, smooth_slices=5, balance_tiles=False, window="median",
+                        target_median=140, target_span=160)
+    np.testing.assert_allclose(grey(med, "t_p50"), 140, atol=1e-6)
+    np.testing.assert_allclose(grey(med, "t_p95") - grey(med, "t_p5"), 160, atol=1e-6)
+    pct = run_intensity(tmp_path, tmp_path, out, smooth_slices=5, balance_tiles=False, window="percentile")
+    g = grey(pct, "t_p50").groupby(pct.merge(stats, on=["z", "tile"])["z"] >= 20).median()
+    assert g[True] - g[False] > 20                 # percentile: tissue brighter once the tail appears
+
+
+def test_median_windows_need_tissue_stats(tmp_path):
+    out = tmp_path / "out"
+    write_stats_only(out, seam_z=100, segment_z=100, excluded=(), outlier_z=-1)
+    cfg = synth.write_config(tmp_path / "c.yaml", tmp_path, out, intensity={"window": "median"})
+    with pytest.raises(RuntimeError, match="t_p5"):
+        intensity.main(["--config", str(cfg)])
+    cfg = synth.write_config(tmp_path / "c.yaml", tmp_path, out, intensity={"window": "brightest"})
+    with pytest.raises(ValueError, match="window"):
+        intensity.main(["--config", str(cfg)])

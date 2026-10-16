@@ -95,8 +95,12 @@ align:
   trend_window_slices: 2000  # lowpass: Gaussian FWHM in slices
 
 intensity:
-  lo_percentile: 0.5         # preview percentile rendered as 0 (one of 0.5, 1, 50, 99, 99.5)
-  hi_percentile: 99.5        # preview percentile rendered as 255
+  window: median             # median: tissue median -> target_median, tissue p5-p95 over target_span greys
+                             # (background left out) | percentile: lo/hi_percentile -> 0 / 255
+  target_median: 140         # median: grey of the tissue median (0-255)
+  target_span: 160           # median: greys between the tissue p5 and p95
+  lo_percentile: 0.5         # percentile: preview percentile rendered as 0 (one of 0.5, 1, 50, 99, 99.5)
+  hi_percentile: 99.5        # percentile: preview percentile rendered as 255
   smooth_slices: 51          # running-median window over z, in selected slices
   break_at_seams: true       # restart smoothing at seams (it always restarts at segment changes)
   balance_tiles: true        # match brightness of overlapping tiles (needs stitch/tiles.csv)

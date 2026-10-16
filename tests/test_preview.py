@@ -220,3 +220,25 @@ def test_stats_ignore_dark_edge_bands():
     st = slice_stats(small, margin=10)
     assert st["p0_5"] > 29000 and st["min"] >= 30000
     assert slice_stats(small, margin=1000)["p0_5"] > 29000   # capped at 1/8: 12 px in x
+
+
+def test_tissue_stats_leave_out_uniform_background():
+    """A tile with a large uniform bright area (empty resin): its tissue percentiles are those of
+    the tissue alone, its all-pixel percentiles are not; a tile of tissue only has both alike."""
+    from pipeline import features
+    from pipeline.preview import slice_stats, tissue_stats
+    rng = np.random.default_rng(0)
+    tissue = rng.normal(30000, 2000, (200, 300))
+    img = tissue.copy()
+    img[:, 200:] = 45000 + rng.normal(0, 30, (200, 100))     # a third of the tile is resin
+    small = np.clip(img, 0, 65535).astype(np.uint16)
+    st = slice_stats(small)
+    ts = tissue_stats(small, features.to_uint8(small, st["p0_5"], st["p99_5"]))
+    assert 0.6 < ts["tissue_fraction"] < 0.72
+    want = np.percentile(tissue[:, :200], [5, 50, 95])
+    np.testing.assert_allclose([ts["t_p5"], ts["t_p50"], ts["t_p95"]], want, rtol=0.02)
+    assert st["p99"] > 44000                                 # all pixels: the resin sets the top
+    only = np.clip(tissue, 0, 65535).astype(np.uint16)
+    so = slice_stats(only)
+    to = tissue_stats(only, features.to_uint8(only, so["p0_5"], so["p99_5"]))
+    assert to["tissue_fraction"] > 0.99 and abs(to["t_p50"] - so["p50"]) < 50

@@ -1,11 +1,18 @@
 """Display levels per (z, tile) without brightness seams between tiles or flicker over z.
 
-Each tile's lo/hi start from its preview percentiles, smoothed over z with a running median in
+Each tile's lo/hi start from its preview statistics, smoothed over z with a running median in
 blocks that restart at segment changes (and at seams with ``break_at_seams``). With
 ``balance_tiles``, every ``balance_every`` slices the preview thumbnails of neighbouring tiles
 are compared where they overlap (placed by the stitch transforms), a least-squares solve gives
 per-tile gain/offset onto a common scale (mean gain 1, mean offset 0), and one common window per
 z is mapped back into each tile's raw values. Writes intensity/levels.csv and intensity.png.
+
+Starting windows (``intensity.window``): median (default) puts the tissue median (preview t_p50,
+background left out) at grey ``target_median`` and makes the tissue p5-p95 span ``target_span``
+greys, so brightness and contrast stay the same whatever is in the field of view (35h: percentile
+windows rendered the tissue median at 145-215 across tile layout changes, as a few % of very dark
+pixels moved the black point; median-anchored windows at 134-186, no steps). percentile maps the
+preview percentiles lo_percentile / hi_percentile (all pixels) to 0 / 255.
 """
 
 import itertools
@@ -32,8 +39,12 @@ log = logging.getLogger(__name__)
 
 DEFAULTS = {
     "intensity": {
-        "lo_percentile": 0.5,     # preview percentile rendered as 0 (one of 0.5, 1, 50, 99, 99.5)
-        "hi_percentile": 99.5,    # preview percentile rendered as 255
+        "window": "median",       # median: tissue median -> target_median, tissue p5-p95 over
+                                  # target_span greys | percentile: lo/hi_percentile -> 0 / 255
+        "target_median": 140,     # median: grey of the tissue median (0-255)
+        "target_span": 160,       # median: greys between the tissue p5 and p95
+        "lo_percentile": 0.5,     # percentile: preview percentile rendered as 0 (one of 0.5, 1, 50, 99, 99.5)
+        "hi_percentile": 99.5,    # percentile: preview percentile rendered as 255
         "smooth_slices": 51,      # running-median window over z, in selected slices
         "break_at_seams": True,   # restart smoothing at seams (it always restarts at segment changes)
         "balance_tiles": True,    # match brightness of overlapping tiles (needs stitch/tiles.csv)
@@ -60,13 +71,17 @@ def running_median(s, window):
     return s.rolling(int(window), center=True, min_periods=1).median()
 
 
-def load_inputs(cfg, lo_col, hi_col):
-    """Selected (z, tile) rows with their preview percentiles, smoothing block and position in z."""
+def load_inputs(cfg, need):
+    """Selected (z, tile) rows with their preview statistics ``need``, smoothing block and position in z."""
     slices = load_slices(cfg)
     stats = pd.read_csv(step_path(cfg, "preview", "stats.csv"), dtype={"tile": str})
-    cols = list(dict.fromkeys(["z", "tile", lo_col, hi_col, "p0_5", "p50", "p99_5"]))
+    absent = [c for c in need if c not in stats.columns]
+    if absent:
+        raise RuntimeError(f"preview/stats.csv has no {', '.join(absent)} (made by an older preview): "
+                           "re-run 'preview run' and 'preview merge', or set intensity.window: percentile")
+    cols = list(dict.fromkeys(["z", "tile", *need, "p0_5", "p50", "p99_5"]))
     df = slices[["z", "tile", "height", "width", "segment", "seam"]].merge(stats[cols], on=["z", "tile"], how="left")
-    missing = df[lo_col].isna() | df[hi_col].isna()
+    missing = df[list(need)].isna().any(axis=1)
     if missing.any():
         raise RuntimeError(f"{int(missing.sum())} selected (z, tile) are missing from preview/stats.csv; "
                            "run 'preview run' and 'preview merge'")
@@ -77,26 +92,39 @@ def load_inputs(cfg, lo_col, hi_col):
     per_z["block"] = new.cumsum()
     per_z["pos"] = np.arange(len(per_z))   # neighbours are by position: selected z may have holes
     df = df.merge(per_z[["block", "pos"]], left_on="z", right_index=True)
-    df["lo_raw"], df["hi_raw"] = df[lo_col], df[hi_col]
     return df.sort_values(["z", "tile"]).reset_index(drop=True)
 
 
 def compute_levels(cfg):
     """DataFrame of every selected (z, tile) with lo, hi (and gain g, offset o when balanced)."""
     c = cfg["intensity"]
-    lo_col, hi_col = percentile_column(c["lo_percentile"]), percentile_column(c["hi_percentile"])
-    if PERCENTILES[lo_col] >= PERCENTILES[hi_col]:
-        raise ValueError("intensity.lo_percentile must be below hi_percentile")
+    if c["window"] not in ("median", "percentile"):
+        raise ValueError(f"intensity.window must be median or percentile, not {c['window']!r}")
     if int(c["smooth_slices"]) < 1 or int(c["balance_every"]) < 1:
         raise ValueError("intensity.smooth_slices and balance_every must be at least 1")
-    df = load_inputs(cfg, lo_col, hi_col)
+    if c["window"] == "median":
+        tm, ts = float(c["target_median"]), float(c["target_span"])
+        if not (0 < tm < 255 and ts > 0):
+            raise ValueError("intensity.target_median must be in (0, 255) and target_span positive")
+        df = load_inputs(cfg, ["t_p5", "t_p50", "t_p95"])
+        spread = np.maximum(df["t_p95"] - df["t_p5"], 1.0)
+        df["lo_raw"] = df["t_p50"] - tm / ts * spread
+        df["hi_raw"] = df["t_p50"] + (255 - tm) / ts * spread
+        mid = "t_p50"
+    else:
+        lo_col, hi_col = percentile_column(c["lo_percentile"]), percentile_column(c["hi_percentile"])
+        if PERCENTILES[lo_col] >= PERCENTILES[hi_col]:
+            raise ValueError("intensity.lo_percentile must be below hi_percentile")
+        df = load_inputs(cfg, [lo_col, hi_col])
+        df["lo_raw"], df["hi_raw"] = df[lo_col], df[hi_col]
+        mid = "p50"
     by_run = df.groupby(["tile", "block"])
     for col in ("lo", "hi"):
         df[col] = by_run[f"{col}_raw"].transform(lambda s: running_median(s, c["smooth_slices"]))
     # Raw P667 tiles jump by 1-2 % of the display range from slice to slice, independently of each
     # other; tissue changes slowly, so the tile median's deviation from its trend is that jump.
     # (A column, so it stays with its rows through balance's merge.)
-    df["jump"] = df["p50"] - by_run["p50"].transform(lambda s: running_median(s, c["smooth_slices"]))
+    df["jump"] = df[mid] - by_run[mid].transform(lambda s: running_median(s, c["smooth_slices"]))
     if c["balance_tiles"]:
         tiles_csv = step_path(cfg, "stitch", "tiles.csv")
         if tiles_csv.exists():

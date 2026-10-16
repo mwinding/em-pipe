@@ -9,5 +9,6 @@ render:
   name: P667_EM05024_35h_32nm_masked-norm.ome.zarr
 
 intensity:
+  window: percentile
   lo_percentile: 1
   hi_percentile: 99
