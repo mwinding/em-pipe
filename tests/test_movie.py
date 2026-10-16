@@ -147,3 +147,16 @@ def test_timeline_with_rotation(tmp_path):
     # the turned frame spans 32 slices either side of its centre, ~3 slices past the target by then
     with pytest.raises(ValueError, match="from -29 to \\+35 slices .* between 29 and 163"):
         movie.timeline({**m, "target": [150, 90, 20]}, (200, 160, 256))
+
+
+def test_view_rotation_turns_the_picture_not_mirrors_it(tmp_path):
+    _volume(tmp_path / "out" / "vol.ome.zarr")
+    for deg in (0, 180):
+        movie.main(["--config", str(_write(tmp_path, view_rotation_deg=deg)), "frames", "--frames", "35"])
+        out = tmp_path / "out" / "work" / "movie" / "vol_movie" / "f00035.png"
+        frame = cv2.imread(str(out), cv2.IMREAD_UNCHANGED)
+        if deg == 0:
+            upright = frame
+    assert np.array_equal(frame, np.rot90(upright, 2)) and not np.array_equal(frame, upright[::-1])
+    with pytest.raises(ValueError, match="0 or 180"):
+        movie.timeline({**_cfg(tmp_path)["movie"], "view_rotation_deg": 90}, (40, 160, 256))

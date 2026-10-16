@@ -43,6 +43,7 @@ DEFAULTS = {
         "target": None,           # [x, y, z] full-resolution voxels: the point zoomed into; z is the
                                   # slice on screen when the zoom ends
         "size": [1920, 1080],     # frame width, height (px); [3840, 2160] for 4K
+        "view_rotation_deg": 0,   # rotates the picture in the frame plane: 0 or 180
         "fps": 30,
         "slices_per_s": 30,       # scroll speed through z in full-resolution slices; or [zoomed out, zoomed in],
                                   # e.g. [120, 60], changing with the zoom
@@ -95,6 +96,8 @@ def timeline(m, shape0):
     w, h = m["size"]
     if w % 2 or h % 2:
         raise ValueError(f"movie.size {m['size']}: width and height must be even (H.264)")
+    if m["view_rotation_deg"] not in (0, 180):
+        raise ValueError(f"movie.view_rotation_deg must be 0 or 180, not {m['view_rotation_deg']}")
     fps = m["fps"]
     t0 = m["hold_start_s"]
     t1 = t0 + m["zoom_s"]
@@ -280,7 +283,7 @@ def make_frames(cfg, only=None, overwrite=False):
     plan = timeline(m, levels[0].shape)
     out = frames_dir(cfg)
     plan_csv = out / "timeline.csv"
-    settings = {k: m[k] for k in ("size", "scale_bar")} | {"volume": str(root)}
+    settings = {k: m[k] for k in ("size", "scale_bar", "view_rotation_deg")} | {"volume": str(root)}
     plan_text = f"# {settings}\n" + plan.to_csv(index=False, float_format="%.6f")
     if overwrite or not plan_csv.exists() or plan_csv.read_text() != plan_text:
         for old in out.glob("f*.png"):
@@ -297,6 +300,8 @@ def make_frames(cfg, only=None, overwrite=False):
         if path.exists():
             continue
         frame, level = render_frame(levels, m["size"], row.zoom, row.cx, row.cy, row.z, row.rotation)
+        if m["view_rotation_deg"] == 180:
+            frame = np.ascontiguousarray(np.rot90(frame, 2))     # about the frame centre, where the target is
         if m["scale_bar"]:
             frame = draw_scale_bar(frame, row.zoom * voxel["x"])
         cli.atomic_write(path, lambda p: cv2.imwrite(p, frame, [cv2.IMWRITE_PNG_COMPRESSION, 1]))

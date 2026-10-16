@@ -7,7 +7,8 @@ base: P667_test_2day.yaml
 
 movie:
   volume: P667_M10-D01-D02_8nm_clahe.ome.zarr
-  target: [6720, 9920, 1010] # x, y, z voxels: left neuropil; z 1010 is on screen when the zoom ends
+  view_rotation_deg: 180
+  target: [6720, 13840, 1010] # x, y, z voxels: neuropil (right of the lumen once rotated); z 1010 on screen when the zoom ends
   slices_per_s: [120, 60]    # zoomed out -> zoomed in
   # 13.5 s: the most this volume's 1,211 slices allow at these speeds
   hold_start_s: 1.5

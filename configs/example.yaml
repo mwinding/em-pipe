@@ -197,6 +197,7 @@ movie:                       # fly-through MP4 (python -m pipeline.movie; sbatch
   name: null                 # -> output_dir/<name>.mp4; null: <volume stem>_movie
   target: null               # [x, y, z] voxels as neuroglancer shows them: zoomed into; z on screen when the zoom ends
   size: [1920, 1080]         # frame width, height; [3840, 2160] for 4K
+  view_rotation_deg: 0       # rotates the picture in the frame plane: 0 or 180
   fps: 30
   slices_per_s: 30           # scroll speed through z (full-resolution slices); or [zoomed out, zoomed in], e.g. [120, 60]
   direction: 1               # 1: towards higher z, -1: towards lower z
