@@ -117,3 +117,19 @@ The export serves like any volume: `python3 -m pipeline.serve FOLDER` lists `*.p
 - **destreak and zcorrect** are off by default; tune destreak with
   `python -m pipeline.destreak test --config C --z Z --tile 0-0` first.
 - Design notes and file formats: `docs/design.md`. Tests: `python -m pytest tests`.
+
+## Fly-through movie
+
+`pipeline/movie.py` films a rendered volume: the whole slice, then a smooth zoom into a target point
+down to full resolution, scrolling through z the whole time (settings: `movie:` in the config, see
+`configs/example.yaml`; an example is `configs/P667_test_2day_movie.yaml`). Pick the target in
+neuroglancer (x, y, z as it shows them), then on NEMO
+
+```bash
+sbatch --output=LOGFILE slurm/movie.sbatch CONFIG          # frames, then output_dir/<name>.mp4
+python -m pipeline.movie --config CONFIG frames --frames 0,300,599   # a few frames to check first
+```
+
+Each frame reads only what is on screen from the matching pyramid level, so a short movie reads a
+few GB whatever the volume's size. Frames go to `work/movie/<name>/`; a re-run keeps them unless the
+timeline changed.

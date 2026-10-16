@@ -1,0 +1,11 @@
+# Fly-through movie for a talk (Oct 2026), from the 2-day test's 8 nm CLAHE volume while the final 35h
+# render runs: the whole slice, then a zoom into the left neuropil, scrolling 30 slices/s.
+#   sbatch --output=/camp/lab/windingm/home/users/windinm/em-pipe_P667_test-M10-D01-D02/work/logs/em-movie-%j.out \
+#       slurm/movie.sbatch configs/P667_test_2day_movie.yaml
+# -> em-pipe_P667_test-M10-D01-D02/P667_M10-D01-D02_8nm_clahe_movie.mp4
+base: P667_test_2day.yaml
+
+movie:
+  volume: P667_M10-D01-D02_8nm_clahe.ome.zarr
+  target: [6720, 9920, 700]  # x, y, z voxels: left neuropil; z 700 is on screen when the zoom ends
+  slices_per_s: 30

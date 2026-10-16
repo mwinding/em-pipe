@@ -48,7 +48,7 @@ DEFAULTS = {
 
 # Step modules, in pipeline order; each has a DEFAULTS section of the same name.
 STEPS = ("check", "preview", "stitch", "align", "intensity", "destreak", "zcorrect", "render", "pyramid",
-         "export", "precomputed", "upload", "serve")
+         "export", "precomputed", "upload", "serve", "movie")
 JOBS = ("check", "preview", "preview_merge", "stitch", "stitch_merge", "align", "align_solve", "intensity",
         "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid", "export", "precomputed_init",
         "precomputed", "precomputed_verify", "upload", "upload_finish")

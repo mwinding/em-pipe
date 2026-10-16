@@ -192,6 +192,24 @@ upload:
   threads: 16                # parallel uploads per task
   retries: 4
 
+movie:                       # fly-through MP4 (python -m pipeline.movie; sbatch slurm/movie.sbatch)
+  volume: null               # OME-Zarr in output_dir to film; null: <name>.ome.zarr
+  name: null                 # -> output_dir/<name>.mp4; null: <volume stem>_movie
+  target: null               # [x, y, z] voxels as neuroglancer shows them: zoomed into; z on screen when the zoom ends
+  size: [1920, 1080]         # frame width, height; [3840, 2160] for 4K
+  fps: 30
+  slices_per_s: 30           # scroll speed through z (full-resolution slices)
+  direction: 1               # 1: towards higher z, -1: towards lower z
+  duration_s: 20
+  hold_start_s: 2.0          # on the whole slice before the zoom
+  hold_end_s: 4.0            # at the final zoom after it
+  zoom_start: null           # voxels per frame px at the start; null: the whole slice fits the frame
+  zoom_end: 1.0              # voxels per frame px at the end (1: full resolution)
+  scale_bar: true
+  crf: 18                    # x264 quality: lower is better and bigger
+  ffmpeg: ffmpeg
+  cache_gb: 4                # decoded chunks kept in memory between frames
+
 slurm:
   mail_user: null            # sbatch --mail-user (failure mails); null: Slurm's default
   preview: {array: 20}
