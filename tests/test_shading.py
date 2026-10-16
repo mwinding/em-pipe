@@ -26,7 +26,7 @@ def shaded(tmp_path_factory):
                                tile_shading=SHADE, noise=0.002, seed=5)
     cfg, out = _setup(root, truth, levels=False, preview={"factor": 4},
                       intensity={"window": "percentile", "per_slice": False},
-                      shading={"enabled": True, "every": 1, "poly_degree": 2})
+                      shading={"enabled": True, "every": 1, "prior_weight": 0.0})
     run_preview(cfg)
     assert intensity.main(["--config", str(cfg)]) == 0
     return truth, cfg, out
@@ -74,6 +74,11 @@ def test_fit_field_is_smooth_and_mean_one():
     want = truth / np.average(truth[count >= 5], weights=count[count >= 5])
     assert np.abs(f - want).max() < 0.01
     assert shading.fit_field(noisy, np.zeros_like(count), 3) is None
+    # an unmeasured half of the tile: the fitted gain relaxes towards 1 there instead of extrapolating
+    count2 = count.copy()
+    count2[:, 25:] = 0
+    g = shading.fit_field(np.exp(-0.3 * x / 49), count2, degree=2, prior_weight=0.2)
+    assert abs(g[:, 49].mean() - 1) < abs(np.exp(-0.3) / np.exp(-0.15 * 24 / 49) - 1) * 0.5
 
 
 def test_gain_window_resamples_the_field_to_tile_pixels():
@@ -119,7 +124,7 @@ def test_render_flattens_the_tiles(shaded):
     truth, cfg, out = shaded
     for name, on in (("flat.ome.zarr", True), ("plain.ome.zarr", False)):
         c = synth.write_config(out.parent / f"{name}.yaml", truth.raw_dir, out, render={**SMALL, "name": name},
-                               shading={"enabled": on, "every": 1, "poly_degree": 2})
+                               shading={"enabled": on, "every": 1, "prior_weight": 0.0})
         assert render.main(["init", "--config", str(c)]) == 0
         assert render.main(["run", "--config", str(c)]) == 0
     flat = omezarr.open_scale(out / "flat.ome.zarr", 0).read().result()

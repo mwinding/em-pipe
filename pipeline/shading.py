@@ -8,8 +8,11 @@ field is estimated retrospectively, as in BaSiC/CIDRE and the flat-field stages 
 multi-SEM montage pipelines: every ``every``-th slice's preview thumbnail is divided by its own
 tissue median, the ratio is averaged per pixel over the segment's slices (tissue only, so the
 anatomy averages out and the resin doesn't bias it), and a low-order 2D polynomial is fitted to
-the log of that map so only the slow fall-off is kept. Each field is scaled to a tissue-weighted
-mean of 1, so a tile's median is unchanged and the preview percentiles stay valid as windows.
+the log of that map so only the slow fall-off is kept. Where a tile position has little or no
+tissue in any slice (a corner that always holds the lumen), the fit is pulled towards no
+correction (``prior_weight``) rather than left to extrapolate. Each field is scaled to a
+tissue-weighted mean of 1, so a tile's median is unchanged and the preview percentiles stay
+valid as windows.
 
 Runs inside the intensity job (``intensity`` calls ``solve`` when ``shading.enabled``) and writes
 work/intensity/shading.npz (one field per segment and tile, at thumbnail resolution, with a JSON
@@ -37,10 +40,12 @@ log = logging.getLogger(__name__)
 DEFAULTS = {
     "shading": {
         "enabled": False,      # flat-field each tile by a smooth gain field per (segment, tile)
-        "every": 20,           # measure every N-th selected slice
-        "poly_degree": 3,      # degree of the 2D polynomial fitted to log(brightness / tissue median)
+        "every": 10,           # measure every N-th selected slice
+        "poly_degree": 2,      # degree of the 2D polynomial fitted to log(brightness / tissue median)
         "min_slices": 10,      # (segment, tile) with fewer measured slices keep gain 1
         "min_count": 5,        # pixels measured in fewer slices than this don't enter the fit
+        "prior_weight": 0.2,   # every pixel also pulls the fit towards gain 1 with this weight (in units of
+                               # one measured slice): the field decays to 1 where few slices have tissue
         "max_gain": 1.5,       # fields are clipped to [1 / max_gain, max_gain]
     },
 }
@@ -60,16 +65,23 @@ def _design(shape, degree):
     return np.stack([x.ravel() ** i * y.ravel() ** j for i, j in _terms(degree)], axis=1)
 
 
-def fit_field(mean_map, count, degree=3, min_count=5, max_gain=1.5):
+def fit_field(mean_map, count, degree=2, min_count=5, max_gain=1.5, prior_weight=0.2):
     """Smooth gain field (float32, mean 1 over the counted pixels) from the per-pixel mean relative
-    brightness and the number of slices behind each pixel."""
+    brightness and the number of slices behind each pixel.
+
+    Weighted least squares on log(brightness): a measured pixel weighs its slice count; every
+    pixel of the grid also contributes a 'gain 1' observation of weight ``prior_weight``, so the
+    polynomial follows the data where there is plenty and relaxes to no correction where there
+    is none (instead of extrapolating into an unmeasured corner).
+    """
     ok = count >= min_count
     if ok.sum() < 10 * len(_terms(degree)):
         return None
     A = _design(mean_map.shape, degree)
-    w = np.sqrt(count[ok].astype(float))
-    y = np.log(np.clip(mean_map[ok], 1 / max_gain, max_gain))
-    coef = np.linalg.lstsq(A[ok.ravel()] * w[:, None], y * w, rcond=None)[0]
+    w = np.sqrt(np.concatenate([count[ok].astype(float), np.full(A.shape[0], prior_weight)]))
+    y = np.concatenate([np.log(np.clip(mean_map[ok], 1 / max_gain, max_gain)), np.zeros(A.shape[0])])
+    rows = np.vstack([A[ok.ravel()], A])
+    coef = np.linalg.lstsq(rows * w[:, None], y * w, rcond=None)[0]
     field = np.exp(A @ coef).reshape(mean_map.shape)
     field /= np.average(field[ok], weights=count[ok])
     return np.clip(field, 1 / max_gain, max_gain).astype(np.float32)
@@ -105,8 +117,8 @@ def solve(cfg):
     measured = measure(cfg)
     fields, info = {}, []
     for (seg, tile), (mean_map, count, k) in sorted(measured.items()):
-        field = fit_field(mean_map, count, int(c["poly_degree"]), int(c["min_count"]), float(c["max_gain"])) \
-            if k >= int(c["min_slices"]) else None
+        field = fit_field(mean_map, count, int(c["poly_degree"]), int(c["min_count"]), float(c["max_gain"]),
+                          float(c["prior_weight"])) if k >= int(c["min_slices"]) else None
         if field is None:
             log.warning("shading: segment %d tile %s measured in %d slices (< %d): no field", seg, tile, k, c["min_slices"])
             continue
