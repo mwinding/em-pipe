@@ -32,7 +32,7 @@ from scipy.sparse.csgraph import connected_components  # noqa: E402
 from . import transforms  # noqa: E402
 from .cli import atomic_write, base_parser, setup  # noqa: E402
 from .config import qc_path, step_dir, step_path  # noqa: E402
-from .preview import PERCENTILES, plot_tiles, save, thumb_values  # noqa: E402
+from .preview import PERCENTILES, TISSUE, plot_tiles, save, thumb_values  # noqa: E402
 from .slices import load_slices  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -43,8 +43,10 @@ DEFAULTS = {
                                   # target_span greys | percentile: lo/hi_percentile -> 0 / 255
         "target_median": 140,     # median: grey of the tissue median (0-255)
         "target_span": 160,       # median: greys between the tissue p5 and p95
-        "lo_percentile": 0.5,     # percentile: preview percentile rendered as 0 (one of 0.5, 1, 50, 99, 99.5)
+        "lo_percentile": 0.5,     # percentile: preview percentile rendered as 0 (all: 0.5, 1, 50, 99, 99.5;
+                                  # tissue: 1, 5, 25, 50, 75, 95, 99)
         "hi_percentile": 99.5,    # percentile: preview percentile rendered as 255
+        "percentile_of": "all",   # percentile: of all pixels, or of the tissue only (background left out)
         "smooth_slices": 51,      # running-median window over z, in selected slices
         "break_at_seams": True,   # restart smoothing at seams (it always restarts at segment changes)
         "balance_tiles": True,    # match brightness of overlapping tiles (needs stitch/tiles.csv)
@@ -58,12 +60,13 @@ DEFAULTS = {
 MIN_OVERLAP_PX = 100   # thumbnail pixels a tile pair must share to be compared
 
 
-def percentile_column(p):
-    """stats.csv column for a percentile, e.g. 0.5 -> 'p0_5'."""
-    col = "p" + f"{float(p):g}".replace(".", "_")
-    if col not in PERCENTILES:
+def percentile_column(p, tissue=False):
+    """stats.csv column for a percentile, e.g. 0.5 -> 'p0_5' (tissue: 5 -> 't_p5')."""
+    known = TISSUE if tissue else PERCENTILES
+    col = ("t_p" if tissue else "p") + f"{float(p):g}".replace(".", "_")
+    if col not in known:
         raise ValueError(f"intensity percentile {p!r} is not in preview/stats.csv; "
-                         f"use one of {list(PERCENTILES.values())}")
+                         f"use one of {list(known.values())}")
     return col
 
 
@@ -112,12 +115,16 @@ def compute_levels(cfg):
         df["hi_raw"] = df["t_p50"] + (255 - tm) / ts * spread
         mid = "t_p50"
     else:
-        lo_col, hi_col = percentile_column(c["lo_percentile"]), percentile_column(c["hi_percentile"])
-        if PERCENTILES[lo_col] >= PERCENTILES[hi_col]:
+        if c["percentile_of"] not in ("all", "tissue"):
+            raise ValueError(f"intensity.percentile_of must be all or tissue, not {c['percentile_of']!r}")
+        tissue = c["percentile_of"] == "tissue"
+        lo_col = percentile_column(c["lo_percentile"], tissue)
+        hi_col = percentile_column(c["hi_percentile"], tissue)
+        if float(c["lo_percentile"]) >= float(c["hi_percentile"]):
             raise ValueError("intensity.lo_percentile must be below hi_percentile")
-        df = load_inputs(cfg, [lo_col, hi_col])
+        mid = "t_p50" if tissue else "p50"
+        df = load_inputs(cfg, list(dict.fromkeys([lo_col, hi_col, mid])))
         df["lo_raw"], df["hi_raw"] = df[lo_col], df[hi_col]
-        mid = "p50"
     by_run = df.groupby(["tile", "block"])
     for col in ("lo", "hi"):
         df[col] = by_run[f"{col}_raw"].transform(lambda s: running_median(s, c["smooth_slices"]))

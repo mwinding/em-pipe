@@ -99,8 +99,10 @@ intensity:
                              # (background left out) | percentile: lo/hi_percentile -> 0 / 255
   target_median: 140         # median: grey of the tissue median (0-255)
   target_span: 160           # median: greys between the tissue p5 and p95
-  lo_percentile: 0.5         # percentile: preview percentile rendered as 0 (one of 0.5, 1, 50, 99, 99.5)
+  lo_percentile: 0.5         # percentile: preview percentile rendered as 0 (all: 0.5, 1, 50, 99, 99.5;
+                             # tissue: 1, 5, 25, 50, 75, 95, 99)
   hi_percentile: 99.5        # percentile: preview percentile rendered as 255
+  percentile_of: all         # percentile: of all pixels, or of the tissue only (background left out)
   smooth_slices: 51          # running-median window over z, in selected slices
   break_at_seams: true       # restart smoothing at seams (it always restarts at segment changes)
   balance_tiles: true        # match brightness of overlapping tiles (needs stitch/tiles.csv)

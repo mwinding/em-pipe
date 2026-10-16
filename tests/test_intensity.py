@@ -321,3 +321,21 @@ def test_median_windows_need_tissue_stats(tmp_path):
     cfg = synth.write_config(tmp_path / "c.yaml", tmp_path, out, intensity={"window": "brightest"})
     with pytest.raises(ValueError, match="window"):
         intensity.main(["--config", str(cfg)])
+
+
+def test_percentile_windows_of_the_tissue(tmp_path):
+    """percentile_of tissue: lo/hi_percentile pick the tissue percentiles (t_p*)."""
+    out = tmp_path / "out"
+    write_stats_only(out, seam_z=100, segment_z=100, excluded=(), outlier_z=-1)
+    stats = pd.read_csv(out / "work" / "preview" / "stats.csv", dtype={"tile": str})
+    for col, d in (("t_p1", 500), ("t_p5", 1000), ("t_p50", 4000), ("t_p95", 7000), ("t_p99", 8000)):
+        stats[col] = stats["p0_5"] + d
+    stats.to_csv(out / "work" / "preview" / "stats.csv", index=False)
+    lv = run_intensity(tmp_path, tmp_path, out, smooth_slices=5, balance_tiles=False, percentile_of="tissue",
+                       lo_percentile=5, hi_percentile=95).merge(stats, on=["z", "tile"])
+    np.testing.assert_allclose(lv["lo"], lv["t_p5"])
+    np.testing.assert_allclose(lv["hi"], lv["t_p95"])
+    cfg = synth.write_config(tmp_path / "c.yaml", tmp_path, out, intensity={
+        "window": "percentile", "percentile_of": "tissue", "lo_percentile": 0.5})
+    with pytest.raises(ValueError, match="t_p|percentile"):
+        intensity.main(["--config", str(cfg)])
