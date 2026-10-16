@@ -133,3 +133,9 @@ python -m pipeline.movie --config CONFIG frames --frames 0,300,599   # a few fra
 Each frame reads only what is on screen from the matching pyramid level, so a short movie reads a
 few GB whatever the volume's size. Frames go to `work/movie/<name>/`; a re-run keeps them unless the
 timeline changed.
+
+## tools/ and qc/
+
+`tools/` holds one-off analysis scripts that read a run's working files (e.g. `shading_measure.py`,
+`shading_before_after.py`; usage in each docstring). `qc/` in a clone is git-ignored: a place to
+copy a run's `qc/` plots and comparison stacks for looking at locally.

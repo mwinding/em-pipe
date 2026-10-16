@@ -9,3 +9,6 @@ slurm-*.out
 *credentials*.json
 *.pem
 .cloudvolume/
+
+# fetched QC output (plots, before/after stacks) for looking at locally: not versioned
+qc/
