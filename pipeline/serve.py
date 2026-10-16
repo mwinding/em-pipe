@@ -3,8 +3,9 @@
     python3 -m pipeline.serve FOLDER          # any Python 3, from the repo root; no config needed
     python -m pipeline.serve --config C      # serves the config's output_dir
 
-Prints a neuroglancer link with every volume in the folder (``*.zarr`` with a zarr.json) as a
-layer. Neuroglancer reads sharded Zarr v3 from the browser with HTTP range requests, so files
+Prints a neuroglancer link with every volume in the folder (``*.zarr`` with a zarr.json, and
+Neuroglancer precomputed ``*.precomputed`` with an info file) as a layer. Neuroglancer reads sharded
+Zarr v3 and sharded precomputed from the browser with HTTP range requests, so files
 are served with CORS and single byte-range support (standard library only, no directory
 listings). ``--bind 0.0.0.0`` lets anyone who can reach the node read the volume; it is
 needed when tunnelling through the login host to a cluster node, but not with ``ssh -J``
@@ -97,7 +98,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._empty(416, {"Content-Range": f"bytes */{size}"})
             start, stop = rng or (0, size)
             self.send_response(206 if rng else 200)
-            self.send_header("Content-Type", "application/json" if path.suffix == ".json" else "application/octet-stream")
+            is_json = path.suffix == ".json" or path.name in ("info", "provenance")
+            self.send_header("Content-Type", "application/json" if is_json else "application/octet-stream")
             self.send_header("Content-Length", str(stop - start))
             self.send_header("Accept-Ranges", "bytes")
             if rng:
@@ -130,22 +132,43 @@ class Server(ThreadingHTTPServer):
             super().handle_error(request, client_address)
 
 
+def _precomputed(path):
+    """Is ``path`` a Neuroglancer precomputed volume (a folder with a multiscale volume info)?"""
+    try:
+        return json.loads((Path(path) / "info").read_text()).get("@type") == "neuroglancer_multiscale_volume"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def volumes(root):
-    """Zarr volumes to show: the folder itself if it is one, else its ``*.zarr`` subfolders."""
+    """Volumes to show: the folder itself if it is one, else its ``*.zarr`` and ``*.precomputed``
+    subfolders."""
     root = Path(root)
-    if (root / "zarr.json").exists():
+    if (root / "zarr.json").exists() or _precomputed(root):
         return [""]
-    return sorted(d.name for d in root.iterdir() if d.name.endswith(".zarr") and (d / "zarr.json").exists())
+    return sorted(d.name for d in root.iterdir()
+                  if (d.name.endswith(".zarr") and (d / "zarr.json").exists())
+                  or (d.name.endswith(".precomputed") and _precomputed(d)))
 
 
 def voxel_nm(volume):
-    """{axis: size in nm} of a volume's finest scale from its OME metadata, or None."""
+    """{axis: size in nm} of a volume's finest scale (OME metadata or precomputed info), or None."""
     try:
+        if _precomputed(volume):
+            res = json.loads((Path(volume) / "info").read_text())["scales"][0]["resolution"]
+            return dict(zip("xyz", map(float, res)))
         ms = json.loads((Path(volume) / "zarr.json").read_text())["attributes"]["ome"]["multiscales"][0]
         scale = ms["datasets"][0]["coordinateTransformations"][0]["scale"]
         return {a["name"]: float(v) for a, v in zip(ms["axes"], scale)}
     except (OSError, KeyError, IndexError, TypeError, ValueError):
         return None
+
+
+def source(port, name, root=None):
+    """Neuroglancer data source URL of a served volume."""
+    path = f"http://localhost:{port}/{name + '/' if name else ''}"
+    kind = "precomputed" if (root is not None and _precomputed(Path(root) / name)) or name.endswith(".precomputed") else "zarr3"
+    return f"{kind}://{path}"
 
 
 def neuroglancer_link(port, names, root=None):
@@ -156,8 +179,9 @@ def neuroglancer_link(port, names, root=None):
     dimensions, so the link declares them in x, y, z order (at the finest voxel size of the
     volumes); otherwise the xy panel is a z-y side view.
     """
-    layers = [{"type": "image", "source": f"zarr3://http://localhost:{port}/{name + '/' if name else ''}",
-               "name": name.removesuffix(".zarr").removesuffix(".ome") or "volume", "visible": i == 0}
+    layers = [{"type": "image", "source": source(port, name, root),
+               "name": name.removesuffix(".precomputed").removesuffix(".zarr").removesuffix(".ome") or "volume",
+               "visible": i == 0}
               for i, name in enumerate(names)]
     sizes = [v for v in (voxel_nm(Path(root) / n) for n in names) if v] if root is not None else []
     dims = {a: [min((v.get(a, 8.0) for v in sizes), default=8.0) * 1e-9, "m"] for a in ("x", "y", "z")}
@@ -175,9 +199,9 @@ def instructions(root, port, bind, names):
         lines += ["Open in Chrome (layers: " + ", ".join(n or "volume" for n in names) + "):",
                   "  " + neuroglancer_link(port, names, root), "",
                   "or add a layer by hand in https://neuroglancer-demo.appspot.com with source:"]
-        lines += [f"  zarr3://http://localhost:{port}/{n + '/' if n else ''}" for n in names]
+        lines += [f"  {source(port, n, root)}" for n in names]
     else:
-        lines += [f"No Zarr volumes (*.zarr with a zarr.json) found in {root}."]
+        lines += [f"No volumes (*.zarr with a zarr.json, *.precomputed with an info) found in {root}."]
     lines += ["Chrome allows the https neuroglancer app to read from http://localhost",
               "(allow it if the browser asks for access to apps on this device or the local network).",
               "",

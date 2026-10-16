@@ -19,6 +19,9 @@ check → preview → stitch → align → intensity → [zcorrect] → render �
 | zcorrect | Optional slice-thickness correction (off by default). |
 | render | Applies everything in one pass and writes OME-Zarr (Zarr v3, sharded), optionally downsampled; CLAHE; optional destreaking. |
 | pyramid | Lower-resolution scales of the volume. |
+| export | Quick-look TIFF of the volume for Fiji (finest scale under `export.max_gb`). |
+| precomputed | Optional: the volume as Neuroglancer precomputed (all scales, sharded), e.g. for Zetta and CloudVolume. |
+| upload | Optional: copies the precomputed export to a Google Cloud Storage bucket (resumable, checksummed). |
 
 ## Setup on NEMO (once)
 
@@ -86,6 +89,20 @@ contains `*.ome.zarr` volumes, or a single volume.
 Full resolution streams slowly over the share. For speed, run the same command on a NEMO node with
 `--bind 0.0.0.0` (from `/camp/lab/windingm/home/shared/repos/em-pipe`; data paths start with `/camp/lab/windingm/...` there) and tunnel from the Mac with
 `ssh -L 8000:<node>:8000 login.nemo.thecrick.org`; the link is the same.
+
+## Neuroglancer precomputed and bucket upload
+
+In the config: `precomputed.enabled: true` (export after the pyramid), and for the upload
+`upload.enabled: true` with `upload.destination: gs://bucket/prefix`. Then
+`./run_pipeline.sh CONFIG --steps precomputed,upload` (or as part of a longer chain). Check what an
+upload would send first: `python -m pipeline.upload --config CONFIG run --dry-run`.
+
+The upload uses a Google service-account key file. **Put it in place yourself** on NEMO, at
+`~/.cloudvolume/secrets/google-secret.json` (or set `upload.credentials`), and `chmod 600` it. Never
+put a key in the repository, a config, a chat or an email: the upload step refuses a key file inside
+the repository and only ever passes its path to the Google client.
+
+The export serves like any volume: `python3 -m pipeline.serve FOLDER` lists `*.precomputed` too.
 
 ## Things to know
 

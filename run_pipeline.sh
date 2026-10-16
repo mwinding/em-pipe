@@ -2,11 +2,11 @@
 # Submit the em-pipe steps for one dataset to Slurm, each job waiting for the previous one.
 #
 # Usage: ./run_pipeline.sh CONFIG [--steps a,b,...] [--from STEP] [--dry-run]
-#   steps (in order): check preview stitch align intensity zcorrect render pyramid export
+#   steps (in order): check preview stitch align intensity zcorrect render pyramid export precomputed upload
 #   --steps a,b  only these steps (the first one waits for nothing)
 #   --from STEP  STEP and every later step
 #   --dry-run    print the sbatch commands instead of submitting them
-# zcorrect runs only when zcorrect.enabled is true. Array sizes, CPUs, memory, time, partition and
+# zcorrect, precomputed and upload run only when their enabled setting is true. Array sizes, CPUs, memory, time, partition and
 # gres come from the config's slurm: section (see configs/example.yaml); logs go to output_dir/work/logs/.
 # Set EM_PIPE_SKIP_ENV=1 to skip sourcing slurm/env.sh (when the environment is already active).
 # render init exits 1 (cancelling render and pyramid) when its inputs changed since the volume was made,
@@ -14,7 +14,7 @@
 # the old volume), then  ./run_pipeline.sh CONFIG --from render.
 set -eo pipefail
 
-STEPS="check preview stitch align intensity zcorrect render pyramid export"
+STEPS="check preview stitch align intensity zcorrect render pyramid export precomputed upload"
 usage() { sed -n '4,14p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "$1"; }
 
 CONFIG= SELECT= FROM= DRY=0
@@ -52,9 +52,9 @@ wanted() {  # wanted STEP: is STEP selected?
 }
 
 # Everything needed from the config in two calls (python start-up can be slow on shared filesystems).
-VALUES=$(cfg --get output_dir zcorrect.enabled render.num_scales)
+VALUES=$(cfg --get output_dir zcorrect.enabled render.num_scales precomputed.enabled upload.enabled)
 SBATCH=$(cfg --sbatch-args)   # one line per job: the job, then its sbatch options, tab-separated
-{ read -r OUT; read -r ZCORRECT; read -r NUM_SCALES; } <<< "$VALUES"
+{ read -r OUT; read -r ZCORRECT; read -r NUM_SCALES; read -r PRECOMPUTED; read -r UPLOAD; } <<< "$VALUES"
 
 PREV=
 submit() {  # submit JOB NAME STEP [ARGS...]: sbatch slurm/STEP.sbatch after the previous job
@@ -111,5 +111,22 @@ if wanted pyramid; then
   done
 fi
 if wanted export; then submit export em-export export; fi
+if wanted precomputed; then
+  if [ "$PRECOMPUTED" = true ]; then
+    submit precomputed_init em-precomputed-init precomputed init
+    submit precomputed em-precomputed-run precomputed run
+    submit precomputed_verify em-precomputed-verify precomputed verify
+  else
+    echo "precomputed.enabled is false: precomputed skipped" >&2
+  fi
+fi
+if wanted upload; then
+  if [ "$UPLOAD" = true ]; then
+    submit upload em-upload-run upload run
+    submit upload_finish em-upload-finish upload finish
+  else
+    echo "upload.enabled is false: upload skipped" >&2
+  fi
+fi
 [ -n "$PREV" ] || { echo "no steps selected" >&2; exit 1; }
 [ "$DRY" = 1 ] || echo "logs: $OUT/work/logs/   (squeue --me to follow)"

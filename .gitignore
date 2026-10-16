@@ -3,3 +3,9 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 slurm-*.out
+
+# credentials: never commit a key (pipeline/upload.py refuses a key file inside the repository)
+*secret*.json
+*credentials*.json
+*.pem
+.cloudvolume/

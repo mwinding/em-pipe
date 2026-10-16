@@ -34,9 +34,9 @@ def env(tmp_path):
     return {**os.environ, "PATH": path, "EM_PIPE_SKIP_ENV": "1", "SBATCH_LOG": str(log)}, log
 
 
-def write_cfg(tmp_path, **sections):
+def write_cfg(tmp_path, slurm_extra=None, **sections):
     slurm = {"mail_user": "someone@example.org", "preview": {"array": 4, "cpus": 2, "mem": "8G", "time": "01:00:00"},
-             "render": {"array": 3, "partition": "ga100", "gres": "gpu:1"}}
+             "render": {"array": 3, "partition": "ga100", "gres": "gpu:1"}, **(slurm_extra or {})}
     return synth.write_config(tmp_path / "cfg.yaml", tmp_path / "raw", tmp_path / "out", slurm=slurm,
                               render={"num_scales": 3}, **sections)
 
@@ -182,3 +182,18 @@ def test_config_base_is_merged_under_the_file(tmp_path):
     (tmp_path / "main.yaml").write_text("base: variant.yaml\n")
     with pytest.raises(ValueError, match="loops"):
         config.load_config(tmp_path / "variant.yaml")
+
+
+def test_precomputed_and_upload_steps_when_enabled(tmp_path, env):
+    """After export: the precomputed export (init, array run, verify), then the upload (array run,
+    finish), each only when enabled."""
+    env, log = env
+    cfg = write_cfg(tmp_path, precomputed={"enabled": True}, upload={"enabled": True, "destination": "gs://b/x"},
+                    slurm_extra={"precomputed": {"array": 5}, "upload": {"array": 3, "time": "24:00:00"}})
+    jobs = calls(run(cfg, env, "--from", "export", "--dry-run").stdout.splitlines())
+    assert [j["job-name"] for j in jobs] == ["em-export", "em-precomputed-init", "em-precomputed-run",
+                                             "em-precomputed-verify", "em-upload-run", "em-upload-finish"]
+    assert jobs[2]["array"] == "0-4" and jobs[2]["args"][1:] == ["run"] and jobs[4]["array"] == "0-2"
+    assert jobs[5]["args"][1:] == ["finish"] and jobs[5]["dependency"] == "afterok:<em-upload-run>"
+    p = run(write_cfg(tmp_path), env, "--from", "export", "--dry-run")
+    assert names(p.stdout) == ["em-export"] and "precomputed.enabled is false" in p.stderr

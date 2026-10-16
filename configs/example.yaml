@@ -171,6 +171,27 @@ serve:
 # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch.
 # Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, intensity, zcorrect,
 # zcorrect_solve, render_init, render, pyramid (one job per scale, each with this array size), export.
+precomputed:
+  enabled: false             # run_pipeline.sh: Neuroglancer precomputed export after pyramid
+  name: null                 # folder in output_dir; null: <volume stem>.precomputed
+  chunk: [128, 128, 128]     # chunk size, x y z voxels
+  encoding: raw              # raw (lossless, gzip in the shards) | jpeg (lossy, smaller)
+  jpeg_quality: 90
+  sharded: true
+  shard_chunks_log2: 6       # chunks per shard = 2^this (6: 4 x 4 x 4)
+  minishard_chunks_log2: 3   # chunks per minishard = 2^this
+  scales: null               # zarr scales to export, e.g. [0, 1, 2]; null: all
+  description: ""            # provenance
+  owners: []                 # provenance, e.g. ["name@crick.ac.uk"]
+
+upload:
+  enabled: false             # run_pipeline.sh: upload after the precomputed export
+  source: null               # folder in output_dir to upload; null: the precomputed export
+  destination: null          # gs://bucket/prefix (or file:///path)
+  credentials: ~/.cloudvolume/secrets/google-secret.json   # service-account key file; never in the repo
+  threads: 16                # parallel uploads per task
+  retries: 4
+
 slurm:
   mail_user: null            # sbatch --mail-user (failure mails); null: Slurm's default
   preview: {array: 20}

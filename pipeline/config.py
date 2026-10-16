@@ -48,10 +48,11 @@ DEFAULTS = {
 
 # Step modules, in pipeline order; each has a DEFAULTS section of the same name.
 STEPS = ("check", "preview", "stitch", "align", "intensity", "destreak", "zcorrect", "render", "pyramid",
-         "export", "serve")
+         "export", "precomputed", "upload", "serve")
 JOBS = ("check", "preview", "preview_merge", "stitch", "stitch_merge", "align", "align_solve", "intensity",
-        "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid", "export")
-ARRAY_JOBS = ("preview", "stitch", "align", "zcorrect", "render", "pyramid")
+        "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid", "export", "precomputed_init",
+        "precomputed", "precomputed_verify", "upload", "upload_finish")
+ARRAY_JOBS = ("preview", "stitch", "align", "zcorrect", "render", "pyramid", "precomputed", "upload")
 _SBATCH = {"cpus": "--cpus-per-task", "mem": "--mem", "time": "--time", "partition": "--partition",
            "gres": "--gres"}
 

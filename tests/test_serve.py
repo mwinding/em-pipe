@@ -254,3 +254,21 @@ def test_link_dimensions_use_the_volumes_voxel_size(tmp_path):
     link = serve.neuroglancer_link(8000, serve.volumes(tmp_path), tmp_path)
     state = json.loads(unquote(link.split("#!", 1)[1]))
     assert state["dimensions"] == {"x": [8e-9, "m"], "y": [8e-9, "m"], "z": [8e-9, "m"]}
+
+
+def test_precomputed_volumes_are_listed_and_linked(tmp_path):
+    """A *.precomputed folder with a multiscale info is a layer with a precomputed:// source and
+    its finest resolution sets the link's dimensions."""
+    import json
+    from urllib.parse import unquote
+    pc = tmp_path / "vol.precomputed"
+    pc.mkdir()
+    (pc / "info").write_text(json.dumps({"@type": "neuroglancer_multiscale_volume", "type": "image",
+                                         "scales": [{"resolution": [8.0, 8.0, 8.0]}, {"resolution": [16.0, 16.0, 16.0]}]}))
+    (tmp_path / "other.precomputed").mkdir()                     # no info: not a volume
+    assert serve.volumes(tmp_path) == ["vol.precomputed"]
+    assert serve.volumes(pc) == [""]
+    state = json.loads(unquote(serve.neuroglancer_link(8000, ["vol.precomputed"], tmp_path).split("#!", 1)[1]))
+    assert state["layers"][0]["source"] == "precomputed://http://localhost:8000/vol.precomputed/"
+    assert state["layers"][0]["name"] == "vol"
+    assert state["dimensions"]["x"] == [8e-9, "m"]
