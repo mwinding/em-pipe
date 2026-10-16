@@ -14,6 +14,8 @@ inputs or settings via the digest in render.json. A finished slab leaves
 
 Geometry: output pixel (row i, col j) at downsample f is the mean of the aligned pixels
 ``origin_xy + (f*j, f*i) + [0, f)``. Pixel centres sit at integer coordinates (as in OpenCV).
+With ``render.rotate_deg: 180`` every plane is rotated 180 degrees in x-y about the canvas centre:
+pixel (i, j) then holds what (H-1-i, W-1-j) holds without it (a rotation, not a mirror image).
 """
 
 import hashlib
@@ -42,6 +44,7 @@ DEFAULTS = {
         "name": None,               # volume folder in output_dir; null: <config name>.ome.zarr
         "downsample": 1,            # integer binning factor f in x, y and z (1 = full resolution)
         "bbox": None,               # [xmin, ymin, xmax, ymax] in aligned px to render a region; null = all
+        "rotate_deg": 0,            # 180: the volume rotated in x-y about the canvas centre (not mirrored)
         "integer_shifts": True,     # round translation-only transforms to whole px (no interpolation blur)
         # Grey levels: true uses intensity/levels.csv (per-tile windows, balanced, smoothed, per-slice).
         # false maps every tile slice through one fixed raw window (render.window), so the raw data's
@@ -105,6 +108,10 @@ def _settings(cfg):
     b = r["bbox"]
     if b is not None and (len(b) != 4 or b[2] <= b[0] or b[3] <= b[1]):
         raise ValueError(f"render.bbox must be [xmin, ymin, xmax, ymax] with max > min, got {b}")
+    if r["rotate_deg"] not in (0, 180):
+        raise ValueError(f"render.rotate_deg must be 0 or 180, got {r['rotate_deg']!r}")
+    if not r["rotate_deg"]:
+        del r["rotate_deg"]   # unrotated: the same plan digest as volumes rendered before the setting existed
     return r
 
 
@@ -567,6 +574,7 @@ def run(cfg, task_id, num_tasks, overwrite=False):
                          "re-run init with --overwrite")
     n, H, W = meta["shape"]
     sy = omezarr.shard_shape(arr)[1]
+    rotated = meta["settings"].get("rotate_deg", 0) == 180
     mine = my_chunks(list(range(math.ceil(n / slab))), task_id, num_tasks)
     marker = {k: wdir / "done" / f"slab_{k:06d}" for k in mine}
     todo = [k for k in mine if overwrite or not _done(marker[k], meta["digest"])]
@@ -584,7 +592,8 @@ def run(cfg, task_id, num_tasks, overwrite=False):
             buf = np.empty((z1 - z0, H, W), np.uint8)
             for i in range(z0, z1):
                 nxt = meta["planes"][i + 1] if i + 1 < z1 else []
-                buf[i - z0] = renderer.plane(meta["planes"][i], keep={z for z, _ in nxt})
+                plane = renderer.plane(meta["planes"][i], keep={z for z, _ in nxt})
+                buf[i - z0] = plane[::-1, ::-1] if rotated else plane
             # Whole shards only, so concurrent tasks never touch the same shard. One row of shards
             # per write: a single write of the whole slab needs ~1.5x the slab again in buffers.
             for y in range(0, H, sy):

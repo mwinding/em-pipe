@@ -248,6 +248,17 @@ def test_bbox_crop_equals_full_render(truth, full, tmp_path, bbox, pad):
     np.testing.assert_array_equal(vol[:, :, pad:], full[1][:, bbox[1]:bbox[3], bbox[0] + pad:bbox[2]])
 
 
+def test_rotate_180_turns_every_plane(truth, full, tmp_path):
+    """rotate_deg 180: each plane rotated about the canvas centre (both axes reversed, not one)."""
+    cfg, out = _setup(tmp_path, truth, render={"rotate_deg": 180})
+    _render(cfg)
+    vol = _read(out)
+    np.testing.assert_array_equal(vol, full[1][:, ::-1, ::-1])
+    assert _meta(out)["settings"]["rotate_deg"] == 180 and "rotate_deg" not in _meta(full[0])["settings"]
+    with pytest.raises(ValueError, match="0 or 180"):
+        render._settings({"render": {**render.DEFAULTS["render"], "rotate_deg": 90}, "name": "x"})
+
+
 def test_feathering_ramps_across_overlap(truth, tmp_path):
     # Tile 0-1 renders 0.1 of the range (25.5 levels) too dark. Across its 20 px overlap with tile
     # 0-0 the error must ramp linearly: weights are distances to each tile's edge (< blend_px).

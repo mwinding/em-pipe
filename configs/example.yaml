@@ -135,6 +135,7 @@ render:
   name: null                 # volume folder in output_dir; null: <name>.ome.zarr
   downsample: 1              # integer binning factor f in x, y and z (1 = full resolution)
   bbox: null                 # [xmin, ymin, xmax, ymax] in aligned px to render a region; null = all
+  rotate_deg: 0              # 180: the volume rotated in x-y about the canvas centre (not mirrored)
   integer_shifts: true       # round translation-only transforms to whole px (no interpolation blur)
   # Grey levels: true uses intensity/levels.csv (per-tile windows, balanced, smoothed, per-slice);
   # false maps every tile slice through one fixed raw window, so the raw tile/slice differences show.

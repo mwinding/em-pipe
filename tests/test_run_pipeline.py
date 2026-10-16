@@ -119,6 +119,13 @@ def test_steps_from_and_zcorrect(tmp_path, env):
     assert not log.exists()
 
 
+def test_after_makes_the_first_job_wait(tmp_path, env):
+    env, log = env
+    jobs = calls(run(write_cfg(tmp_path), env, "--steps", "pyramid", "--after", "4242", "--dry-run").stdout.splitlines())
+    assert jobs[0]["job-name"] == "em-pyramid-s1" and jobs[0]["dependency"] == "afterok:4242"
+    assert jobs[1]["dependency"] == "afterok:<em-pyramid-s1>"
+
+
 def test_bad_arguments(tmp_path, env):
     env, log = env
     cfg = write_cfg(tmp_path)
@@ -159,7 +166,7 @@ def test_example_config_is_the_defaults():
 
 
 @pytest.mark.parametrize("name", ["P667_EM05024_35h.yaml", "P667_EM05024_35h_overview.yaml",
-                                  "P667_EM05024_35h_overview_masked-norm.yaml", "P667_EM05024_35h_overview_tissue1-99.yaml",
+                                  "P667_EM05024_35h_overview_masked-norm.yaml", "P667_EM05024_35h_overview_tissue1-99.yaml", "P667_EM05024_35h_unrotated.yaml",
                                   "P667_test_2day.yaml", "P667_test_2day_movie.yaml",
                                   "P667_test_3x3.yaml", "P667_test_small_tiles.yaml"])
 def test_dataset_configs_are_valid(name):

@@ -42,6 +42,8 @@ zcorrect:
   enabled: false
 
 render:
+  name: P667_EM05024_35h_8nm.ome.zarr
+  rotate_deg: 180            # stored rotated 180 degrees in x-y (the orientation we show it in)
   blend: cut                 # one tile per pixel, no transition (Zetta: no blending)
   clahe:
     enabled: false           # the main volume; a CLAHE version is derived from it
@@ -55,7 +57,7 @@ precomputed:
   enabled: true
   encoding: raw
   chunk: [128, 128, 128]
-  description: "P667 EM05024 35h, FIB-SEM, 8 nm isotropic; stitched, aligned, tissue 1-99 % display windows, no CLAHE (em-pipe)"
+  description: "P667 EM05024 35h, FIB-SEM, 8 nm isotropic; stitched, aligned, tissue 1-99 % display windows, no CLAHE; rotated 180 degrees in x-y (em-pipe)"
 
 # Upload to Zetta's bucket: set destination once known; the key goes in ~/.cloudvolume/secrets/ (by hand).
 upload:
