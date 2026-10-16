@@ -1,5 +1,5 @@
 """Fly-through movie of a rendered volume: the whole slice first, then a smooth zoom into a target
-point down to full resolution, scrolling through z at a steady speed the whole time.
+point down to full resolution, scrolling through z the whole time (faster when zoomed out, if set).
 
 Each frame reads only what is on screen, from the pyramid level just finer than the frame's zoom
 (the whole slice at 64-128 nm at the start, a frame-sized window at 8 nm at the end), so a 20 s
@@ -42,14 +42,15 @@ DEFAULTS = {
                                   # slice on screen when the zoom ends
         "size": [1920, 1080],     # frame width, height (px); [3840, 2160] for 4K
         "fps": 30,
-        "slices_per_s": 30,       # scroll speed through z, in full-resolution slices
+        "slices_per_s": 30,       # scroll speed through z in full-resolution slices; or [zoomed out, zoomed in],
+                                  # e.g. [120, 60], changing with the zoom
         "direction": 1,           # 1: towards higher z, -1: towards lower z
-        "duration_s": 20,
         "hold_start_s": 2.0,      # on the whole slice before the zoom starts
-        "hold_end_s": 4.0,        # at the final zoom after it ends
+        "zoom_s": 14.0,           # the zoom
+        "hold_end_s": 4.0,        # at the final zoom after it
         "zoom_start": None,       # voxels per frame px at the start; null: the whole slice fits the frame
         "zoom_end": 1.0,          # voxels per frame px at the end (1: full resolution; 0.5: 2x magnified)
-        "scale_bar": True,
+        "scale_bar": False,
         "crf": 18,                # x264 quality: lower is better and bigger (18: visually lossless)
         "ffmpeg": "ffmpeg",
         "cache_gb": 4,            # decoded chunks kept in memory between frames
@@ -75,13 +76,14 @@ def timeline(m, shape0):
     w, h = m["size"]
     if w % 2 or h % 2:
         raise ValueError(f"movie.size {m['size']}: width and height must be even (H.264)")
-    fps, duration = m["fps"], m["duration_s"]
-    t0, t1 = m["hold_start_s"], duration - m["hold_end_s"]
-    if not 0 <= t0 < t1 <= duration:
-        raise ValueError("movie: hold_start_s + hold_end_s must be shorter than duration_s")
+    fps = m["fps"]
+    t0 = m["hold_start_s"]
+    t1 = t0 + m["zoom_s"]
+    if t0 < 0 or m["zoom_s"] <= 0 or m["hold_end_s"] < 0:
+        raise ValueError("movie: hold_start_s and hold_end_s must be >= 0 and zoom_s > 0")
     nz, ny, nx = shape0
     tx, ty, tz = (float(v) for v in m["target"])
-    n = int(round(duration * fps))
+    n = int(round(movie_seconds(m) * fps))
     t = np.arange(n) / fps
     zs = float(m["zoom_start"] or max(nx / w, ny / h))
     ze = float(m["zoom_end"])
@@ -93,13 +95,28 @@ def timeline(m, shape0):
     k = (zoom - ze) / (zs - ze) if zs != ze else np.zeros(n)
     cx = tx + (nx / 2 - tx) * k
     cy = ty + (ny / 2 - ty) * k
-    z = tz + m["direction"] * m["slices_per_s"] * (t - t1)
-    if z.min() < 0 or z.max() > nz - 1:
-        before, after = m["slices_per_s"] * t1, m["slices_per_s"] * (t[-1] - t1)
-        lo, hi = (before, nz - 1 - after) if m["direction"] > 0 else (after, nz - 1 - before)
+    out_speed, in_speed = speeds(m)
+    speed = out_speed + (in_speed - out_speed) * ease      # slices/s, with the zoom
+    # z = the integral of the speed, through the target slice when the zoom ends (t1)
+    travel = np.concatenate([[0], np.cumsum((speed[1:] + speed[:-1]) / 2 / fps)])
+    at_t1 = np.interp(t1, t, travel) if t1 <= t[-1] else travel[-1] + speed[-1] * (t1 - t[-1])
+    z = tz + m["direction"] * (travel - at_t1)
+    if z.min() < -1e-6 or z.max() > nz - 1 + 1e-6:
+        rel = z - tz
         raise ValueError(f"movie: the scroll runs from z {z[0]:.0f} to {z[-1]:.0f}, outside the volume's "
-                         f"0-{nz - 1}: target z must be between {math.ceil(lo)} and {math.floor(hi)}")
+                         f"0-{nz - 1}: target z must be between {math.ceil(-rel.min() - 1e-6)} and "
+                         f"{math.floor(nz - 1 - rel.max() + 1e-6)} (or shorten the movie, or scroll slower)")
     return pd.DataFrame({"frame": np.arange(n), "t": t, "zoom": zoom, "cx": cx, "cy": cy, "z": z})
+
+
+def speeds(m):
+    """(zoomed-out, zoomed-in) scroll speed in slices/s."""
+    s = m["slices_per_s"]
+    return (float(s[0]), float(s[1])) if isinstance(s, (list, tuple)) else (float(s), float(s))
+
+
+def movie_seconds(m):
+    return m["hold_start_s"] + m["zoom_s"] + m["hold_end_s"]
 
 
 def open_levels(root, cache_gb):
@@ -204,7 +221,7 @@ def make_frames(cfg, only=None, overwrite=False):
     voxel = serve.voxel_nm(root) or {"x": 8.0}
     rows = plan if only is None else plan[plan["frame"].isin(only)]
     log.info("%s: %d frames of %d (%dx%d, %.1f s at %d fps), zoom %.1f -> %.2f voxels/px, z %.0f -> %.0f",
-             root.name, len(rows), len(plan), *m["size"], m["duration_s"], m["fps"],
+             root.name, len(rows), len(plan), *m["size"], movie_seconds(m), m["fps"],
              plan["zoom"].iloc[0], plan["zoom"].iloc[-1], plan["z"].iloc[0], plan["z"].iloc[-1])
     done = 0
     for row in rows.itertuples():
@@ -232,7 +249,7 @@ def encode_command(cfg):
 
 def encode(cfg):
     m = cfg["movie"]
-    n = int(round(m["duration_s"] * m["fps"]))
+    n = int(round(movie_seconds(m) * m["fps"]))
     missing = [k for k in range(n) if not (frames_dir(cfg) / f"f{k:05d}.png").exists()]
     if missing:
         raise RuntimeError(f"{len(missing)} of {n} frames missing (first: {missing[0]}): run 'frames' first")

@@ -10,7 +10,7 @@ from pipeline import movie, omezarr
 from pipeline.config import load_config
 
 SIZE = [64, 48]
-MOVIE = {"size": SIZE, "fps": 10, "slices_per_s": 2, "duration_s": 4, "hold_start_s": 1.0, "hold_end_s": 1.0,
+MOVIE = {"size": SIZE, "fps": 10, "slices_per_s": 2, "hold_start_s": 1.0, "zoom_s": 2.0, "hold_end_s": 1.0,
          "target": [150, 90, 20], "scale_bar": False}
 
 
@@ -55,6 +55,20 @@ def test_timeline_zooms_from_the_whole_slice_to_the_target(tmp_path):
         movie.timeline({**m, "target": [150, 90, 3]}, (40, 160, 256))
     with pytest.raises(ValueError, match="set movie.target"):
         movie.timeline({**m, "target": None}, (40, 160, 256))
+
+
+def test_scroll_speed_follows_the_zoom(tmp_path):
+    """[zoomed out, zoomed in]: the zoomed-out speed while on the whole slice, easing to the zoomed-in
+    speed as the zoom ends, and the target slice on screen when it does."""
+    m = {**_cfg(tmp_path)["movie"], "slices_per_s": [6, 2], "target": [150, 90, 15]}
+    plan = movie.timeline(m, (40, 160, 256))
+    step = np.diff(plan["z"]) * 10                              # slices/s between frames
+    assert step[:10] == pytest.approx(6) and step[30:] == pytest.approx(2)
+    assert (np.diff(step) <= 1e-9).all()                        # only ever slows down
+    assert plan["z"].iloc[30] == pytest.approx(15)
+    assert plan["z"].iloc[0] == pytest.approx(15 - 6 - (6 + 2) / 2 * 2)    # 1 s at 6, 2 s averaging 4
+    with pytest.raises(ValueError, match="target z must be between 14 and 37"):
+        movie.timeline({**m, "target": [150, 90, 10]}, (40, 160, 256))
 
 
 def test_frames_come_from_the_right_level(tmp_path):
