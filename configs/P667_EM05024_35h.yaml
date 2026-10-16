@@ -30,6 +30,11 @@ intensity:
   lo_percentile: 1
   hi_percentile: 99
 
+# Flat-field: the SEM's brightness fall-off across each tile (~8 % on the right-hand tiles, the same in
+# every slice of a layout) measured from the thumbnails per tile position and segment, divided out.
+shading:
+  enabled: true
+
 # Tile overlap search at 1/4 resolution: more margin than the default 8 for small (~1%) overlaps.
 stitch:
   coarse_factor: 4

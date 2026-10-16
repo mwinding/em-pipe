@@ -82,6 +82,12 @@ def thumb_values(thumb, lo, hi):
     return lo + (np.asarray(thumb, np.float64) + 0.5) * ((hi - lo) / 255.0)
 
 
+def thumb_to_tile(thumb_shape, tile_shape):
+    """Thumbnail pixel index -> tile pixel index (pixel centres)."""
+    sy, sx = tile_shape[0] / thumb_shape[0], tile_shape[1] / thumb_shape[1]
+    return np.array([[sx, 0.0, 0.5 * sx - 0.5], [0.0, sy, 0.5 * sy - 0.5]])
+
+
 def z_chunks(slices, size):
     """Lists of selected z, one per (segment, z // size).
 

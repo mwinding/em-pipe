@@ -32,7 +32,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from . import elastic, omezarr, transforms
+from . import elastic, omezarr, shading, transforms
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info
 from .config import deep_merge, get, step_path
 from .slices import StackCache, load_slices, voxel_size_nm, z_values
@@ -150,7 +150,7 @@ def _tile_plan(cfg):
             # floor(x + 0.5), not rint: half-pixel shifts must round the same way for every z.
             T = transforms.translation(*np.floor(T[:, 2] + 0.5))
         mats.append(T)
-    plan = sl[["z", "tile", "file", "index", "height", "width"]].copy()
+    plan = sl[["z", "tile", "file", "index", "height", "width", "segment"]].copy()
     plan[transforms.COLUMNS] = np.array(mats).reshape(-1, 6)
     local_z = {z for z, _ in local}
     fields = elastic.load(cfg)
@@ -281,6 +281,7 @@ def init(cfg, overwrite=False):
         "shard": [s["slab"], s["shard_xy"], s["shard_xy"]],
         "settings": s,
         "destreak": _destreak_settings(cfg),
+        "shading": shading.digest(cfg),
         "elastic": elastic.load(cfg),
         "planes": planes,
     }
@@ -387,6 +388,8 @@ class _Renderer:
         self.cache = StackCache(cfg["raw_dir"])
         self.tiles = {z: g.to_dict("records") for z, g in plan.groupby("z")}
         self.elastic = meta.get("elastic")
+        self.shading = shading.load(cfg) if meta.get("shading") else {}
+        self.segment = dict(zip(plan["z"], plan["segment"])) if "segment" in plan else {}
         self.kept = {}
         self.destreak = None
         if meta.get("destreak"):
@@ -508,6 +511,9 @@ class _Renderer:
         img = self.cache.read(t, slice(r0, r1), slice(c0, c1))
         if self.destreak is not None:
             img = self.destreak(img)
+        field = self.shading.get((self.segment.get(t["z"]), t["tile"]))
+        if field is not None:   # flat-field: divide by the tile's gain at these pixels
+            img = np.divide(img, shading.gain_window(field, (h, w), slice(r0, r1), slice(c0, c1)), dtype=np.float32)
         v = _normalise(img, t["lo"], t["hi"])
         if f > 1:
             v = cv2.resize(v, ((c1 - c0) // f, (r1 - r0) // f), interpolation=cv2.INTER_AREA)
@@ -608,7 +614,7 @@ def main(argv=None):
     p = base_parser("Render the corrected volume (scale 0) as OME-Zarr.")
     p.add_argument("command", choices=["init", "run"], help="init (single job), then run (array over z-slabs)")
     args = p.parse_args(argv)
-    cfg = setup(args, DEFAULTS)
+    cfg = setup(args, deep_merge(DEFAULTS, shading.DEFAULTS))
     if args.command == "init":
         return init(cfg, args.overwrite)
     return run(cfg, *task_info(args), overwrite=args.overwrite)

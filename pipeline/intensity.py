@@ -29,10 +29,10 @@ import pandas as pd  # noqa: E402
 from scipy.sparse import coo_matrix  # noqa: E402
 from scipy.sparse.csgraph import connected_components  # noqa: E402
 
-from . import transforms  # noqa: E402
+from . import background, shading, transforms  # noqa: E402
 from .cli import atomic_write, base_parser, setup  # noqa: E402
-from .config import qc_path, step_dir, step_path  # noqa: E402
-from .preview import PERCENTILES, TISSUE, plot_tiles, save, thumb_values  # noqa: E402
+from .config import deep_merge, qc_path, step_dir, step_path  # noqa: E402
+from .preview import PERCENTILES, TISSUE, plot_tiles, save, thumb_to_tile, thumb_values  # noqa: E402
 from .slices import load_slices  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ DEFAULTS = {
         "break_at_seams": True,   # restart smoothing at seams (it always restarts at segment changes)
         "balance_tiles": True,    # match brightness of overlapping tiles (needs stitch/tiles.csv)
         "balance_every": 10,      # measure tile overlaps every N selected slices
+        "balance_tissue_only": True,   # compare overlaps on tissue pixels only (background left out)
         # Follow each tile's slice-to-slice brightness jumps (tile median minus its running median),
         # which the smoothing above would otherwise leave as tile flicker when scrolling through z.
         "per_slice": True,
@@ -135,7 +136,7 @@ def compute_levels(cfg):
     if c["balance_tiles"]:
         tiles_csv = step_path(cfg, "stitch", "tiles.csv")
         if tiles_csv.exists():
-            df = balance(cfg, df, tiles_csv)
+            df = balance(cfg, df, tiles_csv, shading.load(cfg))
         else:
             log.warning("%s not found: per-tile levels without tile balancing", tiles_csv)
     if c["per_slice"]:
@@ -144,8 +145,10 @@ def compute_levels(cfg):
     return df
 
 
-def balance(cfg, df, tiles_csv):
-    """Replace lo/hi by one common window per z, mapped through per-tile gain/offset (columns g, o)."""
+def balance(cfg, df, tiles_csv, fields=None):
+    """Replace lo/hi by one common window per z, mapped through per-tile gain/offset (columns g, o).
+
+    fields: shading fields {(segment, tile): gain} divided out of the thumbnails first."""
     c = cfg["intensity"]
     thumbs_dir = step_path(cfg, "preview", "thumbs")
     stitch = transforms.read_csv(tiles_csv, ["z", "tile"])
@@ -154,7 +157,8 @@ def balance(cfg, df, tiles_csv):
     sampled = df[(df["pos"] - first) % int(c["balance_every"]) == 0]
     found = []
     for z, rows in sampled.groupby("z"):
-        found += [{"z": z, "tile": t, "g": g, "o": o} for t, (g, o) in measure(rows, stitch, thumbs_dir).items()]
+        meas_z = measure(rows, stitch, thumbs_dir, fields or {}, c["balance_tissue_only"])
+        found += [{"z": z, "tile": t, "g": g, "o": o} for t, (g, o) in meas_z.items()]
     # Float columns even when nothing was measured: object columns break the assignments below.
     meas = pd.DataFrame(found, columns=["z", "tile", "g", "o"]).astype({"z": int, "g": float, "o": float})
     log.info("tile balance measured at %d of %d sampled slices", meas["z"].nunique(), sampled["z"].nunique())
@@ -178,19 +182,32 @@ def balance(cfg, df, tiles_csv):
     return df
 
 
-def measure(rows, stitch, thumbs_dir):
-    """{tile: (gain, offset)} at one z from its thumbnails' overlaps; {} if no tile pair overlaps."""
+def measure(rows, stitch, thumbs_dir, fields=None, tissue_only=True):
+    """{tile: (gain, offset)} at one z from its thumbnails' overlaps; {} if no tile pair overlaps.
+
+    Thumbnails are divided by their shading field (``fields``, by (segment, tile)) when there is
+    one; with ``tissue_only`` background pixels (resin, off-sample) are left out of the comparison,
+    so an overlap strip that is mostly resin can't set a tile's gain from the resin's brightness.
+    """
     z = int(rows["z"].iloc[0])
     imgs, to_montage = {}, {}
     for r in rows.itertuples():
         if pd.isna(r.npy) or (z, r.tile) not in stitch:
             continue
-        t8 = np.load(thumbs_dir / r.npy, mmap_mode="r")[int(r.i)]
-        imgs[r.tile] = thumb_values(t8, r.p0_5, r.p99_5)
+        t8 = np.asarray(np.load(thumbs_dir / r.npy, mmap_mode="r")[int(r.i)])
+        v = thumb_values(t8, r.p0_5, r.p99_5)
+        field = (fields or {}).get((int(r.segment), r.tile))
+        if field is not None:
+            v = v / field
+        if tissue_only:
+            v[background.mask(t8)] = np.nan
+        imgs[r.tile] = v
         to_montage[r.tile] = transforms.compose(stitch[(z, r.tile)], thumb_to_tile(t8.shape, (r.height, r.width)))
     rels = []
     for a, b in itertools.combinations(sorted(imgs), 2):
         va, vb = overlap_values(imgs[a], imgs[b], to_montage[a], to_montage[b])
+        ok = np.isfinite(va) & np.isfinite(vb)
+        va, vb = va[ok], vb[ok]
         if len(va) >= MIN_OVERLAP_PX and (rel := relation(va, vb)):
             rels.append((a, b, *rel, len(va)))
     return solve(connected(rels)) if rels else {}
@@ -209,12 +226,6 @@ def connected(rels):
     _, label = connected_components(edges, directed=False)
     big = np.bincount(label).argmax()
     return [r for r in rels if label[k[r[0]]] == big]
-
-
-def thumb_to_tile(thumb_shape, tile_shape):
-    """Thumbnail pixel index -> tile pixel index (pixel centres)."""
-    sy, sx = tile_shape[0] / thumb_shape[0], tile_shape[1] / thumb_shape[1]
-    return np.array([[sx, 0.0, 0.5 * sx - 0.5], [0.0, sy, 0.5 * sy - 0.5]])
 
 
 def overlap_values(img_a, img_b, A, B):
@@ -291,7 +302,9 @@ def plot(df, path):
 def main(argv=None):
     p = base_parser(__doc__.splitlines()[0])
     args = p.parse_args(argv)
-    cfg = setup(args, DEFAULTS)
+    cfg = setup(args, deep_merge(DEFAULTS, shading.DEFAULTS))
+    if cfg["shading"]["enabled"]:
+        shading.solve(cfg)
     df = compute_levels(cfg)
     atomic_write(step_dir(cfg, "intensity", "levels.csv"),
                  lambda t: df[["z", "tile", "lo", "hi"]].to_csv(t, index=False, float_format="%.2f"))

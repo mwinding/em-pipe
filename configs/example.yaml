@@ -107,7 +107,16 @@ intensity:
   break_at_seams: true       # restart smoothing at seams (it always restarts at segment changes)
   balance_tiles: true        # match brightness of overlapping tiles (needs stitch/tiles.csv)
   balance_every: 10          # measure tile overlaps every N selected slices
+  balance_tissue_only: true  # compare overlaps on tissue pixels only (background left out)
   per_slice: true            # follow each tile's slice-to-slice brightness jumps (else they flicker in z)
+
+shading:                     # flat-field: a smooth gain field per tile position and segment, from the thumbnails
+  enabled: false             # runs in the intensity job; render divides each tile slice by its field
+  every: 20                  # measure every N-th selected slice
+  poly_degree: 3             # 2D polynomial fitted to log(brightness / tissue median)
+  min_slices: 10             # (segment, tile) measured in fewer slices keep gain 1
+  min_count: 5               # pixels measured in fewer slices than this don't enter the fit
+  max_gain: 1.5              # fields are clipped to [1 / max_gain, max_gain]
 
 # Curtaining removal inside render. Tune first: python -m pipeline.destreak test --config C --z Z --tile r-c
 destreak:

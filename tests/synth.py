@@ -76,7 +76,7 @@ def make_volume(shape, seed=0, sigma=(1.0, 2.0, 2.0), n_blobs=None):
 
 def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overlap=(24, 28),
                  start=datetime(2026, 9, 24, 23, 35, 0), interval_s=142.0, drift_step=1.5,
-                 drift_jumps=None, gaps=None, parts=None, z_positions=None, tile_gain=None,
+                 drift_jumps=None, gaps=None, parts=None, z_positions=None, tile_gain=None, tile_shading=None,
                  intensity_drift=0.0, streaks=0.0, noise=0.01, seed=0, faults=None,
                  lo=26000, hi=41000):
     """Write a synthetic dataset under ``root`` and return its ground truth.
@@ -86,6 +86,8 @@ def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overl
     drift_jumps: {z: (dx, dy)} extra jump in drift at z
     z_positions: axial sampling position per slice (default 0, 1, 2, ...)
     tile_gain: {tile: gain} multiplicative intensity per tile
+    tile_shading: {tile: (ax, ay)} multiplicative gradient across the tile's raw values (detector fall-off),
+      1 + ax * (x/w - 1/2) + ay * (y/h - 1/2)
     streaks: amplitude of vertical curtaining stripes (fraction of range)
     faults: {"duplicate": [(day_prefix, dst_tile, src_tile)],
              "truncate": [(day_prefix, tile, n_bytes)]   (cut n_bytes off the end of the pixel data),
@@ -138,6 +140,11 @@ def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overl
         days.setdefault(day, []).append((part, zs))
 
     gains = tile_gain or {}
+    shade = {}
+    for tile, (ax, ay) in (tile_shading or {}).items():
+        gx = 1 + ax * (np.arange(tw) / (tw - 1) - 0.5)
+        gy = 1 + ay * (np.arange(th) / (th - 1) - 0.5)
+        shade[tile] = (gy[:, None] * gx[None, :]).astype(np.float32)
     stripe = None
     if streaks:
         stripe = (rng.standard_normal(tw) * streaks).astype(np.float32)
@@ -157,7 +164,10 @@ def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overl
                         img = img + stripe[None, :]
                     img = img + rng.normal(0, noise, img.shape)
                     stack[i] = img
-                data = np.clip(lo + stack * (hi - lo), 0, 65535).astype(np.uint16)
+                raw = lo + stack * (hi - lo)
+                if tile in shade:
+                    raw = raw * shade[tile]
+                data = np.clip(raw, 0, 65535).astype(np.uint16)
                 labels = [LABEL.format(ts=timestamps[z], r=r, c=c) for z in zs]
                 name = f"{prefix}_tile{tile}{suffix}.tif"
                 write_imagej(root / name, data, labels)
