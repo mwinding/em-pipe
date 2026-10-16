@@ -47,6 +47,21 @@ render:
     enabled: false           # the main volume; a CLAHE version is derived from it
   downsample: 1
 
+export:
+  max_gb: 30                 # the 64 nm overview TIFF (~24 GB) rather than 128 nm
+
+# For Zetta: Neuroglancer precomputed, lossless (they asked for lossless, Oct 2026), all scales, sharded.
+precomputed:
+  enabled: true
+  encoding: raw
+  chunk: [128, 128, 128]
+  description: "P667 EM05024 35h, FIB-SEM, 8 nm isotropic; stitched, aligned, tissue 1-99 % display windows, no CLAHE (em-pipe)"
+
+# Upload to Zetta's bucket: set destination once known; the key goes in ~/.cloudvolume/secrets/ (by hand).
+upload:
+  enabled: false
+  destination: null
+
 # ~17,000 slices of ~1.4 GB (4 or 9 tiles). Arrays are task counts; chunks are spread over the tasks.
 slurm:
   mail_user: null            # your email, for failure mails
@@ -63,3 +78,9 @@ slurm:
   render_init: {cpus: 2, mem: 16G, time: "01:00:00"}
   render: {array: 30, cpus: 8, mem: 160G, time: "24:00:00"}       # ~265 slabs of 64 planes, 5-10 min each
   pyramid: {array: 20, cpus: 4, mem: 8G, time: "06:00:00"}        # s1: ~16k shards of ~0.5 s
+  export: {cpus: 4, mem: 64G, time: "04:00:00"}                  # the 64 nm TIFF (~24 GB) in memory
+  precomputed_init: {cpus: 2, mem: 8G, time: "01:00:00"}
+  precomputed: {array: 40, cpus: 4, mem: 16G, time: "12:00:00"}  # ~25k shards of 512^3 voxels
+  precomputed_verify: {cpus: 2, mem: 16G, time: "02:00:00"}
+  upload: {array: 16, cpus: 4, mem: 8G, time: "48:00:00"}
+  upload_finish: {cpus: 2, mem: 8G, time: "02:00:00"}
