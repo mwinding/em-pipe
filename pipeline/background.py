@@ -1,29 +1,31 @@
-"""Background masks: the large, uniform off-sample areas of a tile slice (empty resin, dark areas
-outside the sample), left out of the statistics that set display levels.
+"""Background masks: the large off-sample areas of a tile slice (empty resin, also with shading
+gradients or curtaining stripes; dark areas), left out of the statistics that set display levels.
 
-Works on an 8-bit image scaled to the slice's own 0.5-99.5 percentile range, so it doesn't depend
-on a dataset's absolute grey levels: background is near either end of that range (after light
-smoothing), has little texture (striped resin still counts), and forms connected areas of at least
-``min_px`` pixels. How much of a tile is background differs between datasets, tiles and fields of
-view; statistics without it give the same look whatever the amount.
+Background is where the image has no fine texture along y: the image minus its smoothed version
+along y (which removes shading gradients, and leaves curtaining stripes, which run along y, flat)
+has a local rms below ``max_texture`` greys, over connected areas of at least ``min_px`` pixels.
+Tissue has fine texture in every direction. Brightness plays no part, so a dataset's grey levels,
+the resin's shading and how much of a tile is off-sample don't change what counts as tissue.
+Works on an 8-bit image scaled to the slice's own 0.5-99.5 percentile range (the preview
+thumbnail); 35h, tuned by eye on 30 tile slices: resin with gradients and stripes caught, no pale
+tissue lost (an earlier brightness-based mask missed shaded and striped resin).
 """
 
 import numpy as np
 from scipy import ndimage
 
-BRIGHT = 235     # smoothed grey (of 255) above which a uniform area is background
-DARK = 20        # ... and below which
-MAX_SD = 10.0    # local standard deviation (greys) below which an area counts as uniform
-MIN_PX = 400     # smallest background area, in pixels of the image passed in
-GROW_PX = 3      # background grown by this much: the smoothed edge of an area would leave a rim
+MAX_TEXTURE = 3.0   # local rms (greys) of the fine texture along y below which an area is background
+SMOOTH_Y = 6.0      # sigma (px) of the smoothing along y whose residual is the fine texture
+MIN_PX = 1500       # smallest background area, in pixels of the image passed in
+GROW_PX = 3         # background grown by this much: the smoothed edge of an area would leave a rim
 
 
-def mask(img8, bright=BRIGHT, dark=DARK, max_sd=MAX_SD, min_px=MIN_PX, grow_px=GROW_PX):
+def mask(img8, max_texture=MAX_TEXTURE, min_px=MIN_PX, grow_px=GROW_PX):
     """Boolean background mask of an 8-bit image scaled to its own 0.5-99.5 percentiles."""
     t = np.asarray(img8, np.float32)
-    sm = ndimage.gaussian_filter(t, 1.5)
-    sd = np.sqrt(np.maximum(ndimage.gaussian_filter(t * t, 3) - ndimage.gaussian_filter(t, 3) ** 2, 0))
-    bg = ndimage.binary_opening(((sm > bright) | (sm < dark)) & (sd < max_sd), iterations=2)
+    fine = t - ndimage.gaussian_filter1d(t, SMOOTH_Y, axis=0)
+    rms = np.sqrt(ndimage.gaussian_filter(fine * fine, 3))
+    bg = ndimage.binary_opening(rms < max_texture, iterations=2)
     lab, n = ndimage.label(bg)
     if n:
         sizes = np.asarray(ndimage.sum(bg, lab, range(1, n + 1)))

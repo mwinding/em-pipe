@@ -223,8 +223,8 @@ def test_stats_ignore_dark_edge_bands():
 
 
 def test_tissue_stats_leave_out_uniform_background():
-    """A tile with a large uniform bright area (empty resin): its tissue percentiles are those of
-    the tissue alone, its all-pixel percentiles are not; a tile of tissue only has both alike."""
+    """A tile with a large area of empty resin: its tissue percentiles are those of the tissue
+    alone, its all-pixel percentiles are not; a tile of tissue only has both alike."""
     from pipeline import features
     from pipeline.preview import slice_stats, tissue_stats
     rng = np.random.default_rng(0)
@@ -242,3 +242,20 @@ def test_tissue_stats_leave_out_uniform_background():
     so = slice_stats(only)
     to = tissue_stats(only, features.to_uint8(only, so["p0_5"], so["p99_5"]))
     assert to["tissue_fraction"] > 0.99 and abs(to["t_p50"] - so["p50"]) < 50
+
+
+def test_background_mask_catches_shaded_and_striped_resin_not_tissue():
+    """Resin with a brightness gradient and with curtaining stripes (along y) is background;
+    textured tissue of any brightness, including pale tissue, is not."""
+    from pipeline import background
+    rng = np.random.default_rng(1)
+    h, w = 240, 360
+    img = np.empty((h, w))
+    img[:, :120] = 60 + 25 * rng.standard_normal((h, 120))                       # dark-ish tissue
+    img[:, 120:240] = 200 + 12 * rng.standard_normal((h, 120))                   # pale tissue
+    ramp = np.linspace(250, 150, h)[:, None]                                     # shaded resin
+    stripes = 8 * np.sin(np.arange(120) / 2.0)[None, :]                          # curtaining
+    img[:, 240:] = ramp + stripes + 0.5 * rng.standard_normal((h, 120))
+    bg = background.mask(np.clip(img, 0, 255).astype(np.uint8))
+    assert bg[:, 250:].mean() > 0.95                      # shaded, striped resin: background
+    assert bg[:, 5:110].mean() < 0.01 and bg[:, 130:230].mean() < 0.01   # tissue: not
