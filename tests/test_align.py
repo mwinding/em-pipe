@@ -593,3 +593,16 @@ def test_rejects_bad_options(drift_data, tmp_path):
     cfg = synth.write_config(tmp_path / "config.yaml", truth.raw_dir, out, align={"ransac_model": "elastic"})
     with pytest.raises(ValueError, match="ransac_model"):
         align.main(["run", "--config", str(cfg)])
+
+
+def test_chunk_is_current_checks_slice_times(tmp_path):
+    """Chunks record their slices' acquisition times; a chunk whose z now hold other slices (a late
+    day inserted before them) is matched again. Older chunks without times are judged as before."""
+    path = tmp_path / "chunk.npz"
+    sig, settings = ["5:0-0", "6:0-0"], {"scale": 0.25}
+    stamps = ["5:2026-10-15T00:00:20", "6:2026-10-15T00:02:40"]
+    np.savez(path, slices=np.array(sig), stamps=np.array(stamps), settings=json.dumps(settings))
+    assert align._chunk_is_current(path, sig, settings, stamps)
+    assert not align._chunk_is_current(path, sig, settings, ["5:2026-10-14T01:00:00", "6:2026-10-14T01:02:20"])
+    np.savez(path, slices=np.array(sig), settings=json.dumps(settings))
+    assert align._chunk_is_current(path, sig, settings, stamps)

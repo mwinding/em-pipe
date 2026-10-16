@@ -416,16 +416,21 @@ def _load(cfg):
     if slices.empty:
         raise SystemExit("stitch: no selected, non-excluded slices in check/slices.csv")
     refs = {int(s): min(g["tile"], key=tile_key) for s, g in slices.groupby("segment")}
-    gauge = {int(z): (int(s), refs[int(s)]) for z, s in slices.groupby("z")["segment"].first().items()}
+    first = slices.groupby("z")[["segment", "timestamp"]].first()
+    gauge = {int(z): (int(r.segment), refs[int(r.segment)], pd.Timestamp(r.timestamp).isoformat())
+             for z, r in first.iterrows()}
     return slices, sample_z(allrows, cfg["stitch"]["sample_every"]), gauge
 
 
-def _stale(rec, opts, segment, reference):
+def _stale(rec, opts, segment, reference, timestamp=None):
     """Why a stored sample doesn't fit slices.csv and the config any more ('' if it does).
 
     The reference tile depends on the selection; samples solved with different references are in
-    different frames and must not be mixed.
+    different frames and must not be mixed. A sample whose z now holds another slice (data inserted
+    before it, e.g. a day exported late) is out of date too.
     """
+    if timestamp is not None and rec.get("timestamp") not in (None, timestamp):
+        return f"made for the slice acquired {rec['timestamp']}; z {rec['z']} is now {timestamp}"
     if (rec["segment"], rec["reference"]) != (segment, reference):
         return (f"made for segment {rec['segment']} with reference tile {rec['reference']}, "
                 f"now segment {segment} with {reference}")

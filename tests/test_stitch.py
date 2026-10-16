@@ -522,3 +522,11 @@ def test_single_tile_segment_then_grid(tmp_path):
     np.testing.assert_allclose(single[["a", "b", "tx", "c", "d", "ty"]].to_numpy(), [[1, 0, 0, 0, 1, 0]] * len(single))
     layout = json.loads((out / "work" / "stitch" / "layout.json").read_text())["segments"]
     assert layout["0"]["grid_shape"] == [1, 1] and layout["1"]["grid_shape"] == [2, 2]
+
+
+def test_stale_when_z_holds_another_slice():
+    rec = {"z": 7, "segment": 0, "reference": "0-0", "timestamp": "2026-10-15T00:00:20",
+           "settings": {k: stitch.DEFAULTS["stitch"][k] for k in stitch._RUN_KEYS}}
+    opts = stitch.DEFAULTS["stitch"]
+    assert stitch._stale(rec, opts, 0, "0-0", "2026-10-15T00:00:20") == ""
+    assert "now" in stitch._stale(rec, opts, 0, "0-0", "2026-10-14T03:10:00")

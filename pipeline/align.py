@@ -115,6 +115,7 @@ def run(cfg, task_id, num_tasks, overwrite=False):
     stitch = _stitch_transforms(cfg, df)
     by_z = dict(tuple(df.groupby("z")))
     tiles_by_z = {z: g["tile"].tolist() for z, g in by_z.items()}
+    when = _times(df)
     out_dir = step_dir(cfg, "align", "matches")
     out_dir.mkdir(exist_ok=True)
     cache = StackCache(cfg["raw_dir"])
@@ -123,12 +124,13 @@ def run(cfg, task_id, num_tasks, overwrite=False):
     todo = cli.my_chunks(all_chunks, task_id, num_tasks)
     log.info("task %d/%d: %d of %d chunks", task_id, num_tasks, len(todo), len(all_chunks))
     for core, ext in todo:
-        path, sig = _chunk_path(out_dir, core, size), _signature(ext, tiles_by_z)
-        if not overwrite and _chunk_is_current(path, sig, settings):
+        path, sig, stamps = _chunk_path(out_dir, core, size), _signature(ext, tiles_by_z), _stamps(ext, when)
+        if not overwrite and _chunk_is_current(path, sig, settings, stamps):
             log.info("%s exists, skipping", path.name)
             continue
         m = _match_chunk(core, ext, by_z, stitch, cache, a)
-        cli.atomic_write(path, lambda tmp: np.savez(tmp, slices=np.array(sig), settings=json.dumps(settings), **m))
+        cli.atomic_write(path, lambda tmp: np.savez(tmp, slices=np.array(sig), stamps=np.array(stamps),
+                                                    settings=json.dumps(settings), **m))
         log.info("%s: %d points, %d slice pairs", path.name, len(m["z_a"]),
                  len(set(zip(m["z_a"].tolist(), m["z_b"].tolist()))))
 
@@ -155,6 +157,17 @@ def _signature(ext, tiles_by_z):
     return [f"{z}:{t}" for z in ext for t in tiles_by_z[z]]
 
 
+def _times(df):
+    """{z: acquisition time (ISO)} of the selected slices."""
+    return {int(z): pd.Timestamp(t).isoformat() for z, t in df.groupby("z")["timestamp"].first().items()}
+
+
+def _stamps(ext, when):
+    """'z:time' of a chunk's slices: data inserted before them (a late day) renumbers z, and a chunk
+    whose z now hold other slices must be matched again."""
+    return [f"{z}:{when[int(z)]}" for z in ext]
+
+
 def _chunks(zs, size, neighbors):
     """(core, ext) per chunk: core = the selected z in one block [k*size, (k+1)*size) of global z,
     ext = core + the next ``neighbors`` selected z (neighbours by position, gaps allowed).
@@ -176,12 +189,14 @@ def _chunk_path(out_dir, core, size):
     return Path(out_dir) / f"chunk_{z0:06d}-{z0 + size:06d}.npz"
 
 
-def _chunk_is_current(path, signature, settings):
+def _chunk_is_current(path, signature, settings, stamps=None):
     """True if ``path`` was matched over exactly these (z, tile) (appended data extends the last
-    chunks) with these run settings."""
+    chunks) with these run settings, and (chunks that record them) these slices' acquisition times."""
     if not path.exists():
         return False
     with np.load(path) as f:
+        if stamps is not None and "stamps" in f and f["stamps"].tolist() != stamps:
+            return False
         return ("settings" in f and "slices" in f and f["slices"].tolist() == signature
                 and json.loads(str(f["settings"])) == settings)
 
@@ -320,6 +335,7 @@ def _tile_matches(cfg, df, zs, a, z_lo, z_hi):
     """Point matches between slices in [z_lo, z_hi], per tile: arrays za, ta, qa, zb, tb, qb
     (tile names, tile pixels), from the chunks whose slices overlap that range."""
     tiles_by_z = df.groupby("z")["tile"].agg(list).to_dict()
+    when = _times(df)
     out_dir = step_path(cfg, "align", "matches")
     size, settings = int(a["chunk_slices"]), _settings(a)
     parts = []
@@ -327,7 +343,7 @@ def _tile_matches(cfg, df, zs, a, z_lo, z_hi):
         if core[-1] < z_lo or core[0] > z_hi:
             continue
         path = _chunk_path(out_dir, core, size)
-        if not _chunk_is_current(path, _signature(ext, tiles_by_z), settings):
+        if not _chunk_is_current(path, _signature(ext, tiles_by_z), settings, _stamps(ext, when)):
             raise FileNotFoundError(f"{path.name} missing, out of date or made with other align settings "
                                     "(run 'align run')")
         with np.load(path) as f:
@@ -349,12 +365,13 @@ def _load_matches(cfg, df, zs, a):
     """
     stitch = _stitch_transforms(cfg, df)
     tiles_by_z = df.groupby("z")["tile"].agg(list).to_dict()
+    when = _times(df)
     out_dir = step_path(cfg, "align", "matches")
     size, settings = int(a["chunk_slices"]), _settings(a)
     parts, missing = [], []
     for core, ext in _chunks(zs.tolist(), size, int(a["neighbors"])):
         path = _chunk_path(out_dir, core, size)
-        if not _chunk_is_current(path, _signature(ext, tiles_by_z), settings):
+        if not _chunk_is_current(path, _signature(ext, tiles_by_z), settings, _stamps(ext, when)):
             missing.append(path.name)
             continue
         with np.load(path) as f:

@@ -102,9 +102,16 @@ def read_chunk(path):
 
 
 def has_rows(df, want):
-    """True if ``df`` has a row for every (z, tile) of ``want``."""
+    """True if ``df`` has a row for every (z, tile) of ``want``, of the same slice (acquisition time:
+    data inserted before it, e.g. a day exported late, renumbers z)."""
     have = pd.MultiIndex.from_frame(df[["z", "tile"]])
-    return bool(pd.MultiIndex.from_frame(want[["z", "tile"]]).isin(have).all())
+    if not pd.MultiIndex.from_frame(want[["z", "tile"]]).isin(have).all():
+        return False
+    if "timestamp" not in df or "timestamp" not in want:
+        return True
+    got = df.set_index(["z", "tile"])["timestamp"].astype(str)
+    exp = want.set_index(["z", "tile"])["timestamp"].map(lambda t: pd.Timestamp(t).isoformat())
+    return bool((got.reindex(exp.index) == exp).all())
 
 
 def thumb_name(name, tile):

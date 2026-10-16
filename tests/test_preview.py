@@ -274,3 +274,15 @@ def test_background_mask_catches_streaky_black_edges_not_dark_granules():
     bg = background.mask(np.clip(img, 0, 255).astype(np.uint8))
     assert bg[:, -25:].mean() > 0.95
     assert not bg[44:56, 54:66].any() and not bg[114:126, 144:156].any() and not bg[194:206, 84:96].any()
+
+
+def test_has_rows_checks_the_slice_not_just_z():
+    """A day exported late renumbers the z after it: a chunk's rows for those z are other slices."""
+    import pandas as pd
+    from pipeline.preview import has_rows
+    t0 = pd.Timestamp("2026-10-15 00:00:20")
+    want = pd.DataFrame({"z": [5, 5], "tile": ["0-0", "0-1"], "timestamp": [t0, t0]})
+    done = pd.DataFrame({"z": [5, 5], "tile": ["0-0", "0-1"], "timestamp": [t0.isoformat()] * 2})
+    assert has_rows(done, want)
+    assert not has_rows(done.assign(timestamp="2026-10-13T23:59:01"), want)
+    assert has_rows(done.drop(columns="timestamp"), want)          # older chunk files: z and tile only
