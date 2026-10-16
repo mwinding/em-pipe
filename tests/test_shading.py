@@ -55,6 +55,7 @@ def test_fields_recover_the_gradients(shaded):
         assert np.abs(f / want - 1).max() < 0.02, tile       # within 2 % everywhere
     info = json.loads((out / "work" / "intensity" / "shading.json").read_text())
     assert {(i["segment"], i["tile"]) for i in info["fields"]} == set(fields) and info["fields"][0]["slices"] == N
+    assert info["settings"]["resin_weight"] == 0.3
     assert (out / "qc" / "shading.png").exists()
     # off: nothing loaded; on without the file: an error that says what to run
     assert shading.load({"shading": {"enabled": False}}) == {}

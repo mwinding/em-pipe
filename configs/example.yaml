@@ -116,6 +116,7 @@ shading:                     # flat-field: a smooth gain field per tile position
   poly_degree: 2             # 2D polynomial fitted to log(brightness / tissue median)
   min_slices: 10             # (segment, tile) measured in fewer slices keep gain 1
   min_count: 5               # pixels measured in fewer slices than this don't enter the fit
+  resin_weight: 0.3          # plain bright resin (scaled to its own median) enters the fit at this weight vs tissue (0: tissue only)
   prior_weight: 0.2          # pull towards gain 1 (per pixel, in slices): the field relaxes to 1 where little tissue was measured
   max_gain: 1.5              # fields are clipped to [1 / max_gain, max_gain]
 

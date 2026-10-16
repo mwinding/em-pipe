@@ -1,10 +1,10 @@
 """Before/after of the current intensity levels (and shading fields) on chosen slices, at 32 nm.
 
-    python tools/shading_before_after.py CONFIG OLD_VOLUME Z[,Z...]
+    python tools/shading_before_after.py CONFIG OLD_VOLUME Z[,Z...] [NAME]
 
 old = OLD_VOLUME's 32 nm plane (an earlier render in the same output_dir, its render.json under
 work/render/); new = the slice rendered now from the raw tiles with the current levels and fields.
-Writes <output_dir>/qc/shading_test/z<z>.tif (ImageJ stack: old, new) and z<z>.png side by side.
+Writes <output_dir>/qc/<NAME, default shading_test>/z<z>.tif (ImageJ stack: old, new) and z<z>.png side by side.
 Runs on NEMO (reads the raw tiles): sbatch --cpus-per-task=8 --mem=64G --wrap "source slurm/env.sh; python ..."
 """
 import json
@@ -22,9 +22,10 @@ from pipeline import omezarr, render, shading  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
 
 CFG, OLD, ZS = sys.argv[1], sys.argv[2], [int(v) for v in sys.argv[3].split(",")]
+NAME = sys.argv[4] if len(sys.argv) > 4 else "shading_test"
 cfg = load_config(CFG, step_defaults=deep_merge(render.DEFAULTS, shading.DEFAULTS))
 out = Path(cfg["output_dir"])
-qc = out / "qc" / "shading_test"
+qc = out / "qc" / NAME
 qc.mkdir(parents=True, exist_ok=True)
 old_stem = OLD.removesuffix(".zarr").removesuffix(".ome")
 old_meta = json.loads((out / "work" / "render" / old_stem / "render.json").read_text())

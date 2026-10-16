@@ -6,8 +6,9 @@ An SEM tile is not evenly bright: the detector response falls off towards one si
 per-tile gain/offset can flatten and which shows as dark tile edges and steps at the seams. The
 field is estimated retrospectively, as in BaSiC/CIDRE and the flat-field stages of TEM and
 multi-SEM montage pipelines: every ``every``-th slice's preview thumbnail is divided by its own
-tissue median, the ratio is averaged per pixel over the segment's slices (tissue only, so the
-anatomy averages out and the resin doesn't bias it), and a low-order 2D polynomial is fitted to
+tissue median, the ratio is averaged per pixel over the segment's slices (tissue at full weight,
+so the anatomy averages out; plain bright resin, scaled to its own median, at ``resin_weight``,
+so the empty areas between tiles get flattened too), and a low-order 2D polynomial is fitted to
 the log of that map so only the slow fall-off is kept. Where a tile position has little or no
 tissue in any slice (a corner that always holds the lumen), the fit is pulled towards no
 correction (``prior_weight``) rather than left to extrapolate. Each field is scaled to a
@@ -44,13 +45,16 @@ DEFAULTS = {
         "poly_degree": 2,      # degree of the 2D polynomial fitted to log(brightness / tissue median)
         "min_slices": 10,      # (segment, tile) with fewer measured slices keep gain 1
         "min_count": 5,        # pixels measured in fewer slices than this don't enter the fit
+        "resin_weight": 0.3,   # weight of plain bright resin pixels (scaled to the resin's own median)
+                               # relative to tissue pixels; 0: tissue only
         "prior_weight": 0.2,   # every pixel also pulls the fit towards gain 1 with this weight (in units of
                                # one measured slice): the field decays to 1 where few slices have tissue
         "max_gain": 1.5,       # fields are clipped to [1 / max_gain, max_gain]
     },
 }
 
-MIN_TISSUE_PX = 2000   # thumbnail tissue pixels a slice needs to count
+MIN_TISSUE_PX = 2000   # thumbnail tissue pixels a slice needs to count (resin: the same, to be used)
+RESIN_MIN_GREY = 128   # background darker than this (of 255, on the autoscaled thumbnail) is not resin
 
 
 def _terms(degree):
@@ -98,15 +102,21 @@ def measure(cfg):
     zs = sorted(df["z"].unique())[::max(1, int(c["every"]))]
     df = df[df["z"].isin(zs)]
     acc = {}
+    rw = float(c["resin_weight"])
     for r in df.itertuples():
         t8 = np.asarray(np.load(thumbs_dir / r.npy, mmap_mode="r")[int(r.i)])
-        tissue = ~background.mask(t8)
+        bg = background.mask(t8)
+        tissue = ~bg
         if tissue.sum() < MIN_TISSUE_PX:
             continue
         v = thumb_values(t8, r.p0_5, r.p99_5)
-        s, n, k = acc.setdefault((int(r.segment), r.tile), [np.zeros(t8.shape), np.zeros(t8.shape, int), 0])
+        s, n, k = acc.setdefault((int(r.segment), r.tile), [np.zeros(t8.shape), np.zeros(t8.shape), 0])
         s[tissue] += v[tissue] / np.median(v[tissue])
         n[tissue] += 1
+        resin = bg & (t8 > RESIN_MIN_GREY)
+        if rw > 0 and resin.sum() >= MIN_TISSUE_PX:
+            s[resin] += rw * v[resin] / np.median(v[resin])
+            n[resin] += rw
         acc[(int(r.segment), r.tile)][2] = k + 1
     return {key: (np.divide(s, n, out=np.ones_like(s), where=n > 0), n, k) for key, (s, n, k) in acc.items()}
 
@@ -187,7 +197,7 @@ def plot(measured, fields, path):
         mean_map, count, k = measured[(seg, tile)]
         shown = np.where(count >= 1, mean_map, np.nan)
         im = ax_row[0].imshow(shown, cmap="RdBu_r", vmin=0.9, vmax=1.1)
-        ax_row[0].set_title(f"segment {seg} tile {tile}: measured ({k} slices)", fontsize=8)
+        ax_row[0].set_title(f"segment {seg} tile {tile}: measured ({k} slices, tissue + weighted resin)", fontsize=8)
         f = fields.get((seg, tile))
         if f is not None:
             ax_row[1].imshow(f, cmap="RdBu_r", vmin=0.9, vmax=1.1)
