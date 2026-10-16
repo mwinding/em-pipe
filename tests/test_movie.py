@@ -120,3 +120,30 @@ def test_scale_bar_lengths():
     frame = movie.draw_scale_bar(np.full((1080, 1920), 128, np.uint8), 8.0)     # 8 nm/px: 1 um bar = 125 px
     rows = np.where((frame == 255).sum(axis=1) >= 120)[0]
     assert len(rows) and (frame[rows[0]] == 255).sum() in range(124, 128)
+
+
+def test_turned_plane(tmp_path):
+    """Turned 90 degrees the frame is the z-y plane (frame columns along z); slightly turned, it
+    matches the x-y frame."""
+    data = _volume(tmp_path / "v.ome.zarr", shape=(96, 64, 80))
+    levels = movie.open_levels(tmp_path / "v.ome.zarr", 0.1)
+    frame, level = movie.render_frame(levels, SIZE, 1.0, 40.5, 32, 47.5, rotation=90)
+    # column u: z = 47.5 + (u + 0.5 - 32) -> slice 16 + u; row v: y = 8 + v; x = 40
+    assert level == 0 and np.array_equal(frame, data[0][16:80, 8:56, 40].T)
+    flat, _ = movie.render_frame(levels, SIZE, 1.0, 40, 32, 47)
+    near, _ = movie.render_frame(levels, SIZE, 1.0, 40, 32, 47, rotation=0.001)
+    assert np.abs(near.astype(int) - flat).max() <= 1
+
+
+def test_timeline_with_rotation(tmp_path):
+    m = {**_cfg(tmp_path)["movie"], "rotate_deg": 90, "rotate_s": 1.0, "rotated_s": 1.0, "slices_per_s": 2,
+         "target": [150, 90, 50]}
+    plan = movie.timeline(m, (200, 160, 256))
+    assert len(plan) == 60 and (plan["rotation"].iloc[:41] == 0).all() and plan["rotation"].iloc[50:].eq(90).all()
+    # turned: the view moves along -x instead of z (the plane's normal), at the same 2 voxels/s
+    tail = plan.iloc[50:]
+    assert np.diff(tail["cx"]) * 10 == pytest.approx(-2) and np.diff(tail["z"]) == pytest.approx(0, abs=1e-9)
+    assert (plan["cx"].iloc[:31] - plan["cx"].iloc[30]).abs().max() > 0 and plan["cx"].iloc[30] == pytest.approx(150)
+    # the turned frame spans 32 slices either side of its centre, ~3 slices past the target by then
+    with pytest.raises(ValueError, match="from -29 to \\+35 slices .* between 29 and 163"):
+        movie.timeline({**m, "target": [150, 90, 20]}, (200, 160, 256))

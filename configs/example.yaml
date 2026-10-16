@@ -203,6 +203,9 @@ movie:                       # fly-through MP4 (python -m pipeline.movie; sbatch
   hold_start_s: 2.0          # on the whole slice before the zoom
   zoom_s: 14.0               # the zoom
   hold_end_s: 4.0            # at the final zoom after it
+  rotate_deg: 0              # then turn the cutting plane about the frame's vertical axis (90: to the y-z plane)
+  rotate_s: 6.0              # the rotation
+  rotated_s: 4.0             # after it
   zoom_start: null           # voxels per frame px at the start; null: the whole slice fits the frame
   zoom_end: 1.0              # voxels per frame px at the end (1: full resolution)
   scale_bar: false

@@ -1,5 +1,7 @@
 """Fly-through movie of a rendered volume: the whole slice first, then a smooth zoom into a target
-point down to full resolution, scrolling through z the whole time (faster when zoomed out, if set).
+point down to full resolution, scrolling through z the whole time (faster when zoomed out, if set);
+optionally the cutting plane then turns about the frame's vertical axis (to the y-z plane at 90
+degrees, showing the voxels are isotropic) while the scroll carries on along the plane's normal.
 
 Each frame reads only what is on screen, from the pyramid level just finer than the frame's zoom
 (the whole slice at 64-128 nm at the start, a frame-sized window at 8 nm at the end), so a 20 s
@@ -48,6 +50,10 @@ DEFAULTS = {
         "hold_start_s": 2.0,      # on the whole slice before the zoom starts
         "zoom_s": 14.0,           # the zoom
         "hold_end_s": 4.0,        # at the final zoom after it
+        "rotate_deg": 0,          # then turn the cutting plane about the frame's vertical axis by this much
+                                  # (90: to the y-z plane); 0: no rotation
+        "rotate_s": 6.0,          # the rotation
+        "rotated_s": 4.0,         # after it
         "zoom_start": None,       # voxels per frame px at the start; null: the whole slice fits the frame
         "zoom_end": 1.0,          # voxels per frame px at the end (1: full resolution; 0.5: 2x magnified)
         "scale_bar": False,
@@ -68,9 +74,22 @@ def movie_name(cfg):
     return m["name"] or volume_path(cfg).name.removesuffix(".ome.zarr") + "_movie"
 
 
+def _ease(t, start, end):
+    """0 before ``start``, 1 after ``end``, a cosine ease in between."""
+    u = np.clip((t - start) / (end - start), 0, 1) if end > start else (t >= start).astype(float)
+    return (1 - np.cos(np.pi * u)) / 2
+
+
+def _integral(v, t, anchor):
+    """Integral of ``v`` (sampled at frame times ``t``) over time, 0 at time ``anchor``."""
+    c = np.concatenate([[0], np.cumsum((v[1:] + v[:-1]) / 2 * np.diff(t))]) if len(t) > 1 else np.zeros(1)
+    at = np.interp(anchor, t, c) if anchor <= t[-1] else c[-1] + v[-1] * (anchor - t[-1])
+    return c - at
+
+
 def timeline(m, shape0):
-    """One row per frame: t (s), zoom (s0 voxels per frame px), view centre cx, cy and slice z
-    (s0 voxels; continuous, z = an exact slice)."""
+    """One row per frame: t (s), zoom (s0 voxels per frame px), the view centre cx, cy, z (s0 voxels;
+    z = an exact slice) and the cutting plane's rotation about the frame's vertical axis (degrees)."""
     if not m["target"] or len(m["target"]) != 3:
         raise ValueError("set movie.target: [x, y, z] in voxels, as neuroglancer shows them")
     w, h = m["size"]
@@ -79,16 +98,17 @@ def timeline(m, shape0):
     fps = m["fps"]
     t0 = m["hold_start_s"]
     t1 = t0 + m["zoom_s"]
-    if t0 < 0 or m["zoom_s"] <= 0 or m["hold_end_s"] < 0:
-        raise ValueError("movie: hold_start_s and hold_end_s must be >= 0 and zoom_s > 0")
+    t2 = t1 + m["hold_end_s"]
+    t3 = t2 + (m["rotate_s"] if m["rotate_deg"] else 0)
+    if min(t0, m["hold_end_s"], m["rotate_s"], m["rotated_s"]) < 0 or m["zoom_s"] <= 0:
+        raise ValueError("movie: the hold and rotation times must be >= 0 and zoom_s > 0")
     nz, ny, nx = shape0
     tx, ty, tz = (float(v) for v in m["target"])
     n = int(round(movie_seconds(m) * fps))
     t = np.arange(n) / fps
     zs = float(m["zoom_start"] or max(nx / w, ny / h))
     ze = float(m["zoom_end"])
-    u = np.clip((t - t0) / (t1 - t0), 0, 1)
-    ease = (1 - np.cos(np.pi * u)) / 2
+    ease = _ease(t, t0, t1)
     zoom = np.exp(np.log(zs) + (np.log(ze) - np.log(zs)) * ease)
     # Centre: the volume's centre at zoom_start, the target at zoom_end, with the target's offset from
     # the centre proportional to (zoom - zoom_end): it moves straight to the frame centre on screen.
@@ -97,16 +117,21 @@ def timeline(m, shape0):
     cy = ty + (ny / 2 - ty) * k
     out_speed, in_speed = speeds(m)
     speed = out_speed + (in_speed - out_speed) * ease      # slices/s, with the zoom
-    # z = the integral of the speed, through the target slice when the zoom ends (t1)
-    travel = np.concatenate([[0], np.cumsum((speed[1:] + speed[:-1]) / 2 / fps)])
-    at_t1 = np.interp(t1, t, travel) if t1 <= t[-1] else travel[-1] + speed[-1] * (t1 - t[-1])
-    z = tz + m["direction"] * (travel - at_t1)
-    if z.min() < -1e-6 or z.max() > nz - 1 + 1e-6:
-        rel = z - tz
-        raise ValueError(f"movie: the scroll runs from z {z[0]:.0f} to {z[-1]:.0f}, outside the volume's "
-                         f"0-{nz - 1}: target z must be between {math.ceil(-rel.min() - 1e-6)} and "
-                         f"{math.floor(nz - 1 - rel.max() + 1e-6)} (or shorten the movie, or scroll slower)")
-    return pd.DataFrame({"frame": np.arange(n), "t": t, "zoom": zoom, "cx": cx, "cy": cy, "z": z})
+    theta = np.radians(m["rotate_deg"]) * _ease(t, t2, t3) if m["rotate_deg"] else np.zeros(n)
+    # The view moves along the cutting plane's normal, (-sin, 0, cos) in (x, y, z), and passes the
+    # target slice when the zoom ends (t1).
+    d = m["direction"]
+    cx = cx + _integral(-d * speed * np.sin(theta), t, t1)
+    z = tz + _integral(d * speed * np.cos(theta), t, t1)
+    span = w / 2 * zoom * np.abs(np.sin(theta))             # a turned frame's half-width along z
+    if (z - span).min() < -1e-6 or (z + span).max() > nz - 1 + 1e-6:
+        lo, hi = (z - span - tz).min(), (z + span - tz).max()
+        raise ValueError(f"movie: the frames reach from {lo:+.0f} to {hi:+.0f} slices around the target z, "
+                         f"outside the volume's 0-{nz - 1}: target z must be between "
+                         f"{math.ceil(-lo - 1e-6)} and {math.floor(nz - 1 - hi + 1e-6)} "
+                         f"(or shorten the movie, or scroll slower)")
+    return pd.DataFrame({"frame": np.arange(n), "t": t, "zoom": zoom, "cx": cx, "cy": cy, "z": z,
+                         "rotation": np.degrees(theta)})
 
 
 def speeds(m):
@@ -116,7 +141,8 @@ def speeds(m):
 
 
 def movie_seconds(m):
-    return m["hold_start_s"] + m["zoom_s"] + m["hold_end_s"]
+    rotation = m["rotate_s"] + m["rotated_s"] if m["rotate_deg"] else 0
+    return m["hold_start_s"] + m["zoom_s"] + m["hold_end_s"] + rotation
 
 
 def open_levels(root, cache_gb):
@@ -135,18 +161,26 @@ def open_levels(root, cache_gb):
 def _read(arr, z0, z1, y0, y1, x0, x1):
     """arr[z0:z1, y0:y1, x0:x1] as float32, zeros where the box is outside the array."""
     out = np.zeros((z1 - z0, y1 - y0, x1 - x0), np.float32)
-    _, ny, nx = arr.shape
-    ya, yb, xa, xb = max(y0, 0), min(y1, ny), max(x0, 0), min(x1, nx)
-    if ya < yb and xa < xb:
-        out[:, ya - y0:yb - y0, xa - x0:xb - x0] = arr[z0:z1, ya:yb, xa:xb].read().result()
+    nz, ny, nx = arr.shape
+    za, zb, ya, yb, xa, xb = max(z0, 0), min(z1, nz), max(y0, 0), min(y1, ny), max(x0, 0), min(x1, nx)
+    if za < zb and ya < yb and xa < xb:
+        out[za - z0:zb - z0, ya - y0:yb - y0, xa - x0:xb - x0] = arr[za:zb, ya:yb, xa:xb].read().result()
     return out
 
 
-def render_frame(levels, size, zoom, cx, cy, z):
+def _level(levels, zoom):
+    """The finest pyramid level that is not finer than ``zoom`` s0 voxels per frame px."""
+    return int(np.clip(math.floor(math.log2(zoom) + 1e-9), 0, len(levels) - 1))
+
+
+def render_frame(levels, size, zoom, cx, cy, z, rotation=0.0):
     """(uint8 frame, level used): the view of slice ``z`` centred on (cx, cy) at ``zoom`` s0 voxels
-    per frame px, resampled from the finest level that is not finer than the frame needs."""
+    per frame px, resampled from the finest level that is not finer than the frame needs; with a
+    ``rotation`` (degrees), on the plane through that point turned about the y axis instead."""
+    if abs(rotation) > 1e-6:
+        return _turned(levels, size, zoom, cx, cy, z, math.radians(rotation))
     w, h = size
-    level = int(np.clip(math.floor(math.log2(zoom) + 1e-9), 0, len(levels) - 1))
+    level = _level(levels, zoom)
     arr, f = levels[level], 2 ** level
     r = zoom / f                                      # level px per frame px
     # Continuous s0 coordinates (voxel i spans [i, i+1)) -> level pixel index: X / f - 0.5.
@@ -169,6 +203,40 @@ def render_frame(levels, size, zoom, cx, cy, z):
     interp = cv2.INTER_LINEAR if r >= 1 else cv2.INTER_CUBIC
     out = cv2.warpAffine(img, m, (w, h), flags=interp | cv2.WARP_INVERSE_MAP,
                          borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    return np.clip(np.rint(out), 0, 255).astype(np.uint8), level
+
+
+STRIP = 128   # frame columns per read in _turned
+
+
+def _turned(levels, size, zoom, cx, cy, z, theta):
+    """A frame on the plane through (cx, cy, z) that contains the y axis and is turned by ``theta``
+    (radians) from the x-y plane: frame columns run along (cos, 0, sin) in (x, y, z). Trilinear
+    sampling; no anti-aliasing, so meant for zooms up to ~1.5 voxels per frame px."""
+    w, h = size
+    level = _level(levels, zoom)
+    arr, f = levels[level], 2 ** level
+    s = (np.arange(w) + 0.5 - w / 2) * zoom                       # s0 voxels from the centre
+    xs = (cx + s * math.cos(theta)) / f - 0.5                     # level pixel indices
+    zs = (z + 0.5 + s * math.sin(theta)) / f - 0.5
+    ys = (cy + (np.arange(h) + 0.5 - h / 2) * zoom) / f - 0.5
+    ya, yb = math.floor(ys[0]), math.floor(ys[-1]) + 2
+    iy = (np.floor(ys).astype(int) - ya)[None, :]
+    wy = (ys - np.floor(ys)).astype(np.float32)[None, :]
+    out = np.empty((h, w), np.float32)
+    for c0 in range(0, w, STRIP):
+        x, zz = xs[c0:c0 + STRIP], zs[c0:c0 + STRIP]
+        xa, za = math.floor(x.min()), math.floor(zz.min())
+        box = _read(arr, za, math.floor(zz.max()) + 2, ya, yb, xa, math.floor(x.max()) + 2)
+        ix, iz = np.floor(x).astype(int) - xa, np.floor(zz).astype(int) - za
+        wx, wz = (x - np.floor(x)).astype(np.float32), (zz - np.floor(zz)).astype(np.float32)
+        acc = np.zeros((len(x), h), np.float32)
+        for dz, gz in ((0, 1 - wz), (1, wz)):
+            for dx, gx in ((0, 1 - wx), (1, wx)):
+                bz, bx = (iz + dz)[:, None], (ix + dx)[:, None]
+                line = box[bz, iy, bx] * (1 - wy) + box[bz, iy + 1, bx] * wy      # (columns, rows)
+                acc += (gz * gx)[:, None] * line
+        out[:, c0:c0 + STRIP] = acc.T
     return np.clip(np.rint(out), 0, 255).astype(np.uint8), level
 
 
@@ -228,13 +296,14 @@ def make_frames(cfg, only=None, overwrite=False):
         path = out / f"f{row.frame:05d}.png"
         if path.exists():
             continue
-        frame, level = render_frame(levels, m["size"], row.zoom, row.cx, row.cy, row.z)
+        frame, level = render_frame(levels, m["size"], row.zoom, row.cx, row.cy, row.z, row.rotation)
         if m["scale_bar"]:
             frame = draw_scale_bar(frame, row.zoom * voxel["x"])
         cli.atomic_write(path, lambda p: cv2.imwrite(p, frame, [cv2.IMWRITE_PNG_COMPRESSION, 1]))
         done += 1
         if done % 50 == 0:
-            log.info("frame %d/%d (zoom %.2f from s%d, z %.1f)", row.frame + 1, len(plan), row.zoom, level, row.z)
+            log.info("frame %d/%d (zoom %.2f from s%d, z %.1f, turned %.0f deg)", row.frame + 1, len(plan),
+                     row.zoom, level, row.z, row.rotation)
     log.info("%d frames written to %s", done, out)
     return out
 
