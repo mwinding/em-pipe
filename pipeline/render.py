@@ -12,6 +12,12 @@ config edit between init and run cannot mix geometries; re-running init detects 
 inputs or settings via the digest in render.json. A finished slab leaves
 ``<work folder>/done/slab_{k:06d}`` holding that digest; markers of any other plan do not count.
 
+Grey levels of a tile slice: raw values (destreaked when enabled), divided by the tile's flat-field
+(``shading``), with ``patchgrid`` mapped by the tile position's within-tile shape, then scaled by its
+window lo-hi from intensity/levels.csv (with patchgrid all three as one gain and one offset field
+per tile slice). ``run`` refuses when the flat-fields or shapes on disk are not the ones init
+planned with (re-solved, or switched off): re-run init with --overwrite.
+
 Geometry: output pixel (row i, col j) at downsample f is the mean of the aligned pixels
 ``origin_xy + (f*j, f*i) + [0, f)``. Pixel centres sit at integer coordinates (as in OpenCV).
 With ``render.rotate_deg: 180`` every plane is rotated 180 degrees in x-y about the canvas centre:
@@ -32,7 +38,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from . import elastic, omezarr, shading, transforms
+from . import elastic, omezarr, patchgrid, shading, transforms
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info
 from .config import deep_merge, get, step_path
 from .slices import StackCache, load_slices, voxel_size_nm, z_values
@@ -285,6 +291,10 @@ def init(cfg, overwrite=False):
         "elastic": elastic.load(cfg),
         "planes": planes,
     }
+    pg = patchgrid.digest(cfg)
+    if pg is not None:   # only when on: the same plan digest as volumes rendered before patchgrid existed
+        patchgrid.load(cfg)   # missing shapes fail here, not in every run task
+        meta["patchgrid"] = pg
     digest = hashlib.sha256(json.dumps(meta, sort_keys=True).encode())
     digest.update(plan.to_csv(index=False).encode())
     meta["digest"] = digest.hexdigest()
@@ -313,6 +323,24 @@ def init(cfg, overwrite=False):
              "(run array size <= %d)", root, meta["shape"], meta["voxel_nm"], meta["origin_xy"], len(zs),
              len(planes), n_slabs, n_slabs)
     return 0
+
+
+def plane_meta(cfg, old_meta, f, **settings):
+    """A plan for rendering single slices at downsample f on an earlier render's canvas and elastic
+    fields (``old_meta``, its render.json), with the config's grey-level corrections (destreak,
+    flat-field, patchgrid shapes) as init records them: for QC tools that compare slices rendered
+    with the current levels (``_tile_plan``) against an old volume. The levels are windows on the
+    corrected values, so a plan that kept the old volume's corrections would misrender them.
+    settings: render settings to override (e.g. clahe)."""
+    w, h = old_meta["canvas_size_xy"]
+    meta = {k: v for k, v in old_meta.items() if k != "patchgrid"}
+    meta.update({"downsample": f, "shape": [1, math.ceil(h / f), math.ceil(w / f)],
+                 "settings": {**old_meta["settings"], "downsample": f, **settings},
+                 "destreak": _destreak_settings(cfg), "shading": shading.digest(cfg)})
+    pg = patchgrid.digest(cfg)
+    if pg is not None:
+        meta["patchgrid"] = pg
+    return meta
 
 
 # ----- run ------------------------------------------------------------------------------
@@ -389,6 +417,11 @@ class _Renderer:
         self.tiles = {z: g.to_dict("records") for z, g in plan.groupby("z")}
         self.elastic = meta.get("elastic")
         self.shading = shading.load(cfg) if meta.get("shading") else {}
+        # patchgrid: per (segment, tile) its shape; flat-field and shape fused into fields once per tile position
+        self.shapes, self.R = patchgrid.load(cfg) if meta.get("patchgrid") else ({}, None)
+        if meta.get("patchgrid") and self.R is None:   # the plan's levels are windows on shape-corrected values
+            raise ValueError("the render plan applies patchgrid shapes but patchgrid.enabled is false in the config")
+        self.fields = {}
         self.segment = dict(zip(plan["z"], plan["segment"])) if "segment" in plan else {}
         self.kept = {}
         self.destreak = None
@@ -511,10 +544,18 @@ class _Renderer:
         img = self.cache.read(t, slice(r0, r1), slice(c0, c1))
         if self.destreak is not None:
             img = self.destreak(img)
-        field = self.shading.get((self.segment.get(t["z"]), t["tile"]))
-        if field is not None:   # flat-field: divide by the tile's gain at these pixels
-            img = np.divide(img, shading.gain_window(field, (h, w), slice(r0, r1), slice(c0, c1)), dtype=np.float32)
-        v = _normalise(img, t["lo"], t["hi"])
+        key = (self.segment.get(t["z"]), t["tile"])
+        field = self.shading.get(key)
+        rows, cols = slice(r0, r1), slice(c0, c1)
+        if self.R is not None and np.isfinite(t["lo"]) and np.isfinite(t["hi"]):
+            # patchgrid: flat-field, the tile's shape and its window as one multiply-add
+            v = patchgrid.apply_fields(img, self._fields(key, field, (h, w)), (h, w), rows, cols, (t["lo"], t["hi"]))
+        else:
+            if self.R is not None:   # no window: _normalise's fallback takes percentiles of the corrected values
+                img = patchgrid.apply_fields(img, self._fields(key, field, (h, w)), (h, w), rows, cols)
+            elif field is not None:   # flat-field: divide by the tile's gain at these pixels
+                img = np.divide(img, shading.gain_window(field, (h, w), rows, cols), dtype=np.float32)
+            v = _normalise(img, t["lo"], t["hi"])
         if f > 1:
             v = cv2.resize(v, ((c1 - c0) // f, (r1 - r0) // f), interpolation=cv2.INTER_AREA)
         hv, wv = v.shape
@@ -557,6 +598,14 @@ class _Renderer:
         # Warping premultiplied values and weights separately keeps tile edges unbiased.
         return (slice(ya, yb), slice(xa, xb)), warp(v), warp(wt), cut
 
+    def _fields(self, key, field, tile_shape):
+        """patchgrid's gain and offset fields of a tile position (identity shape where it has none)."""
+        k = (*key, *tile_shape)
+        if k not in self.fields:   # threads may both compute it: the same result, no lock needed
+            shape = self.shapes.get(key) or patchgrid.identity(1)
+            self.fields[k] = patchgrid.tile_fields(shape, self.R, field, tile_shape)
+        return self.fields[k]
+
 
 def _done(marker, digest):
     """A slab marker counts only if it was written for the current plan (render.json digest)."""
@@ -573,6 +622,13 @@ def run(cfg, task_id, num_tasks, overwrite=False):
     if not meta_path.exists():
         raise FileNotFoundError(f"{meta_path} not found: run `pipeline.render init` first")
     meta = json.loads(meta_path.read_text())
+    # Every task reads the fields and shapes from disk: they must be the ones init planned with (the
+    # levels were solved for them, and slabs already done keep their markers).
+    changed = [k for k, d in (("shading", shading.digest(cfg)), ("patchgrid", patchgrid.digest(cfg)))
+               if d != meta.get(k)]
+    if changed:
+        raise ValueError(f"{' and '.join(changed)} changed since {meta_path} was written (re-solved, or "
+                         "switched on or off): re-run init with --overwrite")
     arr = omezarr.open_scale(root, 0)
     slab = int(meta["settings"]["slab"])
     if omezarr.shard_shape(arr)[0] != slab:
@@ -614,7 +670,7 @@ def main(argv=None):
     p = base_parser("Render the corrected volume (scale 0) as OME-Zarr.")
     p.add_argument("command", choices=["init", "run"], help="init (single job), then run (array over z-slabs)")
     args = p.parse_args(argv)
-    cfg = setup(args, deep_merge(DEFAULTS, shading.DEFAULTS))
+    cfg = setup(args, deep_merge(deep_merge(DEFAULTS, shading.DEFAULTS), patchgrid.DEFAULTS))
     if args.command == "init":
         return init(cfg, args.overwrite)
     return run(cfg, *task_info(args), overwrite=args.overwrite)

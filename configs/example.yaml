@@ -131,6 +131,19 @@ overlaps:                    # brightness relation of every overlapping tile pai
   min_pixels: 500            # pixel pairs (downsampled) a relation needs
   reject: 3.0                # pairs further than this many robust sigmas off the line are dropped
   chunk_slices: 100          # selected z per array-task chunk (fixed blocks of global z)
+  patch_grid: 0              # > 0: also a relation per (patch of a, patch of b), each tile cut into
+                             # patch_grid x patch_grid patches (work/overlaps/patches.csv, for patchgrid); 0: off
+  patch_min_pairs: 2000      # pixel pairs (downsampled) a patch bin needs
+
+patchgrid:                   # within-tile brightness shapes per tile position and segment, from the patch bins
+  enabled: false             # run_pipeline.sh: after overlaps (needs overlaps.patch_grid > 0 and intensity
+                             # balance_source: overlaps); intensity balances and render applies the shapes
+  every: 20                  # shapes from the solves of every N-th measured slice of each segment
+  smooth: 1.0                # equality of neighbouring patches, relative to the median relation weight sqrt(n)
+  prior: 0.02                # pull of each tile's mean gain towards 1, relative to the same
+  gain_power: 2.0            # a bin's gain equation is weighted by min(1, cnr / 10) ** gain_power
+  gain_cnr_min: 5.0          # bins with less contrast than this (resin) give no gain equation (35h: 8)
+  reference: null            # R, the raw intensity at which the shapes' change c is defined; null: the median bin centre
 
 # Curtaining removal inside render. Tune first: python -m pipeline.destreak test --config C --z Z --tile r-c
 destreak:
@@ -193,8 +206,9 @@ serve:
 
 # Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
 # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch.
-# Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, intensity, zcorrect,
-# zcorrect_solve, render_init, render, pyramid (one job per scale, each with this array size), export.
+# Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, shading, overlaps, overlaps_merge,
+# patchgrid, intensity, zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale, each with this
+# array size), export.
 precomputed:
   enabled: false             # run_pipeline.sh: Neuroglancer precomputed export after pyramid
   name: null                 # folder in output_dir; null: <volume stem>.precomputed

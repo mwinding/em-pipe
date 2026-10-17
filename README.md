@@ -6,7 +6,7 @@ slice-to-slice drift, normalises intensity and writes a multi-resolution volume 
 [neuroglancer](https://github.com/google/neuroglancer). It runs as Slurm jobs on NEMO.
 
 ```
-check → preview → stitch → align → [shading] → [overlaps] → intensity → [zcorrect] → render → pyramid
+check → preview → stitch → align → [shading] → [overlaps] → [patchgrid] → intensity → [zcorrect] → render → pyramid
 ```
 
 | Step | What it does |
@@ -16,8 +16,9 @@ check → preview → stitch → align → [shading] → [overlaps] → intensit
 | stitch | Tile layout within each slice: SIFT matches in the tile overlaps (overlap found automatically) and a least-squares solve, on every 50th slice. Where tiles move between two of those by more than `stitch.refine_px` (5 px), the slices in between are stitched too (bisection), so a sudden tile jump is placed at the right slice instead of being interpolated. |
 | align | Slice-to-slice drift: SIFT matches between each slice and its next few neighbours, then one global least-squares solve. Where the tile layout changes (e.g. 3×3 → 2×2 tiles), one affine transform between the two montage frames is fitted first (`align.segment_change_model`; results in `work/align/segment_changes.csv`). Where that leaves a median mismatch above `align.elastic_min_px` (5 px; 35h: only 3×3 → 2×2), a smooth displacement field is fitted to the matches across the change and applied to every slice before the change (`align.elastic_side`; across other layout changes up to the previous corrected one), warping them into the later layout's geometry (`pipeline/elastic.py`; `work/align/elastic_interfaces.csv` reports the mismatch before and after); render cuts sharply between tiles in those slices (`render.local_blend`). A tile-level affine solve (`align.local_*`, off by default) is also available. |
 | shading | Optional: a flat-field per tile position and acquisition segment (the SEM's brightness fall-off across a tile), estimated from the thumbnails as in BaSiC/CIDRE (`qc/shading.png`); overlaps, intensity and render divide it out of every tile slice. |
-| overlaps | Optional: the brightness relation (gain, offset) of every overlapping tile pair, measured on the raw tiles at 32 nm in every slice by a robust fit on pixel pairs, tissue and resin alike (`qc/overlaps.png`). |
-| intensity | Per-tile contrast levels, balanced across tile overlaps and smoothed over time. The balance comes from the preview thumbnails every few slices (`balance_source: thumbnails`) or from the overlaps step, slice by slice (`balance_source: overlaps`). |
+| overlaps | Optional: the brightness relation (gain, offset) of every overlapping tile pair, measured on the raw tiles at 32 nm in every slice by a robust fit on pixel pairs, tissue and resin alike (`qc/overlaps.png`). With `overlaps.patch_grid` > 0 also one relation per pair of tile patches (each tile cut into a grid of patches), for patchgrid. |
+| patchgrid | Optional: smooth brightness maps within each tile for what the flat-field leaves near tile edges and corners (after Janelia's tile intensity correction, saalfeldlab/render): a gain and offset per patch, solved from the patch relations; their within-tile shape, the median over every 20th slice, per tile position and segment (`qc/patchgrid.png`). Intensity then balances the tiles on the patch relations with the shapes applied, and render applies flat-field and shape before each tile's window. |
+| intensity | Per-tile contrast levels, balanced across tile overlaps and smoothed over time. The balance comes from the preview thumbnails every few slices (`balance_source: thumbnails`) or from the overlaps step, slice by slice (`balance_source: overlaps`; with patchgrid, from the patch relations). |
 | zcorrect | Optional slice-thickness correction (off by default). |
 | render | Applies everything in one pass and writes OME-Zarr (Zarr v3, sharded), optionally downsampled; CLAHE; optional destreaking. |
 | pyramid | Lower-resolution scales of the volume. |
@@ -118,6 +119,10 @@ The export serves like any volume: `python3 -m pipeline.serve FOLDER` lists `*.p
   one `output_dir` if they have different `render.name`s.
 - **destreak and zcorrect** are off by default; tune destreak with
   `python -m pipeline.destreak test --config C --z Z --tile 0-0` first.
+- **patchgrid** needs `overlaps.patch_grid` > 0 (35h: 8) and `intensity.balance_source: overlaps`.
+  Setting or changing `overlaps.patch_grid` re-measures every overlap chunk; new shapes change the
+  levels and the render plan (render init then asks for `--overwrite`, and render run refuses to go on). With patchgrid off and
+  `patch_grid: 0`, every output is as before the step existed.
 - Design notes and file formats: `docs/design.md`. Tests: `python -m pytest tests`.
 
 ## Fly-through movie

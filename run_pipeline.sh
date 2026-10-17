@@ -2,12 +2,13 @@
 # Submit the em-pipe steps for one dataset to Slurm, each job waiting for the previous one.
 #
 # Usage: ./run_pipeline.sh CONFIG [--steps a,b,...] [--from STEP] [--after JOBID] [--dry-run]
-#   steps (in order): check preview stitch align shading overlaps intensity zcorrect render pyramid export precomputed upload
+#   steps (in order): check preview stitch align shading overlaps patchgrid intensity zcorrect render pyramid export
+#                     precomputed upload
 #   --steps a,b  only these steps (the first one waits for nothing)
 #   --from STEP  STEP and every later step
 #   --after ID   the first job waits for Slurm job ID to finish successfully
 #   --dry-run    print the sbatch commands instead of submitting them
-# shading, overlaps, zcorrect, precomputed and upload run only when their enabled setting is true.
+# shading, overlaps, patchgrid, zcorrect, precomputed and upload run only when their enabled setting is true.
 # Array sizes, CPUs, memory, time, partition and gres come from the config's slurm: section (see
 # configs/example.yaml); logs go to output_dir/work/logs/.
 # Set EM_PIPE_SKIP_ENV=1 to skip sourcing slurm/env.sh (when the environment is already active).
@@ -16,8 +17,8 @@
 # the old volume), then  ./run_pipeline.sh CONFIG --from render.
 set -eo pipefail
 
-STEPS="check preview stitch align shading overlaps intensity zcorrect render pyramid export precomputed upload"
-usage() { sed -n '4,16p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "$1"; }
+STEPS="check preview stitch align shading overlaps patchgrid intensity zcorrect render pyramid export precomputed upload"
+usage() { sed -n '4,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "$1"; }
 
 CONFIG= SELECT= FROM= AFTER= DRY=0
 while [ $# -gt 0 ]; do
@@ -56,10 +57,10 @@ wanted() {  # wanted STEP: is STEP selected?
 
 # Everything needed from the config in two calls (python start-up can be slow on shared filesystems).
 VALUES=$(cfg --get output_dir zcorrect.enabled render.num_scales precomputed.enabled upload.enabled shading.enabled \
-         overlaps.enabled)
+         overlaps.enabled patchgrid.enabled)
 SBATCH=$(cfg --sbatch-args)   # one line per job: the job, then its sbatch options, tab-separated
 { read -r OUT; read -r ZCORRECT; read -r NUM_SCALES; read -r PRECOMPUTED; read -r UPLOAD; read -r SHADING
-  read -r OVERLAPS; } <<< "$VALUES"
+  read -r OVERLAPS; read -r PATCHGRID; } <<< "$VALUES"
 
 PREV=$AFTER
 submit() {  # submit JOB NAME STEP [ARGS...]: sbatch slurm/STEP.sbatch after the previous job
@@ -110,6 +111,13 @@ if wanted overlaps; then
     submit overlaps_merge em-overlaps-merge overlaps merge
   else
     echo "overlaps.enabled is false: overlaps skipped" >&2
+  fi
+fi
+if wanted patchgrid; then
+  if [ "$PATCHGRID" = true ]; then
+    submit patchgrid em-patchgrid patchgrid
+  else
+    echo "patchgrid.enabled is false: patchgrid skipped" >&2
   fi
 fi
 if wanted intensity; then submit intensity em-intensity intensity; fi

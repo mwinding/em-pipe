@@ -9,6 +9,12 @@ least-squares solve per slice gives per-tile gain/offset onto a common scale (me
 offset 0), smoothed over ``balance_smooth_slices``, and one common window per z is mapped back into
 each tile's raw values. Writes intensity/levels.csv and intensity.png.
 
+With ``patchgrid.enabled`` (and ``balance_source: overlaps``) the tiles are compared in their
+patchgrid-corrected values u (flat-field, then the tile position's within-tile shape, which render
+applies too): the solve per slice takes every patch bin of work/overlaps/patches.csv, its relation
+carried over to u (patchgrid.shape_corrected) and matched at its own centre, its gain weighted as
+in the patchgrid solve, instead of one relation per overlap; levels are then windows on u.
+
 Starting windows (``intensity.window``): median (default) puts the tissue median (preview t_p50,
 background left out) at grey ``target_median`` and makes the tissue p5-p95 span ``target_span``
 greys, so brightness and contrast stay the same whatever is in the field of view (35h: percentile
@@ -31,7 +37,7 @@ import pandas as pd  # noqa: E402
 from scipy.sparse import coo_matrix  # noqa: E402
 from scipy.sparse.csgraph import connected_components  # noqa: E402
 
-from . import background, shading, transforms  # noqa: E402
+from . import background, patchgrid, shading, transforms  # noqa: E402
 from .cli import atomic_write, base_parser, setup  # noqa: E402
 from .config import deep_merge, get, qc_path, step_dir, step_path  # noqa: E402
 from .preview import PERCENTILES, TISSUE, plot_tiles, save, thumb_to_tile, thumb_values  # noqa: E402
@@ -147,6 +153,9 @@ def compute_levels(cfg):
         raise ValueError(f"intensity.balance_source must be thumbnails or overlaps, not {c['balance_source']!r}")
     if c["balance_tiles"]:
         tiles_csv = step_path(cfg, "stitch", "tiles.csv")
+        if get(cfg, "patchgrid.enabled", False) and c["balance_source"] != "overlaps":
+            raise ValueError("patchgrid.enabled needs intensity.balance_source: overlaps (render applies the "
+                             "patch shapes, which the thumbnail balance does not know)")
         if c["balance_source"] == "overlaps":
             meas, every = overlap_measurements(cfg)
             df = balance(cfg, df, meas, every)
@@ -192,7 +201,10 @@ GAIN_CNR = 10.0   # overlaps whose spread is less than this many fit-rms (e.g. o
 
 
 def overlap_measurements(cfg):
-    """(per-tile gain/offset (z, tile, g, o), every) from the overlaps step's relations."""
+    """(per-tile gain/offset (z, tile, g, o), every) from the overlaps step's relations (with
+    patchgrid: its patch bins, ``patch_measurements``)."""
+    if get(cfg, "patchgrid.enabled", False):
+        return patch_measurements(cfg)
     path = step_path(cfg, "overlaps", "relations.csv")
     if not path.exists():
         raise FileNotFoundError(f"{path} not found: balance_source overlaps needs the overlaps step (run, merge)")
@@ -204,6 +216,25 @@ def overlap_measurements(cfg):
     meas = _measurements(found)
     every = int(get(cfg, "overlaps.every", 1) or 1)
     log.info("tile balance from %d overlap relations at %d slices (every %d)", len(rel), meas["z"].nunique(), every)
+    return meas, every
+
+
+def patch_measurements(cfg):
+    """(per-tile gain/offset (z, tile, g, o) on patchgrid-corrected values, every) from the overlaps
+    step's patch bins, each carried over to the corrected values by the tile shapes."""
+    p = deep_merge(patchgrid.DEFAULTS, {"patchgrid": cfg.get("patchgrid") or {}})["patchgrid"]
+    shapes, R = patchgrid.load(cfg)
+    patchgrid.check_current(cfg)
+    bins = patchgrid.shape_corrected(patchgrid.read_bins(cfg), shapes, R)
+    bins["gw"] = patchgrid.bin_weights(bins, p["gain_power"], p["gain_cnr_min"])[1]
+    found = []
+    for z, g in bins.groupby("z"):
+        rels = [(r.a, r.b, r.gain, r.offset, r.n, r.gw, r.centre) for r in g.itertuples()]
+        found += [{"z": z, "tile": t, "g": gg, "o": oo} for t, (gg, oo) in solve(connected(rels)).items()]
+    meas = _measurements(found)
+    every = int(get(cfg, "overlaps.every", 1) or 1)
+    log.info("tile balance from %d patch bins (shapes applied, R = %.0f) at %d slices (every %d)", len(bins), R,
+             meas["z"].nunique(), every)
     return meas, every
 
 
@@ -372,7 +403,7 @@ def plot(df, path):
 def main(argv=None):
     p = base_parser(__doc__.splitlines()[0])
     args = p.parse_args(argv)
-    cfg = setup(args, deep_merge(DEFAULTS, shading.DEFAULTS))
+    cfg = setup(args, deep_merge(deep_merge(DEFAULTS, shading.DEFAULTS), patchgrid.DEFAULTS))
     df = compute_levels(cfg)
     atomic_write(step_dir(cfg, "intensity", "levels.csv"),
                  lambda t: df[["z", "tile", "lo", "hi"]].to_csv(t, index=False, float_format="%.2f"))

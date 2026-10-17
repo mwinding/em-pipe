@@ -44,6 +44,23 @@ shading:
 
 overlaps:
   enabled: true
+  patch_grid: 8              # also a relation per pair of 1/8 x 1/8 tile patches, for patchgrid
+
+# Within-tile shapes per tile position and segment (Janelia-style patch maps, 8 x 8 per tile) for what the
+# flat-field leaves near tile edges and corners; each slice's tile levels from the same patch bins. Chosen
+# by eye and on 55 test slices (17 Oct 2026): tissue seam steps 6.2 -> 2.0 greys median, seams over 10
+# greys 61 -> 15 (resin 9 -> 0), over flat-field + one level per tile. Settings as tested ("B smooth 1"), with
+# the review's fixes: smoothness scales with sqrt(n), and bins with cnr < 8 (resin, or mostly resin) give no
+# gain equation. At 5, one mostly-resin bin where 2-0 and 2-1 meet at the bottom (gain 1.53 at cnr 6.2, in
+# every slice, so the median over slices keeps it) still bent segment 0's 2-0 shape by 12 % (2-1: 7 %); at 8,
+# 2 %, other tiles within ~1 % of their cnr-5 shapes, predicted seam steps unchanged (0.94 greys median).
+patchgrid:
+  enabled: true
+  every: 20
+  smooth: 1.0
+  prior: 0.02
+  gain_power: 2.0
+  gain_cnr_min: 8.0
 
 # Tile overlap search at 1/4 resolution: more margin than the default 8 for small (~1%) overlaps.
 stitch:
@@ -91,7 +108,8 @@ slurm:
   align_solve: {cpus: 4, mem: 32G, time: "02:00:00"}
   shading: {cpus: 2, mem: 16G, time: "01:00:00"}
   overlaps: {array: 40, cpus: 2, mem: 8G, time: "04:00:00"}      # ~2-5 s per slice (left/right overlaps)
-  overlaps_merge: {cpus: 2, mem: 8G, time: "00:30:00"}
+  overlaps_merge: {cpus: 2, mem: 16G, time: "00:30:00"}           # patches.csv: ~1M bins
+  patchgrid: {cpus: 4, mem: 16G, time: "01:00:00"}               # ~900 shape slices, ~0.1-0.3 s each
   intensity: {cpus: 2, mem: 16G, time: "01:00:00"}
   zcorrect: {array: 20, cpus: 2, mem: 8G, time: "04:00:00"}
   zcorrect_solve: {cpus: 2, mem: 8G, time: "01:00:00"}

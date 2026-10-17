@@ -14,11 +14,22 @@ gain as an ordinary regression would). Overlaps with little contrast (e.g. only 
 offset but hardly the gain; ``cnr`` (inlier p10-p90 spread over the fit's rms) is kept so the
 balance can weight the gain accordingly.
 
-    run   (array over z-chunks of ``chunk_slices``): work/overlaps/chunks/chunk_<z0>-<z1>.csv, each
-          with a .json of what it was measured from (settings, slice times, stitch, shading
-          fields); a chunk whose inputs changed is measured again
+With ``patch_grid`` G > 0 the same pixel pairs are also split by where they lie in each tile, as in
+saalfeldlab/render's intensity-adjust client: every tile is cut into G x G patches and each pair
+belongs to (patch of a, patch of b) by its full-resolution positions in the two tiles; every
+(patch_a, patch_b) bin with at least ``patch_min_pairs`` pairs gets its own ``fit_relation``
+(MAD rejection plays the part of Janelia's RANSAC). These bin relations, which show how the
+relation changes along a seam, are what ``patchgrid`` fits smooth within-tile maps to.
+
+    run   (array over z-chunks of ``chunk_slices``): work/overlaps/chunks/chunk_<z0>-<z1>.csv (and
+          chunk_<z0>-<z1>_patches.csv with patch_grid > 0), each with a .json of what it was
+          measured from (settings, slice times, stitch, shading fields); a chunk whose inputs
+          changed is measured again
     merge: work/overlaps/relations.csv (z, a, b, gain, offset, n, n_total, rms, cnr,
-           median_a, median_b) and qc/overlaps.png
+           median_a, median_b) and qc/overlaps.png; with patch_grid > 0 also
+           work/overlaps/patches.csv (PATCH_COLUMNS: pa, pb the patches (row * G + col) of a and b,
+           centre the bin's median of v_b, xa, ya / xb, yb its mean full-resolution position in
+           tiles a / b) and patches.json (the grid)
 
 The relative gain of the tiles (only their brightness differences matter) is solved by
 ``intensity``; this step only measures.
@@ -58,11 +69,17 @@ DEFAULTS = {
         "min_pixels": 500,     # pixel pairs (downsampled) a relation needs
         "reject": 3.0,         # pairs further than this many robust sigmas off the line are dropped
         "chunk_slices": 100,   # selected z per array-task chunk (fixed blocks of global z)
+        "patch_grid": 0,       # > 0: also a relation per (patch of a, patch of b) on a patch_grid x patch_grid
+                               # grid over each tile (for patchgrid); 0: off
+        "patch_min_pairs": 2000,   # pixel pairs (downsampled) a patch bin needs
     },
 }
 
 SATURATED = 65535
 COLUMNS = ["z", "a", "b", "gain", "offset", "n", "n_total", "rms", "cnr", "median_a", "median_b"]
+PATCH_COLUMNS = ["z", "a", "b", "pa", "pb", "gain", "offset", "n", "n_total", "rms", "cnr", "centre", "median_a",
+                 "xa", "ya", "xb", "yb"]
+PATCH_KEYS = ("patch_grid", "patch_min_pairs")
 
 
 def fit_relation(va, vb, reject=3.0, iterations=4, min_pixels=500):
@@ -134,8 +151,12 @@ def _read(cache, rec, field, box, f):
             cv2.resize(ok, size, interpolation=cv2.INTER_AREA) > 0.999)
 
 
-def pair_values(cache, rec_a, rec_b, T_a, T_b, fields, o):
-    """Pixel pairs (va, vb) of the overlap of tiles a and b, on a's downsampled grid; None if no overlap."""
+def pair_values(cache, rec_a, rec_b, T_a, T_b, fields, o, positions=False):
+    """Pixel pairs (va, vb) of the overlap of tiles a and b, on a's downsampled grid; None if no overlap.
+
+    positions: also each pair's full-resolution pixel in tile a (xa, ya) and the same point in
+    tile b (xb, yb): (va, vb, xa, ya, xb, yb).
+    """
     f, trim, sigma = int(o["factor"]), int(o["trim_px"]), float(o["smooth_px"])
     shape_a = (int(rec_a["height"]), int(rec_a["width"]))
     shape_b = (int(rec_b["height"]), int(rec_b["width"]))
@@ -159,28 +180,69 @@ def pair_values(cache, rec_a, rec_b, T_a, T_b, fields, o):
         ok_a = cv2.erode(ok_a.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
         ok_b = cv2.erode(ok_b.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
     # a's downsampled pixel -> a full res -> b full res -> b's downsampled pixel
-    M = transforms.compose(transforms.invert(_ds_to_full(bx0, by0, f)),
-                           transforms.compose(a_in_b, _ds_to_full(box_a[0], box_a[1], f)))
+    to_full_a = _ds_to_full(box_a[0], box_a[1], f)
+    M = transforms.compose(transforms.invert(_ds_to_full(bx0, by0, f)), transforms.compose(a_in_b, to_full_a))
     size = (va.shape[1], va.shape[0])
     vb_on_a = cv2.warpAffine(vb, M, size, flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
                              borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     ok_on_a = cv2.warpAffine(ok_b.astype(np.float32), M, size, flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
                              borderMode=cv2.BORDER_CONSTANT, borderValue=0) > 0.999
     ok = ok_a & ok_on_a
-    return va[ok], vb_on_a[ok]
+    if not positions:
+        return va[ok], vb_on_a[ok]
+    ii, jj = np.nonzero(ok)   # the same (row-major) order as va[ok]
+    pa = transforms.apply(to_full_a, np.c_[jj, ii])
+    pb = transforms.apply(a_in_b, pa)
+    return va[ok], vb_on_a[ok], pa[:, 0], pa[:, 1], pb[:, 0], pb[:, 1]
+
+
+def patch_index(x, y, w, h, grid):
+    """Patch (row * grid + col) of full-resolution pixels (x, y) of a w x h tile on a grid x grid grid."""
+    c = np.clip(np.floor((np.asarray(x) + 0.5) / w * grid), 0, grid - 1).astype(int)
+    r = np.clip(np.floor((np.asarray(y) + 0.5) / h * grid), 0, grid - 1).astype(int)
+    return r * grid + c
+
+
+def patch_relations(va, vb, xa, ya, xb, yb, shape_a, shape_b, o):
+    """Rows (dicts, PATCH_COLUMNS without z, a, b) of one overlap's (patch_a, patch_b) bins."""
+    grid, min_pairs = int(o["patch_grid"]), int(o["patch_min_pairs"])
+    pa = patch_index(xa, ya, shape_a[1], shape_a[0], grid)
+    pb = patch_index(xb, yb, shape_b[1], shape_b[0], grid)
+    key = pa * grid * grid + pb
+    order = np.argsort(key, kind="stable")
+    keys, starts = np.unique(key[order], return_index=True)
+    rows = []
+    for k, sel in zip(keys, np.split(order, starts[1:])):
+        if len(sel) < min_pairs:
+            continue
+        rel = fit_relation(va[sel], vb[sel], float(o["reject"]), min_pixels=min_pairs // 2)
+        if rel is None:
+            continue
+        gain, offset, n, rms, cnr = rel
+        rows.append({"pa": int(k // (grid * grid)), "pb": int(k % (grid * grid)), "gain": gain, "offset": offset,
+                     "n": n, "n_total": len(sel), "rms": rms, "cnr": cnr, "centre": float(np.median(vb[sel])),
+                     "median_a": float(np.median(va[sel])), "xa": float(xa[sel].mean()), "ya": float(ya[sel].mean()),
+                     "xb": float(xb[sel].mean()), "yb": float(yb[sel].mean())})
+    return rows
 
 
 def measure_slice(cache, recs, stitch, fields, o):
-    """Rows (dicts, COLUMNS) for one slice's overlapping tile pairs."""
+    """(rows (dicts, COLUMNS), patch rows (dicts, PATCH_COLUMNS)) for one slice's overlapping tile
+    pairs; patch rows only with ``patch_grid`` > 0."""
     z = int(recs[0]["z"])
-    rows = []
+    patches = int(o["patch_grid"]) > 0
+    rows, patch_rows = [], []
     for ra, rb in itertools.combinations(sorted(recs, key=lambda r: r["tile"]), 2):
         if (z, ra["tile"]) not in stitch or (z, rb["tile"]) not in stitch:
             continue
-        got = pair_values(cache, ra, rb, stitch[(z, ra["tile"])], stitch[(z, rb["tile"])], fields, o)
+        got = pair_values(cache, ra, rb, stitch[(z, ra["tile"])], stitch[(z, rb["tile"])], fields, o, positions=patches)
         if got is None:
             continue
-        va, vb = got
+        if patches:
+            shape_a, shape_b = (int(ra["height"]), int(ra["width"])), (int(rb["height"]), int(rb["width"]))
+            patch_rows += [{"z": z, "a": ra["tile"], "b": rb["tile"], **p}
+                           for p in patch_relations(*got, shape_a, shape_b, o)]
+        va, vb = got[:2]
         rel = fit_relation(va, vb, float(o["reject"]), min_pixels=int(o["min_pixels"]))
         if rel is None:
             continue
@@ -188,7 +250,7 @@ def measure_slice(cache, recs, stitch, fields, o):
         rows.append({"z": z, "a": ra["tile"], "b": rb["tile"], "gain": gain, "offset": offset, "n": n,
                      "n_total": len(va), "rms": rms, "cnr": cnr,
                      "median_a": float(np.median(va)), "median_b": float(np.median(vb))})
-    return rows
+    return rows, patch_rows
 
 
 def _selected(slices, every):
@@ -199,7 +261,11 @@ def _selected(slices, every):
 def _identity(cfg, zs, slices, stitch_rows):
     """What a chunk is measured from: settings, slice times, stitch transforms, shading fields."""
     times = slices[slices["z"].isin(zs)].groupby("z")["timestamp"].first()
-    return {"settings": cfg["overlaps"], "stamps": [f"{z}:{pd.Timestamp(t).isoformat()}" for z, t in times.items()],
+    settings = dict(cfg["overlaps"])
+    if not int(settings.get("patch_grid") or 0):
+        # Without patches: the same identity as chunks measured before the patch settings existed.
+        settings = {k: v for k, v in settings.items() if k not in PATCH_KEYS}
+    return {"settings": settings, "stamps": [f"{z}:{pd.Timestamp(t).isoformat()}" for z, t in times.items()],
             "stitch": hashlib.sha256(stitch_rows.to_csv(index=False).encode()).hexdigest(),
             "shading": shading.digest(cfg)}
 
@@ -222,20 +288,30 @@ def run(cfg, args):
         out = step_dir(cfg, "overlaps", "chunks", f"chunk_{name}.csv")
         ident = _identity(cfg, zs, slices, stitch_df[stitch_df["z"].isin(zs)])
         meta = out.with_suffix(".json")
-        if out.exists() and meta.exists() and not args.overwrite and json.loads(meta.read_text()) == ident:
+        if (out.exists() and meta.exists() and not args.overwrite and json.loads(meta.read_text()) == ident
+                and (int(o["patch_grid"]) <= 0 or _patch_path(out).exists())):   # as merge checks it
             log.info("chunk %s is current, skipping", name)
             continue
         out.unlink(missing_ok=True)
-        rows = []
+        rows, patch_rows = [], []
         for z in zs:
             recs = slices[slices["z"] == z].to_dict("records")
             for r in recs:
                 r["key"] = (int(r["segment"]), r["tile"])
-            rows += measure_slice(cache, recs, stitch, fields, o)
+            got = measure_slice(cache, recs, stitch, fields, o)
+            rows += got[0]
+            patch_rows += got[1]
         atomic_write(meta, lambda p: Path(p).write_text(json.dumps(ident)))
+        if int(o["patch_grid"]) > 0:
+            atomic_write(_patch_path(out), lambda p: pd.DataFrame(patch_rows, columns=PATCH_COLUMNS).to_csv(
+                p, index=False, float_format="%.8g"))
         atomic_write(out, lambda p: pd.DataFrame(rows, columns=COLUMNS).to_csv(p, index=False))   # last: marks done
-        log.info("chunk %s: %d relations over %d slices", name, len(rows), len(zs))
+        log.info("chunk %s: %d relations (%d patch bins) over %d slices", name, len(rows), len(patch_rows), len(zs))
     return 0
+
+
+def _patch_path(chunk):
+    return chunk.with_name(chunk.stem + "_patches.csv")
 
 
 def merge(cfg, args):
@@ -243,7 +319,8 @@ def merge(cfg, args):
     slices = load_slices(cfg)
     keep = _selected(slices, o["every"])
     stitch_df = pd.read_csv(step_path(cfg, "stitch", "tiles.csv"), dtype={"tile": str})
-    parts, bad = [], []
+    grid = int(o["patch_grid"])
+    parts, patch_parts, bad = [], [], []
     for zs in z_chunks(slices, o["chunk_slices"]):
         zs = [z for z in zs if z in keep]
         if not zs:
@@ -252,16 +329,27 @@ def merge(cfg, args):
         path = step_path(cfg, "overlaps", "chunks", f"chunk_{name}.csv")
         meta = path.with_suffix(".json")
         ident = _identity(cfg, zs, slices, stitch_df[stitch_df["z"].isin(zs)])
-        if not path.exists() or not meta.exists() or json.loads(meta.read_text()) != ident:
+        if (not path.exists() or not meta.exists() or json.loads(meta.read_text()) != ident
+                or (grid > 0 and not _patch_path(path).exists())):
             bad.append(name)
             continue
         parts.append(pd.read_csv(path, dtype={"a": str, "b": str}))
+        if grid > 0:
+            patch_parts.append(pd.read_csv(_patch_path(path), dtype={"a": str, "b": str}))
     if bad:
         raise RuntimeError(f"{len(bad)} overlap chunks missing or out of date (first: {bad[0]}); run 'overlaps run'")
     rel = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=COLUMNS)
     atomic_write(step_dir(cfg, "overlaps", "relations.csv"), lambda p: rel.to_csv(p, index=False, float_format="%.6g"))
     plot(rel, qc_path(cfg, "overlaps.png"))
     log.info("%d relations over %d slices", len(rel), rel["z"].nunique() if len(rel) else 0)
+    if grid > 0:
+        bins = pd.concat(patch_parts, ignore_index=True) if patch_parts else pd.DataFrame(columns=PATCH_COLUMNS)
+        atomic_write(step_dir(cfg, "overlaps", "patches.json"),
+                     lambda p: Path(p).write_text(json.dumps({k: o[k] for k in PATCH_KEYS})))
+        # 8 digits: a gain's rounding error times the data's distance from 0 (~37000) stays far below a grey.
+        atomic_write(step_dir(cfg, "overlaps", "patches.csv"),
+                     lambda p: bins.to_csv(p, index=False, float_format="%.8g"))
+        log.info("%d patch bins (grid %d) over %d slices", len(bins), grid, bins["z"].nunique() if len(bins) else 0)
     return 0
 
 

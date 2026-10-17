@@ -217,3 +217,20 @@ def test_shading_and_overlaps_steps_when_enabled(tmp_path, env):
     p = run(write_cfg(tmp_path), env, "--steps", "shading,overlaps,intensity", "--dry-run")
     assert names(p.stdout) == ["em-intensity"]
     assert "shading.enabled is false" in p.stderr and "overlaps.enabled is false" in p.stderr
+
+
+def test_patchgrid_step_when_enabled(tmp_path, env):
+    """patchgrid: one job between the overlaps merge and intensity, only when enabled."""
+    env, log = env
+    cfg = write_cfg(tmp_path, overlaps={"enabled": True, "patch_grid": 8}, patchgrid={"enabled": True},
+                    slurm_extra={"patchgrid": {"cpus": 4, "mem": "16G"}})
+    jobs = calls(run(cfg, env, "--from", "overlaps", "--dry-run").stdout.splitlines())
+    assert [j["job-name"] for j in jobs][:4] == ["em-overlaps-run", "em-overlaps-merge", "em-patchgrid", "em-intensity"]
+    pg = jobs[2]
+    assert pg["script"] == "slurm/patchgrid.sbatch" and pg["args"] == [str(cfg.resolve())] and "array" not in pg
+    assert (pg["cpus-per-task"], pg["mem"]) == ("4", "16G") and pg["dependency"] == "afterok:<em-overlaps-merge>"
+    assert jobs[3]["dependency"] == "afterok:<em-patchgrid>"
+    assert names(run(cfg, env, "--steps", "patchgrid", "--dry-run").stdout) == ["em-patchgrid"]
+    p = run(write_cfg(tmp_path, overlaps={"enabled": True}), env, "--from", "overlaps", "--dry-run")
+    assert names(p.stdout)[:3] == ["em-overlaps-run", "em-overlaps-merge", "em-intensity"]
+    assert "patchgrid.enabled is false: patchgrid skipped" in p.stderr

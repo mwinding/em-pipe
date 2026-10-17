@@ -1,5 +1,8 @@
 """overlaps: brightness relations of overlapping tiles from the raw tiles, and intensity's balance from them."""
 
+import json
+import shutil
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -134,3 +137,57 @@ def test_solve_matches_tiles_at_the_data_not_at_zero():
     at_zero = intensity.solve([r[:6] for r in rels])
     x, y, err, off, *_ = rels[0]
     assert abs((at_zero[x][0] * (err * m + off) + at_zero[x][1]) - (at_zero[y][0] * m + at_zero[y][1])) > 300
+
+
+def test_patch_bins(jittered, tmp_path):
+    """patch_grid > 0: the same overlaps also as one relation per (patch of a, patch of b), each with
+    its mean position in both tiles; relations.csv is as without patches."""
+    truth, root, out = jittered
+    cfg = _config(root, truth, out, "ov")
+    if not (out / "work" / "overlaps" / "relations.csv").exists():
+        assert overlaps.main(["run", "--config", str(cfg)]) == 0
+        assert overlaps.main(["merge", "--config", str(cfg)]) == 0
+    plain = pd.read_csv(out / "work" / "overlaps" / "relations.csv", dtype={"a": str, "b": str})
+    stamp = json.loads(next((out / "work" / "overlaps" / "chunks").glob("chunk_*.json")).read_text())
+    assert "patch_grid" not in stamp["settings"]      # the identity of chunks measured before patches existed
+    pout = tmp_path / "out"
+    for step in ("check", "preview", "stitch"):
+        shutil.copytree(out / "work" / step, pout / "work" / step)
+    pcfg = synth.write_config(tmp_path / "patches.yaml", truth.raw_dir, pout,
+                              overlaps={**OVERLAPS, "patch_grid": 2, "patch_min_pairs": 100})
+    assert overlaps.main(["run", "--config", str(pcfg)]) == 0
+    assert overlaps.main(["merge", "--config", str(pcfg)]) == 0
+    pd.testing.assert_frame_equal(pd.read_csv(pout / "work" / "overlaps" / "relations.csv", dtype={"a": str, "b": str}), plain)
+    bins = pd.read_csv(pout / "work" / "overlaps" / "patches.csv", dtype={"a": str, "b": str})
+    assert list(bins.columns) == overlaps.PATCH_COLUMNS
+    assert json.loads((pout / "work" / "overlaps" / "patches.json").read_text()) == {"patch_grid": 2, "patch_min_pairs": 100}
+    assert bins["z"].nunique() == N and bins["pa"].between(0, 3).all() and bins["pb"].between(0, 3).all()
+    th, tw = truth.tile_shape
+    # each bin's patches hold its mean positions, and those are the same point in both tiles
+    assert (overlaps.patch_index(bins["xa"], bins["ya"], tw, th, 2) == bins["pa"]).all()
+    assert (overlaps.patch_index(bins["xb"], bins["yb"], tw, th, 2) == bins["pb"]).all()
+    sx = bins["xa"] + [truth.tile_origin[t][0] for t in bins["a"]] - [truth.tile_origin[t][0] for t in bins["b"]]
+    sy = bins["ya"] + [truth.tile_origin[t][1] for t in bins["a"]] - [truth.tile_origin[t][1] for t in bins["b"]]
+    assert np.abs(sx - bins["xb"]).max() < 1e-6 and np.abs(sy - bins["yb"]).max() < 1e-6
+    # a vertical seam of 2 x 2 patches per tile: 2 bins (top and bottom halves), each with the pair's gain
+    seam = bins[(bins["a"] == "0-0") & (bins["b"] == "0-1")]
+    assert seam.groupby("z").size().eq(2).all() and set(seam["pa"]) == {1, 3} and set(seam["pb"]) == {0, 2}
+    want = np.array([truth.jitter[r.z][r.a] / truth.jitter[r.z][r.b] for r in bins.itertuples()])
+    big = bins["n"] > 300
+    assert np.abs(bins["gain"][big] / want[big] - 1).max() < 0.03
+    assert (bins["n_total"] >= 100).all() and (bins["n"] <= bins["n_total"]).all()
+    # a chunk whose patch bins are gone (e.g. cleaned up) is out of date for merge, and run measures it again
+    merged = (pout / "work" / "overlaps" / "patches.csv").read_bytes()
+    lost = sorted((pout / "work" / "overlaps" / "chunks").glob("chunk_*_patches.csv"))[0]
+    lost.unlink()
+    with pytest.raises(RuntimeError, match="out of date"):
+        overlaps.main(["merge", "--config", str(pcfg)])
+    assert overlaps.main(["run", "--config", str(pcfg)]) == 0
+    assert lost.exists()
+    assert overlaps.main(["merge", "--config", str(pcfg)]) == 0
+    assert (pout / "work" / "overlaps" / "patches.csv").read_bytes() == merged
+    # a changed patch setting re-measures
+    pcfg2 =synth.write_config(tmp_path / "patches2.yaml", truth.raw_dir, pout,
+                               overlaps={**OVERLAPS, "patch_grid": 2, "patch_min_pairs": 200})
+    with pytest.raises(RuntimeError, match="out of date"):
+        overlaps.main(["merge", "--config", str(pcfg2)])

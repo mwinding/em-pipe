@@ -78,7 +78,7 @@ def make_volume(shape, seed=0, sigma=(1.0, 2.0, 2.0), n_blobs=None):
 def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overlap=(24, 28),
                  start=datetime(2026, 9, 24, 23, 35, 0), interval_s=142.0, drift_step=1.5,
                  drift_jumps=None, gaps=None, parts=None, z_positions=None, tile_gain=None, tile_shading=None,
-                 tile_jitter=0.0,
+                 tile_jitter=0.0, tile_edge=None,
                  intensity_drift=0.0, streaks=0.0, noise=0.01, seed=0, faults=None,
                  lo=26000, hi=41000):
     """Write a synthetic dataset under ``root`` and return its ground truth.
@@ -92,6 +92,10 @@ def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overl
       independently from slice to slice (truth.jitter[z][tile])
     tile_shading: {tile: (ax, ay)} multiplicative gradient across the tile's raw values (detector fall-off),
       1 + ax * (x/w - 1/2) + ay * (y/h - 1/2)
+    tile_edge: {tile: (side, amplitude, width)} multiplicative brightness change at one side or corner of
+      the tile (left, right, top, bottom, top-left, top-right, bottom-left or bottom-right), 1 + amplitude *
+      exp(-d / width) at d px from that side (corner: from that corner): too local for a low-order
+      polynomial flat-field
     streaks: amplitude of vertical curtaining stripes (fraction of range)
     faults: {"duplicate": [(day_prefix, dst_tile, src_tile)],
              "truncate": [(day_prefix, tile, n_bytes)]   (cut n_bytes off the end of the pixel data),
@@ -152,6 +156,13 @@ def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overl
         gx = 1 + ax * (np.arange(tw) / (tw - 1) - 0.5)
         gy = 1 + ay * (np.arange(th) / (th - 1) - 0.5)
         shade[tile] = (gy[:, None] * gx[None, :]).astype(np.float32)
+    for tile, (side, amp, width) in (tile_edge or {}).items():
+        dist = {"left": np.arange(tw)[None, :], "right": (tw - 1 - np.arange(tw))[None, :],
+                "top": np.arange(th)[:, None], "bottom": (th - 1 - np.arange(th))[:, None]}
+        parts = [dist[s] for s in side.split("-")]
+        d = parts[0] if len(parts) == 1 else np.hypot(*parts)
+        edge = np.broadcast_to(1 + amp * np.exp(-d / width), (th, tw)).astype(np.float32)
+        shade[tile] = shade[tile] * edge if tile in shade else edge
     stripe = None
     if streaks:
         stripe = (rng.standard_normal(tw) * streaks).astype(np.float32)

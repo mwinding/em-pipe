@@ -33,7 +33,7 @@ DEFAULTS = {
     # Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
     # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch.
     # Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, shading, overlaps,
-    # overlaps_merge, intensity,
+    # overlaps_merge, patchgrid, intensity,
     # zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale), export.
     "slurm": {
         "mail_user": None,          # sbatch --mail-user (failure mails); null: Slurm's default
@@ -49,10 +49,10 @@ DEFAULTS = {
 }
 
 # Step modules, in pipeline order; each has a DEFAULTS section of the same name.
-STEPS = ("check", "preview", "stitch", "align", "shading", "overlaps", "intensity", "destreak", "zcorrect", "render",
-         "pyramid", "export", "precomputed", "upload", "serve", "movie")
+STEPS = ("check", "preview", "stitch", "align", "shading", "overlaps", "patchgrid", "intensity", "destreak", "zcorrect",
+         "render", "pyramid", "export", "precomputed", "upload", "serve", "movie")
 JOBS = ("check", "preview", "preview_merge", "stitch", "stitch_merge", "align", "align_solve", "shading", "overlaps",
-        "overlaps_merge", "intensity",
+        "overlaps_merge", "patchgrid", "intensity",
         "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid", "export", "precomputed_init",
         "precomputed", "precomputed_verify", "upload", "upload_finish")
 ARRAY_JOBS = ("preview", "stitch", "align", "overlaps", "zcorrect", "render", "pyramid", "precomputed", "upload")
