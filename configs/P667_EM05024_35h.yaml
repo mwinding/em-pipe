@@ -30,10 +30,11 @@ intensity:
   lo_percentile: 1
   hi_percentile: 99
   # Tile balance from the overlaps measured on the raw tiles in every slice (the thumbnails' overlaps,
-  # 6-8 px wide, left seam steps of 10-15 greys that changed from slice to slice); gains/offsets
-  # smoothed over 3 slices only, and the per-slice correction shifts whole slices so tiles stay matched.
+  # 6-8 px wide, left seam steps of 10-15 greys that changed from slice to slice), followed slice by
+  # slice (smoothing over z only made seams worse); the per-slice correction shifts whole slices so
+  # tiles stay matched.
   balance_source: overlaps
-  balance_smooth_slices: 3
+  balance_smooth_slices: 1
   per_slice: slice
 
 # Flat-field: the SEM's brightness fall-off across each tile (~8 % on the right-hand tiles, the same in

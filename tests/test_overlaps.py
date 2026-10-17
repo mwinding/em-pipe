@@ -114,3 +114,23 @@ def test_solve_weights_the_gain_of_low_contrast_overlaps():
     g = intensity.solve(rels)
     assert g["a"][0] * 1.2 == pytest.approx(g["b"][0], rel=1e-3)
     assert shading.DEFAULTS["shading"]["enabled"] is False
+
+
+def test_solve_matches_tiles_at_the_data_not_at_zero():
+    """Raw EM sits far from 0 (~37000): a 3 % gain error moves a relation's value at 0 by ~1100,
+    so offsets matched at 0 mismatch the tiles at their data; matched at the relation's centre they don't."""
+    true_o = {"a": 0.0, "b": 400.0, "c": -300.0}       # b = a + 400, c = a - 300 (gains all 1)
+    m = 37000.0
+    rels = []
+    for (x, y), err in ((("a", "b"), 1.03), (("b", "c"), 0.97), (("a", "c"), 1.02)):
+        # v_x ~ err * v_y + off, exact at v_y = m: v_x(m) = m - true_o[y] + true_o[x]
+        off = (m - true_o[y] + true_o[x]) - err * m
+        rels.append((x, y, err, off, 10000, 1e-9, m))      # gains barely trusted, as for noisy overlaps
+    sol = intensity.solve(rels)
+    for x, y, err, off, *_ in rels:
+        vx = err * m + off
+        mismatch = (sol[x][0] * vx + sol[x][1]) - (sol[y][0] * m + sol[y][1])
+        assert abs(mismatch) < 5
+    at_zero = intensity.solve([r[:6] for r in rels])
+    x, y, err, off, *_ = rels[0]
+    assert abs((at_zero[x][0] * (err * m + off) + at_zero[x][1]) - (at_zero[y][0] * m + at_zero[y][1])) > 300

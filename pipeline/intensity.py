@@ -199,7 +199,7 @@ def overlap_measurements(cfg):
     rel = pd.read_csv(path, dtype={"a": str, "b": str})
     found = []
     for z, g in rel.groupby("z"):
-        rels = [(r.a, r.b, r.gain, r.offset, r.n, min(1.0, r.cnr / GAIN_CNR)) for r in g.itertuples()]
+        rels = [(r.a, r.b, r.gain, r.offset, r.n, min(1.0, r.cnr / GAIN_CNR), r.median_b) for r in g.itertuples()]
         found += [{"z": z, "tile": t, "g": gg, "o": oo} for t, (gg, oo) in solve(connected(rels)).items()]
     meas = _measurements(found)
     every = int(get(cfg, "overlaps.every", 1) or 1)
@@ -215,12 +215,18 @@ def balance(cfg, df, meas, every):
     c = cfg["intensity"]
     df = df.merge(meas, on=["z", "tile"], how="left")
     window = max(1, round((c["balance_smooth_slices"] or c["smooth_slices"]) / every))
+    # Smoothed (and interpolated) is each tile's map g v + o at two fixed intensities of its own,
+    # r1, r2 (its median window ends in the block), not g and o apart: with noisy gains the offset
+    # (the map's value at 0, far below the data) swings with the gain, and separate medians would
+    # pair one slice's gain with another slice's offset.
     for _, grp in df.groupby(["tile", "block"]):
         ok = grp["g"].notna()
         if ok.any():
-            for col in ("g", "o"):
-                smooth = running_median(grp.loc[ok, col], window)
-                df.loc[grp.index, col] = np.interp(grp["pos"], grp.loc[ok, "pos"], smooth)
+            r1, r2 = grp["lo"].median(), grp["hi"].median()
+            at = {r: grp.loc[ok, "g"] * r + grp.loc[ok, "o"] for r in (r1, r2)}
+            m1, m2 = (np.interp(grp["pos"], grp.loc[ok, "pos"], running_median(at[r], window)) for r in (r1, r2))
+            df.loc[grp.index, "g"] = (m2 - m1) / (r2 - r1)
+            df.loc[grp.index, "o"] = m1 - df.loc[grp.index, "g"] * r1
     bal = df["g"].notna()
     if not bal.all():
         log.warning("%d (z, tile) have no overlap measurement in their smoothing block: left unbalanced",
@@ -259,7 +265,7 @@ def measure(rows, stitch, thumbs_dir, fields=None, tissue_only=True):
         ok = np.isfinite(va) & np.isfinite(vb)
         va, vb = va[ok], vb[ok]
         if len(va) >= MIN_OVERLAP_PX and (rel := relation(va, vb)):
-            rels.append((a, b, *rel, len(va)))
+            rels.append((a, b, *rel, len(va), 1.0, float(np.median(vb))))
     return solve(connected(rels)) if rels else {}
 
 
@@ -307,12 +313,19 @@ def relation(va, vb):
     return gain, qa[1] - gain * qb[1]
 
 
+GAIN_PRIOR = 0.05   # weight of each tile's pull towards gain 1, relative to the strongest relation
+
+
 def solve(rels):
     """{tile: (g, o)} with g_a v_a + o_a = g_b v_b + o_b in every overlap, mean g = 1, mean o = 0.
 
-    rels: (a, b, g_ab, o_ab, n_px[, gain_weight]) with v_a ~ g_ab v_b + o_ab. Gains first, then
-    offsets given the gains; equations weighted by sqrt(n_px) (the gain equation also by
-    gain_weight, default 1), the mean constraints by a much larger weight.
+    rels: (a, b, g_ab, o_ab, n_px[, gain_weight[, centre]]) with v_a ~ g_ab v_b + o_ab. Gains
+    first, then offsets given the gains, matching the tiles at v_b = centre (the overlap's typical
+    value; default 0): a relation is accurate near its data, and its value at 0 (the offset) is
+    off by the gain's error times the data's distance from 0. Equations weighted by sqrt(n_px)
+    (the gain equation also by gain_weight, default 1), the mean constraints by a much larger
+    weight. Each gain is also pulled weakly towards 1 (GAIN_PRIOR of the strongest relation's
+    weight), so gains no relation pins well (low gain_weight) stay near 1 instead of following noise.
     """
     tiles = sorted({t for r in rels for t in r[:2]})
     k = {t: i for i, t in enumerate(tiles)}
@@ -320,13 +333,18 @@ def solve(rels):
     wg = w * np.array([r[5] if len(r) > 5 else 1.0 for r in rels])
     big = 100 * w.max()
     G, D = np.zeros((len(rels) + 1, len(tiles))), np.zeros((len(rels) + 1, len(tiles)))
+    prior = GAIN_PRIOR * w.max() * np.eye(len(tiles))   # g_t - 1 = 0, weakly
     for j, (a, b, g_ab, *_) in enumerate(rels):
         G[j, k[a]] += wg[j] * g_ab   # g_a g_ab - g_b = 0
         G[j, k[b]] -= wg[j]
         D[j, k[a]], D[j, k[b]] = w[j], -w[j]   # o_a - o_b = -g_a o_ab
     G[-1] = D[-1] = big
-    g = np.linalg.lstsq(G, np.r_[np.zeros(len(rels)), big * len(tiles)], rcond=None)[0]
-    rhs = [-w[j] * g[k[r[0]]] * r[3] for j, r in enumerate(rels)]
+    g = np.linalg.lstsq(np.vstack([G, prior]), np.r_[np.zeros(len(rels)), big * len(tiles), prior.diagonal()],
+                        rcond=None)[0]
+    def at_centre(j, r):   # o_a - o_b = g_b m - g_a (g_ab m + o_ab), m = the relation's centre
+        m = r[6] if len(r) > 6 else 0.0
+        return w[j] * (g[k[r[1]]] * m - g[k[r[0]]] * (r[2] * m + r[3]))
+    rhs = [at_centre(j, r) for j, r in enumerate(rels)]
     o = np.linalg.lstsq(D, np.r_[rhs, 0.0], rcond=None)[0]
     return {t: (g[i], o[i]) for t, i in k.items()}
 
