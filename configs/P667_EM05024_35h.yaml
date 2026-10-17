@@ -29,10 +29,19 @@ intensity:
   percentile_of: tissue
   lo_percentile: 1
   hi_percentile: 99
+  # Tile balance from the overlaps measured on the raw tiles in every slice (the thumbnails' overlaps,
+  # 6-8 px wide, left seam steps of 10-15 greys that changed from slice to slice); gains/offsets
+  # smoothed over 3 slices only, and the per-slice correction shifts whole slices so tiles stay matched.
+  balance_source: overlaps
+  balance_smooth_slices: 3
+  per_slice: slice
 
 # Flat-field: the SEM's brightness fall-off across each tile (~8 % on the right-hand tiles, the same in
 # every slice of a layout) measured from the thumbnails per tile position and segment, divided out.
 shading:
+  enabled: true
+
+overlaps:
   enabled: true
 
 # Tile overlap search at 1/4 resolution: more margin than the default 8 for small (~1%) overlaps.
@@ -79,6 +88,9 @@ slurm:
   stitch_merge: {cpus: 2, mem: 8G, time: "01:00:00"}
   align: {array: 40, cpus: 8, mem: 16G, time: "12:00:00"}         # ~170 chunks of 100 slices, ~30 min each
   align_solve: {cpus: 4, mem: 32G, time: "02:00:00"}
+  shading: {cpus: 2, mem: 16G, time: "01:00:00"}
+  overlaps: {array: 40, cpus: 2, mem: 8G, time: "04:00:00"}      # ~2-5 s per slice (left/right overlaps)
+  overlaps_merge: {cpus: 2, mem: 8G, time: "00:30:00"}
   intensity: {cpus: 2, mem: 16G, time: "01:00:00"}
   zcorrect: {array: 20, cpus: 2, mem: 8G, time: "04:00:00"}
   zcorrect_solve: {cpus: 2, mem: 8G, time: "01:00:00"}

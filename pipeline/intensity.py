@@ -2,10 +2,12 @@
 
 Each tile's lo/hi start from its preview statistics, smoothed over z with a running median in
 blocks that restart at segment changes (and at seams with ``break_at_seams``). With
-``balance_tiles``, every ``balance_every`` slices the preview thumbnails of neighbouring tiles
-are compared where they overlap (placed by the stitch transforms), a least-squares solve gives
-per-tile gain/offset onto a common scale (mean gain 1, mean offset 0), and one common window per
-z is mapped back into each tile's raw values. Writes intensity/levels.csv and intensity.png.
+``balance_tiles``, neighbouring tiles are compared where they overlap: from the preview thumbnails
+every ``balance_every`` slices (``balance_source: thumbnails``), or from the relations the overlaps
+step measured on the raw tiles (``balance_source: overlaps``; every slice it measured). A
+least-squares solve per slice gives per-tile gain/offset onto a common scale (mean gain 1, mean
+offset 0), smoothed over ``balance_smooth_slices``, and one common window per z is mapped back into
+each tile's raw values. Writes intensity/levels.csv and intensity.png.
 
 Starting windows (``intensity.window``): median (default) puts the tissue median (preview t_p50,
 background left out) at grey ``target_median`` and makes the tissue p5-p95 span ``target_span``
@@ -31,7 +33,7 @@ from scipy.sparse.csgraph import connected_components  # noqa: E402
 
 from . import background, shading, transforms  # noqa: E402
 from .cli import atomic_write, base_parser, setup  # noqa: E402
-from .config import deep_merge, qc_path, step_dir, step_path  # noqa: E402
+from .config import deep_merge, get, qc_path, step_dir, step_path  # noqa: E402
 from .preview import PERCENTILES, TISSUE, plot_tiles, save, thumb_to_tile, thumb_values  # noqa: E402
 from .slices import load_slices  # noqa: E402
 
@@ -50,10 +52,16 @@ DEFAULTS = {
         "smooth_slices": 51,      # running-median window over z, in selected slices
         "break_at_seams": True,   # restart smoothing at seams (it always restarts at segment changes)
         "balance_tiles": True,    # match brightness of overlapping tiles (needs stitch/tiles.csv)
-        "balance_every": 10,      # measure tile overlaps every N selected slices
-        "balance_tissue_only": True,   # compare overlaps on tissue pixels only (background left out)
-        # Follow each tile's slice-to-slice brightness jumps (tile median minus its running median),
-        # which the smoothing above would otherwise leave as tile flicker when scrolling through z.
+        "balance_source": "thumbnails",   # thumbnails: preview thumbnails every balance_every slices |
+                                          # overlaps: the overlaps step's relations from the raw tiles
+        "balance_every": 10,      # thumbnails: measure tile overlaps every N selected slices
+        "balance_tissue_only": True,   # thumbnails: compare overlaps on tissue pixels only (background left out)
+        "balance_smooth_slices": None,   # running median of the tile gains/offsets over this many selected
+                                         # slices; null: smooth_slices
+        # Follow slice-to-slice brightness jumps (tile median minus its running median), which the
+        # smoothing above would otherwise leave as flicker when scrolling through z. true: each tile
+        # its own jump; slice: one jump per slice (the median over its tiles, relative to their
+        # windows), which keeps tiles matched when the balance follows every slice; false: off.
         "per_slice": True,
     },
 }
@@ -133,20 +141,36 @@ def compute_levels(cfg):
     # other; tissue changes slowly, so the tile median's deviation from its trend is that jump.
     # (A column, so it stays with its rows through balance's merge.)
     df["jump"] = df[mid] - by_run[mid].transform(lambda s: running_median(s, c["smooth_slices"]))
+    if c["per_slice"] not in (True, False, "slice"):
+        raise ValueError(f"intensity.per_slice must be true, false or slice, not {c['per_slice']!r}")
+    if c["balance_source"] not in ("thumbnails", "overlaps"):
+        raise ValueError(f"intensity.balance_source must be thumbnails or overlaps, not {c['balance_source']!r}")
     if c["balance_tiles"]:
         tiles_csv = step_path(cfg, "stitch", "tiles.csv")
-        if tiles_csv.exists():
-            df = balance(cfg, df, tiles_csv, shading.load(cfg))
+        if c["balance_source"] == "overlaps":
+            meas, every = overlap_measurements(cfg)
+            df = balance(cfg, df, meas, every)
+        elif tiles_csv.exists():
+            df = balance(cfg, df, thumbnail_measurements(cfg, df, tiles_csv, shading.load(cfg)),
+                         int(c["balance_every"]))
         else:
             log.warning("%s not found: per-tile levels without tile balancing", tiles_csv)
+    if c["per_slice"] == "slice":
+        rel = df["jump"] / (df["hi"] - df["lo"])
+        df["jump"] = rel.groupby(df["z"]).transform("median") * (df["hi"] - df["lo"])
     if c["per_slice"]:
         df["lo"] += df["jump"]
         df["hi"] += df["jump"]
     return df
 
 
-def balance(cfg, df, tiles_csv, fields=None):
-    """Replace lo/hi by one common window per z, mapped through per-tile gain/offset (columns g, o).
+def _measurements(found):
+    # Float columns even when nothing was measured: object columns break the assignments in balance.
+    return pd.DataFrame(found, columns=["z", "tile", "g", "o"]).astype({"z": int, "g": float, "o": float})
+
+
+def thumbnail_measurements(cfg, df, tiles_csv, fields=None):
+    """Per-tile gain/offset (z, tile, g, o) from the preview thumbnails' overlaps every balance_every slices.
 
     fields: shading fields {(segment, tile): gain} divided out of the thumbnails first."""
     c = cfg["intensity"]
@@ -159,12 +183,38 @@ def balance(cfg, df, tiles_csv, fields=None):
     for z, rows in sampled.groupby("z"):
         meas_z = measure(rows, stitch, thumbs_dir, fields or {}, c["balance_tissue_only"])
         found += [{"z": z, "tile": t, "g": g, "o": o} for t, (g, o) in meas_z.items()]
-    # Float columns even when nothing was measured: object columns break the assignments below.
-    meas = pd.DataFrame(found, columns=["z", "tile", "g", "o"]).astype({"z": int, "g": float, "o": float})
-    log.info("tile balance measured at %d of %d sampled slices", meas["z"].nunique(), sampled["z"].nunique())
-    df = df.merge(meas, on=["z", "tile"], how="left")
+    meas = _measurements(found)
+    log.info("tile balance measured at %d of %d sampled slices (thumbnails)", meas["z"].nunique(), sampled["z"].nunique())
+    return meas
 
-    window = max(1, round(c["smooth_slices"] / c["balance_every"]))
+
+GAIN_CNR = 10.0   # overlaps whose spread is less than this many fit-rms (e.g. only resin) constrain the gain less
+
+
+def overlap_measurements(cfg):
+    """(per-tile gain/offset (z, tile, g, o), every) from the overlaps step's relations."""
+    path = step_path(cfg, "overlaps", "relations.csv")
+    if not path.exists():
+        raise FileNotFoundError(f"{path} not found: balance_source overlaps needs the overlaps step (run, merge)")
+    rel = pd.read_csv(path, dtype={"a": str, "b": str})
+    found = []
+    for z, g in rel.groupby("z"):
+        rels = [(r.a, r.b, r.gain, r.offset, r.n, min(1.0, r.cnr / GAIN_CNR)) for r in g.itertuples()]
+        found += [{"z": z, "tile": t, "g": gg, "o": oo} for t, (gg, oo) in solve(connected(rels)).items()]
+    meas = _measurements(found)
+    every = int(get(cfg, "overlaps.every", 1) or 1)
+    log.info("tile balance from %d overlap relations at %d slices (every %d)", len(rel), meas["z"].nunique(), every)
+    return meas, every
+
+
+def balance(cfg, df, meas, every):
+    """Replace lo/hi by one common window per z, mapped through per-tile gain/offset.
+
+    meas: (z, tile, g, o) measured every ``every`` selected slices; smoothed over
+    balance_smooth_slices (default smooth_slices) and interpolated in between."""
+    c = cfg["intensity"]
+    df = df.merge(meas, on=["z", "tile"], how="left")
+    window = max(1, round((c["balance_smooth_slices"] or c["smooth_slices"]) / every))
     for _, grp in df.groupby(["tile", "block"]):
         ok = grp["g"].notna()
         if ok.any():
@@ -260,21 +310,23 @@ def relation(va, vb):
 def solve(rels):
     """{tile: (g, o)} with g_a v_a + o_a = g_b v_b + o_b in every overlap, mean g = 1, mean o = 0.
 
-    rels: (a, b, g_ab, o_ab, n_px) with v_a ~ g_ab v_b + o_ab. Gains first, then offsets given
-    the gains; equations weighted by sqrt(n_px), the mean constraints by a much larger weight.
+    rels: (a, b, g_ab, o_ab, n_px[, gain_weight]) with v_a ~ g_ab v_b + o_ab. Gains first, then
+    offsets given the gains; equations weighted by sqrt(n_px) (the gain equation also by
+    gain_weight, default 1), the mean constraints by a much larger weight.
     """
     tiles = sorted({t for r in rels for t in r[:2]})
     k = {t: i for i, t in enumerate(tiles)}
     w = np.sqrt([r[4] for r in rels])
+    wg = w * np.array([r[5] if len(r) > 5 else 1.0 for r in rels])
     big = 100 * w.max()
     G, D = np.zeros((len(rels) + 1, len(tiles))), np.zeros((len(rels) + 1, len(tiles)))
-    for j, (a, b, g_ab, _, _) in enumerate(rels):
-        G[j, k[a]] += w[j] * g_ab   # g_a g_ab - g_b = 0
-        G[j, k[b]] -= w[j]
+    for j, (a, b, g_ab, *_) in enumerate(rels):
+        G[j, k[a]] += wg[j] * g_ab   # g_a g_ab - g_b = 0
+        G[j, k[b]] -= wg[j]
         D[j, k[a]], D[j, k[b]] = w[j], -w[j]   # o_a - o_b = -g_a o_ab
     G[-1] = D[-1] = big
     g = np.linalg.lstsq(G, np.r_[np.zeros(len(rels)), big * len(tiles)], rcond=None)[0]
-    rhs = [-w[j] * g[k[a]] * o_ab for j, (a, _, _, o_ab, _) in enumerate(rels)]
+    rhs = [-w[j] * g[k[r[0]]] * r[3] for j, r in enumerate(rels)]
     o = np.linalg.lstsq(D, np.r_[rhs, 0.0], rcond=None)[0]
     return {t: (g[i], o[i]) for t, i in k.items()}
 
@@ -303,8 +355,6 @@ def main(argv=None):
     p = base_parser(__doc__.splitlines()[0])
     args = p.parse_args(argv)
     cfg = setup(args, deep_merge(DEFAULTS, shading.DEFAULTS))
-    if cfg["shading"]["enabled"]:
-        shading.solve(cfg)
     df = compute_levels(cfg)
     atomic_write(step_dir(cfg, "intensity", "levels.csv"),
                  lambda t: df[["z", "tile", "lo", "hi"]].to_csv(t, index=False, float_format="%.2f"))

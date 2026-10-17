@@ -40,6 +40,7 @@ class Synth:
     volume: np.ndarray          # float32 [Zv, H, W], values in [0, 1]
     z_positions: np.ndarray     # axial sampling position of each slice (volume voxel units)
     files: dict = field(default_factory=dict)   # filename -> list of z it contains
+    jitter: list = field(default_factory=list)  # per z: {tile: extra gain} (make_dataset tile_jitter)
 
     def montage(self, z):
         """True content of slice z in montage coordinates (float, [0, 1])."""
@@ -77,6 +78,7 @@ def make_volume(shape, seed=0, sigma=(1.0, 2.0, 2.0), n_blobs=None):
 def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overlap=(24, 28),
                  start=datetime(2026, 9, 24, 23, 35, 0), interval_s=142.0, drift_step=1.5,
                  drift_jumps=None, gaps=None, parts=None, z_positions=None, tile_gain=None, tile_shading=None,
+                 tile_jitter=0.0,
                  intensity_drift=0.0, streaks=0.0, noise=0.01, seed=0, faults=None,
                  lo=26000, hi=41000):
     """Write a synthetic dataset under ``root`` and return its ground truth.
@@ -86,6 +88,8 @@ def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overl
     drift_jumps: {z: (dx, dy)} extra jump in drift at z
     z_positions: axial sampling position per slice (default 0, 1, 2, ...)
     tile_gain: {tile: gain} multiplicative intensity per tile
+    tile_jitter: sd of an extra gain per (z, tile), 1 + N(0, sd): tiles that brighten or darken
+      independently from slice to slice (truth.jitter[z][tile])
     tile_shading: {tile: (ax, ay)} multiplicative gradient across the tile's raw values (detector fall-off),
       1 + ax * (x/w - 1/2) + ay * (y/h - 1/2)
     streaks: amplitude of vertical curtaining stripes (fraction of range)
@@ -140,6 +144,9 @@ def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overl
         days.setdefault(day, []).append((part, zs))
 
     gains = tile_gain or {}
+    jrng = np.random.default_rng(seed + 7)   # its own stream: other tests' data don't change
+    truth.jitter = [{t: (1 + tile_jitter * jrng.standard_normal()) if tile_jitter else 1.0 for t in tiles}
+                    for _ in range(n_slices)]
     shade = {}
     for tile, (ax, ay) in (tile_shading or {}).items():
         gx = 1 + ax * (np.arange(tw) / (tw - 1) - 0.5)
@@ -159,7 +166,7 @@ def make_dataset(root, *, n_slices=24, grid=(2, 2), tile_shape=(192, 224), overl
                 stack = np.empty((len(zs), th, tw), np.float32)
                 for i, z in enumerate(zs):
                     m = truth.montage(z)[y0:y0 + th, x0:x0 + tw]
-                    img = m * gains.get(tile, 1.0) * (1 + intensity_drift * z / max(n_slices - 1, 1))
+                    img = m * gains.get(tile, 1.0) * (1 + intensity_drift * z / max(n_slices - 1, 1)) * truth.jitter[z][tile]
                     if stripe is not None:
                         img = img + stripe[None, :]
                     img = img + rng.normal(0, noise, img.shape)

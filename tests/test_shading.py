@@ -20,7 +20,7 @@ N = 72   # the anatomy's own brightness trend averages out over slices; the fit'
 
 @pytest.fixture(scope="module")
 def shaded(tmp_path_factory):
-    """Dataset with shaded tiles; preview, then intensity with shading on: (truth, config path, out)."""
+    """Dataset with shaded tiles; preview, shading, then intensity: (truth, config path, out)."""
     root = tmp_path_factory.mktemp("shading")
     truth = synth.make_dataset(root / "raw", n_slices=N, tile_shape=(192, 224), overlap=(24, 28),
                                tile_shading=SHADE, noise=0.002, seed=5)
@@ -28,6 +28,7 @@ def shaded(tmp_path_factory):
                       intensity={"window": "percentile", "per_slice": False},
                       shading={"enabled": True, "every": 1, "prior_weight": 0.0})
     run_preview(cfg)
+    assert shading.main(["--config", str(cfg)]) == 0
     assert intensity.main(["--config", str(cfg)]) == 0
     return truth, cfg, out
 
@@ -53,13 +54,13 @@ def test_fields_recover_the_gradients(shaded):
         want /= want.mean()
         assert f.shape == (48, 56) and f.dtype == np.float32
         assert np.abs(f / want - 1).max() < 0.02, tile       # within 2 % everywhere
-    info = json.loads((out / "work" / "intensity" / "shading.json").read_text())
+    info = json.loads((out / "work" / "shading" / "fields.json").read_text())
     assert {(i["segment"], i["tile"]) for i in info["fields"]} == set(fields) and info["fields"][0]["slices"] == N
     assert info["settings"]["resin_weight"] == 0.3
     assert (out / "qc" / "shading.png").exists()
     # off: nothing loaded; on without the file: an error that says what to run
     assert shading.load({"shading": {"enabled": False}}) == {}
-    with pytest.raises(FileNotFoundError, match="intensity step"):
+    with pytest.raises(FileNotFoundError, match="shading step"):
         shading.load({"shading": {"enabled": True}, "output_dir": str(out / "elsewhere")})
 
 

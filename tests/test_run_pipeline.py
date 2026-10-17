@@ -205,3 +205,15 @@ def test_precomputed_and_upload_steps_when_enabled(tmp_path, env):
     assert jobs[5]["args"][1:] == ["finish"] and jobs[5]["dependency"] == "afterok:<em-upload-run>"
     p = run(write_cfg(tmp_path), env, "--from", "export", "--dry-run")
     assert names(p.stdout) == ["em-export"] and "precomputed.enabled is false" in p.stderr
+
+
+def test_shading_and_overlaps_steps_when_enabled(tmp_path, env):
+    env, log = env
+    cfg = write_cfg(tmp_path, shading={"enabled": True}, overlaps={"enabled": True},
+                    slurm_extra={"overlaps": {"array": 7}})
+    jobs = calls(run(cfg, env, "--from", "shading", "--dry-run").stdout.splitlines())
+    assert [j["job-name"] for j in jobs][:4] == ["em-shading", "em-overlaps-run", "em-overlaps-merge", "em-intensity"]
+    assert jobs[1]["array"] == "0-6" and jobs[1]["args"][1:] == ["run"] and jobs[2]["args"][1:] == ["merge"]
+    p = run(write_cfg(tmp_path), env, "--steps", "shading,overlaps,intensity", "--dry-run")
+    assert names(p.stdout) == ["em-intensity"]
+    assert "shading.enabled is false" in p.stderr and "overlaps.enabled is false" in p.stderr

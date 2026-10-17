@@ -106,9 +106,11 @@ intensity:
   smooth_slices: 51          # running-median window over z, in selected slices
   break_at_seams: true       # restart smoothing at seams (it always restarts at segment changes)
   balance_tiles: true        # match brightness of overlapping tiles (needs stitch/tiles.csv)
-  balance_every: 10          # measure tile overlaps every N selected slices
-  balance_tissue_only: true  # compare overlaps on tissue pixels only (background left out)
-  per_slice: true            # follow each tile's slice-to-slice brightness jumps (else they flicker in z)
+  balance_source: thumbnails # thumbnails: preview thumbnails every balance_every slices | overlaps: the overlaps step
+  balance_every: 10          # thumbnails: measure tile overlaps every N selected slices
+  balance_tissue_only: true  # thumbnails: compare overlaps on tissue pixels only (background left out)
+  balance_smooth_slices: null  # running median of tile gains/offsets over this many slices; null: smooth_slices
+  per_slice: true            # follow slice-to-slice jumps: true per tile | slice: one per slice (keeps tiles matched) | false
 
 shading:                     # flat-field: a smooth gain field per tile position and segment, from the thumbnails
   enabled: false             # runs in the intensity job; render divides each tile slice by its field
@@ -119,6 +121,16 @@ shading:                     # flat-field: a smooth gain field per tile position
   resin_weight: 0.3          # plain bright resin (scaled to its own median) enters the fit at this weight vs tissue (0: tissue only)
   prior_weight: 0.2          # pull towards gain 1 (per pixel, in slices): the field relaxes to 1 where little tissue was measured
   max_gain: 1.5              # fields are clipped to [1 / max_gain, max_gain]
+
+overlaps:                    # brightness relation of every overlapping tile pair, from the raw tiles
+  enabled: false             # run_pipeline.sh: measure after align (for intensity.balance_source: overlaps)
+  every: 1                   # measure every N-th selected slice
+  factor: 4                  # area-downsampling of the overlaps before matching (4: 32 nm at 8 nm pixels)
+  trim_px: 16                # full-resolution px left out at each tile's border (scan edge effects)
+  smooth_px: 1.0             # Gaussian sigma (downsampled px) applied to both tiles' overlap
+  min_pixels: 500            # pixel pairs (downsampled) a relation needs
+  reject: 3.0                # pairs further than this many robust sigmas off the line are dropped
+  chunk_slices: 100          # selected z per array-task chunk (fixed blocks of global z)
 
 # Curtaining removal inside render. Tune first: python -m pipeline.destreak test --config C --z Z --tile r-c
 destreak:
@@ -231,6 +243,7 @@ slurm:
   preview: {array: 20}
   stitch: {array: 10}
   align: {array: 20}
+  overlaps: {array: 20}
   zcorrect: {array: 10}
   render_init: {mem: 16G}    # render.sbatch's 160G is sized for render run
   render: {array: 20}

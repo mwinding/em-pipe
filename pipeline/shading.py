@@ -15,15 +15,17 @@ correction (``prior_weight``) rather than left to extrapolate. Each field is sca
 tissue-weighted mean of 1, so a tile's median is unchanged and the preview percentiles stay
 valid as windows.
 
-Runs inside the intensity job (``intensity`` calls ``solve`` when ``shading.enabled``) and writes
-work/intensity/shading.npz (one field per segment and tile, at thumbnail resolution, with a JSON
-sidecar) and qc/shading.png (measured map and fitted field per tile). intensity divides the
-thumbnails by the fields before comparing tile overlaps; render divides each tile slice by its
-field (resampled to tile pixels) before applying the display window.
+A step of its own after preview (``python -m pipeline.shading --config C``; run_pipeline.sh runs it
+when ``shading.enabled``). Writes work/shading/fields.npz (one field per segment and tile, at
+thumbnail resolution, with fields.json) and qc/shading.png (measured map and fitted field per
+tile). overlaps and intensity divide the tile data by the fields before comparing tiles; render
+divides each tile slice by its field (resampled to tile pixels) before applying the display window.
 """
 
+import hashlib
 import json
 import logging
+import sys
 from pathlib import Path
 
 import cv2
@@ -31,7 +33,7 @@ import numpy as np
 import pandas as pd
 
 from . import background
-from .cli import atomic_write
+from .cli import atomic_write, base_parser, setup
 from .config import qc_path, step_dir, step_path
 from .preview import thumb_to_tile, thumb_values
 from .slices import load_slices
@@ -136,9 +138,9 @@ def solve(cfg):
         info.append({"segment": seg, "tile": tile, "slices": k, "shape": list(field.shape),
                      "min": float(field.min()), "max": float(field.max())})
         log.info("shading: segment %d tile %s: gain %.3f-%.3f from %d slices", seg, tile, field.min(), field.max(), k)
-    out = step_dir(cfg, "intensity")
-    atomic_write(out / "shading.npz", lambda p: np.savez(p, **{f"s{s}_t{t}": f for (s, t), f in fields.items()}))
-    (out / "shading.json").write_text(json.dumps({"settings": c, "fields": info}, indent=1))
+    out = step_dir(cfg, "shading")
+    atomic_write(out / "fields.npz", lambda p: np.savez(p, **{f"s{s}_t{t}": f for (s, t), f in fields.items()}))
+    atomic_write(out / "fields.json", lambda p: Path(p).write_text(json.dumps({"settings": c, "fields": info}, indent=1)))
     plot(measured, fields, qc_path(cfg, "shading.png"))
     return fields
 
@@ -147,9 +149,9 @@ def load(cfg):
     """{(segment, tile): field} written by ``solve``, or {} when shading is off or not yet solved."""
     if not (cfg.get("shading") or {}).get("enabled"):
         return {}
-    path = step_path(cfg, "intensity", "shading.npz")
+    path = step_path(cfg, "shading", "fields.npz")
     if not path.exists():
-        raise FileNotFoundError(f"{path} not found: shading.enabled needs the intensity step run with it")
+        raise FileNotFoundError(f"{path} not found: shading.enabled needs the shading step run first")
     with np.load(path) as z:
         out = {}
         for key in z.files:
@@ -162,8 +164,7 @@ def digest(cfg):
     """Identifies the fields in use (for render's plan digest); None without shading."""
     if not (cfg.get("shading") or {}).get("enabled"):
         return None
-    import hashlib
-    path = step_path(cfg, "intensity", "shading.npz")
+    path = step_path(cfg, "shading", "fields.npz")
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else "missing"
 
 
@@ -211,3 +212,19 @@ def plot(measured, fields, path):
     fig.suptitle("Tile shading: mean relative brightness by position (tissue), and the fitted flat-field")
     atomic_write(path, lambda p: fig.savefig(p, dpi=80))
     plt.close(fig)
+
+
+def main(argv=None):
+    p = base_parser(__doc__.splitlines()[0])
+    args = p.parse_args(argv)
+    cfg = setup(args, DEFAULTS)
+    if not cfg["shading"]["enabled"]:
+        log.error("shading.enabled is false: nothing to do")
+        return 1
+    fields = solve(cfg)
+    log.info("%d fields written to %s", len(fields), step_path(cfg, "shading", "fields.npz"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
