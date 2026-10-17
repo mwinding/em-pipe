@@ -1,7 +1,8 @@
 """Fly-through movie of a rendered volume: the whole slice first, then a smooth zoom into a target
 point down to full resolution, scrolling through z the whole time (faster when zoomed out, if set);
 optionally the cutting plane then turns about the frame's vertical axis (to the y-z plane at 90
-degrees, showing the voxels are isotropic) while the scroll carries on along the plane's normal.
+degrees, showing the voxels are isotropic) while the scroll carries on along the plane's normal,
+and finally zooms back out until the whole plane (e.g. the side view, y by z) fills the frame.
 
 Each frame reads only what is on screen, from the pyramid level just finer than the frame's zoom
 (the whole slice at 64-128 nm at the start, a frame-sized window at 8 nm at the end), so a 20 s
@@ -55,6 +56,9 @@ DEFAULTS = {
                                   # (90: to the y-z plane); 0: no rotation
         "rotate_s": 6.0,          # the rotation
         "rotated_s": 4.0,         # after it
+        "zoom_out_s": 0.0,        # then zoom back out over this long (0: no zoom-out); rotate_deg 0 or +-90
+        "zoom_out_to": None,      # voxels per frame px at the end; null: the whole final plane fits the frame
+        "hold_out_s": 3.0,        # after the zoom-out
         "zoom_start": None,       # voxels per frame px at the start; null: the whole slice fits the frame
         "zoom_end": 1.0,          # voxels per frame px at the end (1: full resolution; 0.5: 2x magnified)
         "scale_bar": False,
@@ -103,30 +107,50 @@ def timeline(m, shape0):
     t1 = t0 + m["zoom_s"]
     t2 = t1 + m["hold_end_s"]
     t3 = t2 + (m["rotate_s"] if m["rotate_deg"] else 0)
-    if min(t0, m["hold_end_s"], m["rotate_s"], m["rotated_s"]) < 0 or m["zoom_s"] <= 0:
-        raise ValueError("movie: the hold and rotation times must be >= 0 and zoom_s > 0")
+    t4 = t3 + (m["rotated_s"] if m["rotate_deg"] else 0)
+    t5 = t4 + m["zoom_out_s"]
+    if min(t0, m["hold_end_s"], m["rotate_s"], m["rotated_s"], m["zoom_out_s"], m["hold_out_s"]) < 0 \
+            or m["zoom_s"] <= 0:
+        raise ValueError("movie: the hold, rotation and zoom-out times must be >= 0 and zoom_s > 0")
+    side = abs(abs(m["rotate_deg"]) - 90) < 1e-9
+    if m["zoom_out_s"] and not (side or m["rotate_deg"] == 0):
+        raise ValueError("movie: zoom_out_s needs rotate_deg 0, 90 or -90")
     nz, ny, nx = shape0
     tx, ty, tz = (float(v) for v in m["target"])
     n = int(round(movie_seconds(m) * fps))
     t = np.arange(n) / fps
     zs = float(m["zoom_start"] or max(nx / w, ny / h))
     ze = float(m["zoom_end"])
+    zo = float(m["zoom_out_to"] or max((nz if side else nx) / w, ny / h))
     ease = _ease(t, t0, t1)
-    zoom = np.exp(np.log(zs) + (np.log(ze) - np.log(zs)) * ease)
+    ease_out = _ease(t, t4, t5) if m["zoom_out_s"] else np.zeros(n)
+    zoom_in = np.exp(np.log(zs) + (np.log(ze) - np.log(zs)) * ease)
+    zoom_out = np.exp(np.log(ze) + (np.log(zo) - np.log(ze)) * ease_out)
+    zoom = zoom_in * zoom_out / ze
     # Centre: the volume's centre at zoom_start, the target at zoom_end, with the target's offset from
     # the centre proportional to (zoom - zoom_end): it moves straight to the frame centre on screen.
-    k = (zoom - ze) / (zs - ze) if zs != ze else np.zeros(n)
+    k = (zoom_in - ze) / (zs - ze) if zs != ze else np.zeros(n)
     cx = tx + (nx / 2 - tx) * k
     cy = ty + (ny / 2 - ty) * k
     out_speed, in_speed = speeds(m)
-    speed = out_speed + (in_speed - out_speed) * ease      # slices/s, with the zoom
+    speed = out_speed + (in_speed - out_speed) * (ease - ease_out)   # slices/s, with the zoom
     theta = np.radians(m["rotate_deg"]) * _ease(t, t2, t3) if m["rotate_deg"] else np.zeros(n)
     # The view moves along the cutting plane's normal, (-sin, 0, cos) in (x, y, z), and passes the
     # target slice when the zoom ends (t1).
     d = m["direction"]
     cx = cx + _integral(-d * speed * np.sin(theta), t, t1)
     z = tz + _integral(d * speed * np.cos(theta), t, t1)
-    span = w / 2 * zoom * np.abs(np.sin(theta))             # a turned frame's half-width along z
+    if m["zoom_out_s"]:
+        # The zoom-out mirrors the zoom-in: from the view at t4 straight to the final plane's centre.
+        ko = (zoom_out - ze) / (zo - ze) if zo != ze else np.zeros(n)
+        cy = cy + (ny / 2 - np.interp(t4, t, cy)) * ko
+        if side:
+            z = z + ((nz - 1) / 2 - np.interp(t4, t, z)) * ko
+        else:
+            cx = cx + (nx / 2 - np.interp(t4, t, cx)) * ko
+    # Up to the zoom-out every frame must lie in the volume (a turned frame spans w/2 * zoom in z).
+    upto = t <= t4 + 1e-9
+    span = np.where(upto, w / 2 * zoom * np.abs(np.sin(theta)), 0.0)
     if (z - span).min() < -1e-6 or (z + span).max() > nz - 1 + 1e-6:
         lo, hi = (z - span - tz).min(), (z + span - tz).max()
         raise ValueError(f"movie: the frames reach from {lo:+.0f} to {hi:+.0f} slices around the target z, "
@@ -145,7 +169,8 @@ def speeds(m):
 
 def movie_seconds(m):
     rotation = m["rotate_s"] + m["rotated_s"] if m["rotate_deg"] else 0
-    return m["hold_start_s"] + m["zoom_s"] + m["hold_end_s"] + rotation
+    out = m["zoom_out_s"] + m["hold_out_s"] if m["zoom_out_s"] else 0
+    return m["hold_start_s"] + m["zoom_s"] + m["hold_end_s"] + rotation + out
 
 
 def open_levels(root, cache_gb):
@@ -179,30 +204,45 @@ def _level(levels, zoom):
 def render_frame(levels, size, zoom, cx, cy, z, rotation=0.0):
     """(uint8 frame, level used): the view of slice ``z`` centred on (cx, cy) at ``zoom`` s0 voxels
     per frame px, resampled from the finest level that is not finer than the frame needs; with a
-    ``rotation`` (degrees), on the plane through that point turned about the y axis instead."""
-    if abs(rotation) > 1e-6:
-        return _turned(levels, size, zoom, cx, cy, z, math.radians(rotation))
+    ``rotation`` (degrees), on the plane through that point turned about the y axis instead (at
+    +-90: the y-z plane at x = cx, frame columns along +-z)."""
+    if abs(rotation) < 1e-6:
+        return _plane_frame(levels, size, zoom, cx, cy, z + 0.5, "z")
+    if abs(abs(rotation) - 90) < 1e-6:
+        frame, level = _plane_frame(levels, size, zoom, z + 0.5, cy, cx, "x")
+        return (frame if rotation > 0 else np.ascontiguousarray(frame[:, ::-1])), level
+    return _turned(levels, size, zoom, cx, cy, z, math.radians(rotation))
+
+
+def _plane_frame(levels, size, zoom, uc, vc, cut, axis):
+    """Frame on an axis-aligned plane. axis "z": the plane z = cut, frame columns along x (centre
+    uc), rows along y (centre vc); axis "x": the plane x = cut, columns along z, rows along y.
+    Coordinates are continuous s0 voxels (voxel i spans [i, i+1)); between two planes of the level
+    the two are blended, and downsampling is anti-aliased."""
     w, h = size
     level = _level(levels, zoom)
     arr, f = levels[level], 2 ** level
     r = zoom / f                                      # level px per frame px
-    # Continuous s0 coordinates (voxel i spans [i, i+1)) -> level pixel index: X / f - 0.5.
-    x_first = (cx + (0.5 - w / 2) * zoom) / f - 0.5   # frame px 0's centre
-    y_first = (cy + (0.5 - h / 2) * zoom) / f - 0.5
+    # Continuous s0 coordinate X -> level pixel index: X / f - 0.5.
+    u_first = (uc + (0.5 - w / 2) * zoom) / f - 0.5   # frame px 0's centre
+    v_first = (vc + (0.5 - h / 2) * zoom) / f - 0.5
     sigma = 0.5 * math.sqrt(r * r - 1) if r > 1.05 else 0.0   # anti-aliasing before downsampling
     pad = 2 + math.ceil(3 * sigma)
-    x0, y0 = math.floor(x_first) - pad, math.floor(y_first) - pad
-    x1, y1 = math.ceil(x_first + (w - 1) * r) + pad + 1, math.ceil(y_first + (h - 1) * r) + pad + 1
-    nz = arr.shape[0]
-    zl = min(max((z + 0.5) / f - 0.5, 0.0), nz - 1.0)  # slice z on this level (between two planes)
-    za = int(math.floor(zl))
-    frac = zl - za
-    two = frac > 1e-3 and za + 1 < nz
-    planes = _read(arr, za, za + 1 + two, y0, y1, x0, x1)
-    img = planes[0] * (1 - frac) + planes[1] * frac if two else planes[0]
+    u0, v0 = math.floor(u_first) - pad, math.floor(v_first) - pad
+    u1, v1 = math.ceil(u_first + (w - 1) * r) + pad + 1, math.ceil(v_first + (h - 1) * r) + pad + 1
+    n_cut = arr.shape[0] if axis == "z" else arr.shape[2]
+    cl = min(max(cut / f - 0.5, 0.0), n_cut - 1.0)    # the cut on this level (between two planes)
+    ca = int(math.floor(cl))
+    frac = cl - ca
+    two = frac > 1e-3 and ca + 1 < n_cut
+    if axis == "z":
+        planes = _read(arr, ca, ca + 1 + two, v0, v1, u0, u1)
+    else:
+        planes = _read(arr, u0, u1, v0, v1, ca, ca + 1 + two).transpose(2, 1, 0)   # (cut, y, z)
+    img = planes[0] * (1 - frac) + planes[1] * frac if two else np.ascontiguousarray(planes[0])
     if sigma:
         img = cv2.GaussianBlur(img, (0, 0), sigma)
-    m = np.array([[r, 0, x_first - x0], [0, r, y_first - y0]], np.float64)
+    m = np.array([[r, 0, u_first - u0], [0, r, v_first - v0]], np.float64)
     interp = cv2.INTER_LINEAR if r >= 1 else cv2.INTER_CUBIC
     out = cv2.warpAffine(img, m, (w, h), flags=interp | cv2.WARP_INVERSE_MAP,
                          borderMode=cv2.BORDER_CONSTANT, borderValue=0)

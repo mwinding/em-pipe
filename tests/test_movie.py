@@ -160,3 +160,35 @@ def test_view_rotation_turns_the_picture_not_mirrors_it(tmp_path):
     assert np.array_equal(frame, np.rot90(upright, 2)) and not np.array_equal(frame, upright[::-1])
     with pytest.raises(ValueError, match="0 or 180"):
         movie.timeline({**_cfg(tmp_path)["movie"], "view_rotation_deg": 90}, (40, 160, 256))
+
+
+def test_side_view_is_the_y_z_plane(tmp_path):
+    """At 90 degrees the frame is the y-z plane (columns along z) from the right level, and it joins
+    the turning sampler without a jump."""
+    data = _volume(tmp_path / "v.ome.zarr", shape=(96, 64, 80))
+    levels = movie.open_levels(tmp_path / "v.ome.zarr", 0.1)
+    frame, level = movie.render_frame(levels, SIZE, 1.0, 40.5, 32, 47.5, rotation=90)
+    assert level == 0 and np.array_equal(frame, data[0][16:80, 8:56, 40].T)
+    near, _ = movie.render_frame(levels, SIZE, 1.0, 40.5, 32, 47.5, rotation=89.9999)
+    assert np.abs(near.astype(int) - frame).max() <= 1
+    back, _ = movie.render_frame(levels, SIZE, 1.0, 40.5, 32, 47.5, rotation=-90)
+    np.testing.assert_array_equal(back, frame[:, ::-1])
+    # zoomed out 2x: level 1, the x plane between two s1 planes blended
+    frame, level = movie.render_frame(levels, SIZE, 2.0, 40.0, 32, 47.5, rotation=90)
+    assert level == 1 and frame.shape == (48, 64)
+
+
+def test_timeline_zooms_out_to_the_side_view(tmp_path):
+    m = {**_cfg(tmp_path)["movie"], "rotate_deg": 90, "rotate_s": 1.0, "rotated_s": 0.5, "zoom_out_s": 1.0,
+         "hold_out_s": 0.5, "slices_per_s": [6, 2], "target": [150, 90, 50]}
+    plan = movie.timeline(m, (300, 160, 256))
+    assert len(plan) == 70                                     # 1 + 2 + 1 + 1 + 0.5 + 1 + 0.5 s at 10 fps
+    end = plan.iloc[-1]
+    assert end["zoom"] == pytest.approx(max(300 / 64, 160 / 48)) and end["rotation"] == 90
+    assert (end["cy"], end["z"]) == pytest.approx((80, 149.5))  # the centre of the y-z plane
+    held = plan.iloc[50:55]                                    # rotated hold: full resolution, turned
+    assert (held["zoom"] == 1).all() and (held["rotation"] == 90).all()
+    step = -np.diff(plan["cx"].iloc[50:]) * 10                 # turned: the scroll runs along -x
+    assert step[0] == pytest.approx(2) and step[-1] == pytest.approx(6)   # and speeds back up zoomed out
+    with pytest.raises(ValueError, match="rotate_deg 0, 90 or -90"):
+        movie.timeline({**m, "rotate_deg": 45}, (300, 160, 256))
