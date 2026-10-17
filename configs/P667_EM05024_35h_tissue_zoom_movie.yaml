@@ -1,0 +1,38 @@
+# Talk movie (Oct 2026): P667_EM05024_35h_tissue_movie.yaml (the stack growing, the whole volume as a block,
+# circling, the resin turning transparent until only the tissue is left), then the volume cut away from the
+# first slice imaged up to the fly-through's first slice as the camera comes face-on to it, and the
+# fly-through of P667_EM05024_35h_movie.yaml (the zoom into the neuropil spot, scrolling; without its turn),
+# tissue only throughout, zooming back out to the whole tissue volume, which turns once round.
+#   python -m pipeline.movie_tissue --config configs/P667_EM05024_35h_tissue_zoom_movie.yaml frames --workers 8
+#   python -m pipeline.movie_tissue --config configs/P667_EM05024_35h_tissue_zoom_movie.yaml encode
+# -> <output_dir>/P667_EM05024_35h_tissue_zoom_movie.mp4
+base: P667_EM05024_35h_movie.yaml
+
+movie:
+  rotate_deg: 0                # the fly-through ends with the zoom: no turn ...
+  zoom_out_s: 0.0              # ... and no zoom-out
+
+tissue_movie:
+  volume: P667_EM05024_35h.ome.zarr
+  name: P667_EM05024_35h_tissue_zoom_movie
+  view_rotation_deg: 180       # as movie.view_rotation_deg
+  crop: {x0: 384}              # not shown: x below 384 (3.1 um), where the lower right tile (z ~4800-12500, y below
+                               # ~13400) has a 10-voxel (s5) strip of dark, streaky off-sample area at the
+                               # volume's x = 0 face; it is resin, but shows in the block while the resin is
+                               # opaque (2 voxels of tissue more, for a straight edge)
+  # Each phase starts blend_s (3 s) before the one before ends: no pause anywhere.
+  build_s: 7.0                 # the stack growing from three quarters (the camera almost still) ...
+  block_s: 0.0
+  turn_s: 6.0                  # ... the turn round to the front (z = 0) ...
+  fade_s: 5.0                  # ... the resin slowly turning transparent, from the front inwards, from
+  fade_start_s: 0.0            # the moment the slicing stops (early in the turn) ...
+  tissue_s: 0.0
+  yaw_deg: [-60, 0]
+  tilt_deg: [22, 18]           # (the approach then levels the camera, face-on to the cut)
+  drift_deg: [3, 0]
+  fly_through: true
+  approach_s: 5.0              # ... the cut sweeping from z = 0 into the fly-through's scroll (no stop) ...
+  handover_s: 1.0              # ... and the zoom, the slice on the cut fading in from the finer level ...
+  zoom_out_s: 6.0              # ... then back out, the scroll reversing (60 slices/s x zoom) back to z = 0
+                               # through the pull-back to the whole volume, the slices reappearing ...
+  spin_s: 12.0                 # ... the volume turning once round as the last slice lands; to black

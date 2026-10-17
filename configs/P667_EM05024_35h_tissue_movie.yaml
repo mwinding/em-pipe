@@ -1,0 +1,23 @@
+# Talk movie (Oct 2026): the 35h stack growing slice by slice in the order of imaging, the whole volume as a
+# solid block, the camera circling it, then the resin turning transparent until only the tissue is left (a
+# 3D tissue mask made at s5, 256 nm; grey values as imaged, opacity only), still circling. Rendered from s5
+# held in memory, a few seconds per frame per process:
+#   python -m pipeline.movie_tissue --config configs/P667_EM05024_35h_tissue_movie.yaml mask      # qc/<name>_mask.png
+#   python -m pipeline.movie_tissue --config configs/P667_EM05024_35h_tissue_movie.yaml frames --workers 8
+#   python -m pipeline.movie_tissue --config configs/P667_EM05024_35h_tissue_movie.yaml encode
+# -> <output_dir>/P667_EM05024_35h_tissue_movie.mp4
+base: P667_EM05024_35h.yaml
+
+tissue_movie:
+  volume: P667_EM05024_35h.ome.zarr
+  name: P667_EM05024_35h_tissue_movie
+  view_rotation_deg: 180       # the brain the way up we show it (as the fly-through)
+  build_s: 7.0                 # the stack growing, the last slice first, each new one on the face
+                               # towards the camera, seen from three quarters (the camera almost still) ...
+  block_s: 1.0                 # ... a moment of the whole block ...
+  turn_s: 6.0                  # ... the camera turning round to the front (z = 0), slow, faster, easing in ...
+  fade_s: 5.0                  # ... the resin slowly turning transparent, from the front inwards ...
+  tissue_s: 6.0                # ... the tissue alone, drifting on a little
+  yaw_deg: [-60, 0]
+  tilt_deg: [22, 22]
+  drift_deg: [3, 10]
