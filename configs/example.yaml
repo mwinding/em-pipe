@@ -245,6 +245,15 @@ movie:                       # fly-through MP4 (python -m pipeline.movie; sbatch
   rotate_deg: 0              # then turn the cutting plane about the frame's vertical axis (90: to the y-z plane)
   rotate_s: 6.0              # the rotation
   rotated_s: 4.0             # after it
+  rotate_start_zoom: null    # or turn during the zoom-out, from when it reaches this zoom (voxels per frame px),
+                             # over rotate_s; no rotated_s (plane, rotate_deg +-90)
+  rotate_style: plane        # plane: the cutting plane turns face-on and the scroll carries on along its normal;
+                             # block: the field of view turns as a solid block (as deep as the frame is wide), seen
+                             # in perspective, the scroll paused
+  rotate_pause_s: 1.0        # block: the scroll eases to a stop over this long before the turn, and back up after it
+  rotate_fov_deg: 40         # block: the camera's horizontal field of view (more: stronger perspective)
+  rotate_tilt_deg: 20        # block: mid-turn the camera rises this much, so the top face shows too
+  rotate_pull_back: null     # block: mid-turn camera distance / face-on distance; null: the whole block fits the frame
   zoom_out_s: 0.0            # then zoom back out over this long (0: none); rotate_deg 0 or +-90
   zoom_out_to: null          # voxels per frame px at the end; null: the whole final plane (e.g. y by z) fits
   hold_out_s: 3.0            # after the zoom-out
