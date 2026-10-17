@@ -123,7 +123,8 @@ DEFAULTS = {
                                    # zoom), the scroll reversing: the cut runs back to z = 0, the removed
                                    # slices reappearing on the face towards the camera ...
         "zoom_out_cut": 0.9,       # ... this far into it, the outro takes over (the pull-back, the spin):
-        "back_rate": 60,           # the scroll-back: slices/s per full-size zoom (voxels per frame px)
+        "back_rate": 60,           # the scroll-back: slices/s per zoom (voxels per frame px, on a ref_width wide
+        "ref_width": 1920,         # frame: the same speeds for any frame size)
         "back_boost_zoom": 10,     # ... and faster when far out: x (1 + (zoom / this)^2) (null: no boost)
         "back_turn_s": 0.5,        # ... reversing from the forward scroll within this long
         "back_land_s": 0.4,        # ... slowing to rest over about this long as the last slice lands
@@ -133,6 +134,8 @@ DEFAULTS = {
                                    # scroll-back needs it: it ends as the last slice lands) ...
         "spin_overlap_s": 3.0,     # ... the spin starting this long before it ends (pull_min_s: with it),
         "spin_in_s": 3.0,          # ... speeding up over this long, easing to rest over the rest of spin_s
+        "spin_deg": 360,           # ... by this much (-360: the other way round, e.g. for a volume stored
+                                   # rotated 180 degrees, with view_rotation_deg 0 and the yaws negated)
         "spin_tilt_deg": 15,       # ... rising this far as it starts turning
         "end_fade_s": 1.5,         # the end: to black over this long
         "mask": {
@@ -872,8 +875,8 @@ def timeline(m, scene, fly=None):
 def _fly_rows(m, scene, fly, n0, t0, focal, up):
     """The fly-through's rows from frame ``n0`` (time ``t0``): its zoom, cx, cy, z, rotation and ``blend``,
     the fine slice's weight on the cut (in over handover_s, out again before the outro). With a zoom-out,
-    the scroll reverses as it starts, within back_turn_s, and runs back at back_rate slices/s per full-size
-    zoom (voxels per frame px: the same speed on screen), and faster still when far out (x (1 + (zoom /
+    the scroll reverses as it starts, within back_turn_s, and runs back at back_rate slices/s per zoom
+    (voxels per frame px on a ref_width wide frame: the same speed on screen), and faster still when far out (x (1 + (zoom /
     back_boost_zoom)^2)), the removed slices
     reappearing on the face towards the camera. zoom_out_cut of the way through the zoom-out the outro
     takes over: the camera, keeping its speed, pulls back face-on to the whole tissue volume (over at
@@ -886,10 +889,10 @@ def _fly_rows(m, scene, fly, n0, t0, focal, up):
     if not m["zoom_out_s"]:
         return rows
     fps, (w, h) = m["fps"], m["size"]
-    scale, boost = m["preview_scale"], m["back_boost_zoom"]
+    boost = m["back_boost_zoom"]
 
     def back_speed(zoom):                             # slices/s at ``zoom`` (this frame size's)
-        full = zoom / scale
+        full = zoom * w / m["ref_width"]              # (the zoom on a ref_width wide frame)
         return m["back_rate"] * full * (1 + (full / boost) ** 2 if boost else 1)
 
     zo0 = tf[-1] + 1 / fps - m["zoom_out_s"]          # the zoom-out ends with the fly-through
@@ -945,7 +948,7 @@ def _fly_rows(m, scene, fly, n0, t0, focal, up):
     fine = np.linspace(0, t[-1] + 1, 8001)            # the spin: speeding up over spin_in_s, easing out over the rest
     speed = _ease(fine, spin0, spin0 + m["spin_in_s"]) * (1 - _ease(fine, spin0 + m["spin_in_s"], spin0 + m["spin_s"]))
     walked = np.concatenate([[0], np.cumsum((speed[1:] + speed[:-1]) / 2 * np.diff(fine))])
-    spin = np.radians(360) * np.interp(t, fine, walked / walked[-1])
+    spin = np.radians(m["spin_deg"]) * np.interp(t, fine, walked / walked[-1])
     tilt = np.radians(m["spin_tilt_deg"]) * _ease(t, spin0, spin0 + m["spin_s"] / 2)
     poses = [fit(scene.box(), a, b, up, (w, h), focal, m["fill"]) for a, b in zip(spin, tilt)]
     look = ndimage.gaussian_filter1d(np.array([p[0] for p in poses]), 0.5 * fps, axis=0, mode="nearest")

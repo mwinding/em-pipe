@@ -1,0 +1,25 @@
+# Final render (Oct 2026) of video 4, P667_EM05024_35h_tissue_zoom_movie.yaml (approved on its 1/3 previews), from
+# the final volume P667_EM05024_35h_8nm.ome.zarr. That volume is stored rotated 180 degrees in x-y (render.rotate_deg
+# 180: plane[::-1, ::-1], so X -> 28124 - X, Y -> 25581 - Y in continuous voxels), i.e. already the way up we show
+# it: filmed with view_rotation_deg 0, the x-y settings mapped and the yaws, drifts and spin negated, it is the same
+# movie (tests/test_movie_tissue.py::test_volume_stored_rotated_180_degrees).
+# The job reads s5 of the volume (its pyramid must be complete) and makes its own scene and tissue mask in
+# work/movie/<name>/scene/ (~3 min, ~8 GB peak), then the frames (one per worker process).
+#   sbatch --output=<output_dir>/work/logs/em-movie-tissue-%j.out slurm/movie_tissue.sbatch configs/P667_EM05024_35h_tissue_zoom_movie_1080p.yaml
+# -> <output_dir>/P667_EM05024_35h_tissue_zoom_movie_1080p.mp4 (1920x1080, 40.1 s)
+base: P667_EM05024_35h_tissue_zoom_movie.yaml
+
+movie:
+  volume: P667_EM05024_35h_8nm.ome.zarr
+  target: [21404, 15245, 8936]   # = [6720, 10336, 8936] in P667_EM05024_35h.ome.zarr: [28124 - x, 25581 - y, z]
+  view_rotation_deg: 0           # stored the way up we show it
+  cache_gb: 1                    # chunk cache per worker process (the fly-through's reads)
+
+tissue_movie:
+  volume: P667_EM05024_35h_8nm.ome.zarr
+  name: P667_EM05024_35h_tissue_zoom_movie_1080p
+  view_rotation_deg: 0
+  crop: {x0: null, x1: 27740}    # the x < 384 crop of the unrotated volume: not shown from x = 28124 - 384 on
+  yaw_deg: [60, 0]               # negated: [-60, 0]
+  drift_deg: [-3, 0]             # negated: [3, 0]
+  spin_deg: -360                 # negated: 360

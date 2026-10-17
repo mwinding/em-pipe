@@ -3,6 +3,7 @@ only), the timeline, the fly-through ending and the CLI."""
 
 import math
 import shutil
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -335,3 +336,71 @@ def test_frames_and_encode(tmp_path):
         assert mt.main(["--config", str(path), "frames"]) == 0
         assert mt.main(["--config", str(path), "encode"]) == 0
         assert (tmp_path / "out" / "vol_tissue_movie.mp4").stat().st_size > 1000
+
+
+def test_volume_stored_rotated_180_degrees(tmp_path):
+    """A volume stored rotated 180 degrees in x-y (V' = V[:, ::-1, ::-1], as render.rotate_deg 180 writes
+    it) filmed with view_rotation_deg 0, the yaws, drifts and spin negated and the x-y settings mapped
+    (X -> nx - X: the target, the crop), gives the movie filmed from V with view_rotation_deg 180:
+    the build, the tissue alone, the cut and the fly-through (the frames as shown)."""
+    vol, truth = _tissue_volume(shape=(48, 64, 96))
+    vol[:, 12:52, 8:44] = np.where(truth[:, 12:52, 8:44], vol[:, 12:52, 8:44], 225)
+    nz, ny, nx = vol.shape
+    common = {**SHORT, "fly_through": True, "level": 1, "trim_edge_px": 0, "build_s": 1.0, "turn_s": 1.0,
+              "mask": {"rim_px": 4, "min_resin": 1000}, "zoom_overlap_s": 0.3, "approach_s": 1.0,
+              "zoom_out_s": 1.0, "spin_s": 1.0, "spin_in_s": 0.3, "pull_min_s": 0.5, "spin_overlap_s": 0.5}
+    tx, ty, tz = 40, 30, 16
+    variants = {
+        "a": (vol, {"view_rotation_deg": 180, "yaw_deg": [-60, 0], "drift_deg": [3, 0], "spin_deg": 360,
+                    "crop": {"x0": 8}}, [tx, ty, tz]),
+        "b": (vol[:, ::-1, ::-1], {"view_rotation_deg": 0, "yaw_deg": [60, 0], "drift_deg": [-3, 0],
+                                   "spin_deg": -360, "crop": {"x1": nx - 8}}, [nx - tx, ny - ty, tz]),
+    }
+    frames = {}
+    for key, (data, m, target) in variants.items():
+        root = tmp_path / key
+        _pyramid(root / "out" / "vol.ome.zarr", np.ascontiguousarray(data))
+        cfg_dict = {"name": "vol", "raw_dir": str(root), "output_dir": str(root / "out"),
+                    "tissue_movie": {**common, **m},
+                    "movie": {"size": SIZE, "fps": 10, "slices_per_s": 2, "hold_start_s": 1.0, "zoom_s": 1.0,
+                              "hold_end_s": 0.5, "target": target, "view_rotation_deg": m["view_rotation_deg"],
+                              "cache_gb": 0.1}}
+        (root / "cfg.yaml").write_text(yaml.safe_dump(cfg_dict))
+        cfg = load_config(root / "cfg.yaml", step_defaults=deep_merge(movie.DEFAULTS, mt.DEFAULTS))
+        mt._WORKER.clear()
+        scene, plan = mt.plan_of(cfg)
+        parts = plan["part"].to_numpy()
+        picks = {"build": int(np.argmax(parts == "build")) + 5,
+                 "fading": int(np.argmax(plan["resin"].to_numpy() < 0.5)),
+                 "cut": int(np.flatnonzero(np.isfinite(plan["cut"].to_numpy()) & (parts == "orbit"))[3]),
+                 "fly": int(np.argmax(parts == "fly")) + 8,
+                 "spin": len(plan) - 6}
+        frames[key] = {name: mt.render_frame(cfg, SimpleNamespace(**plan.iloc[k].to_dict())).astype(float)
+                       for name, k in picks.items()}
+        frames[key]["n"] = len(plan)
+    assert frames["a"]["n"] == frames["b"]["n"]
+    for name in ("build", "fading", "cut", "fly", "spin"):
+        a, b = frames["a"][name], frames["b"][name]
+        assert a.max() > 0, name
+        assert np.abs(a - b).mean() < 1.0, name                                # up to resampling
+        assert np.corrcoef(a.ravel(), b.ravel())[0, 1] > 0.99, name
+
+
+def test_twice_the_frame_size_is_the_same_movie(tmp_path):
+    """At twice the frame size with zoom_end halved (e.g. 4K from 1080p), the timeline is the same: the
+    same camera, cut and scroll (its speeds per zoom on a ref_width frame), zooms halved."""
+    vol, _ = _tissue_volume(shape=(48, 64, 96))
+    _pyramid(tmp_path / "out" / "vol.ome.zarr", vol)
+    plans = []
+    for k in (1, 2):
+        cfg = _cfg(tmp_path, fly_through=True, level=1, trim_edge_px=0, mask={"rim_px": 4, "min_resin": 1000},
+                   zoom_overlap_s=0.3, approach_s=1.0, zoom_out_s=1.0, spin_s=1.0, spin_in_s=0.3, pull_min_s=0.5,
+                   spin_overlap_s=0.5, size=[64 * k, 48 * k])
+        cfg["movie"] = {**cfg["movie"], "size": [64 * k, 48 * k], "zoom_end": 1.0 / k}
+        mt._WORKER.clear()
+        plans.append(mt.plan_of(cfg)[1])
+    a, b = plans
+    assert len(a) == len(b)
+    for col in ("yaw", "tilt", "lx", "ly", "lz", "dist", "resin", "cut", "cx", "cy", "z"):
+        np.testing.assert_allclose(a[col].to_numpy(float), b[col].to_numpy(float), rtol=1e-6, atol=1e-6, err_msg=col)
+    np.testing.assert_allclose(b["zoom"].to_numpy(float), a["zoom"].to_numpy(float) / 2, rtol=1e-9)
