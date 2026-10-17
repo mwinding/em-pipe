@@ -167,7 +167,7 @@ def test_example_config_is_the_defaults():
 
 @pytest.mark.parametrize("name", ["P667_EM05024_35h.yaml", "P667_EM05024_35h_overview.yaml",
                                   "P667_EM05024_35h_overview_masked-norm.yaml", "P667_EM05024_35h_overview_tissue1-99.yaml", "P667_EM05024_35h_unrotated.yaml",
-                                  "P667_test_2day.yaml", "P667_test_2day_movie.yaml",
+                                  "P667_test_2day.yaml", "P667_test_2day_movie.yaml", "P667_EM05024_35h_movie.yaml",
                                   "P667_test_3x3.yaml", "P667_test_small_tiles.yaml"])
 def test_dataset_configs_are_valid(name):
     cfg = config.load_config(ROOT / "configs" / name, step_defaults=config.step_defaults())

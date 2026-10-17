@@ -1,0 +1,22 @@
+# Talk movie (Oct 2026) from the complete 35h volume as first rendered (unrotated, contrast before
+# the shading/overlap work): the whole slice, a zoom into the neuropil spot of the first 2-day test
+# movie (mapped with tools/map_point.py), then the cutting plane turns 90 degrees to the side view
+# and zooms out until the whole side of the brain (y by z, 141 um deep) is in frame.
+#   sbatch --output=<output_dir>/work/logs/em-movie-%j.out slurm/movie.sbatch configs/P667_EM05024_35h_movie.yaml
+# -> <output_dir>/P667_EM05024_35h_side_movie.mp4
+base: P667_EM05024_35h.yaml
+
+movie:
+  volume: P667_EM05024_35h.ome.zarr
+  name: P667_EM05024_35h_side_movie
+  target: [6720, 10336, 8936]  # = 2-day test volume [6720, 9920, 1010] (2 Oct 16:04)
+  view_rotation_deg: 180       # the brain the way up we show it
+  slices_per_s: [120, 60]      # zoomed out -> zoomed in
+  hold_start_s: 1.5
+  zoom_s: 9.0
+  hold_end_s: 3.0
+  rotate_deg: 90               # turn to the side view (y-z plane)
+  rotate_s: 5.0
+  rotated_s: 1.5
+  zoom_out_s: 7.0              # out to the whole side view
+  hold_out_s: 3.0
