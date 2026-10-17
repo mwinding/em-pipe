@@ -89,7 +89,7 @@ precomputed:
   enabled: true
   encoding: raw
   chunk: [128, 128, 128]
-  description: "P667 EM05024 35h, FIB-SEM, 8 nm isotropic; stitched, aligned, tissue 1-99 % display windows, no CLAHE; rotated 180 degrees in x-y (em-pipe)"
+  description: "P667 EM05024 35h, FIB-SEM, 8 nm isotropic; stitched, aligned; tile intensities flat-fielded and matched across overlaps (per-tile levels per slice + Janelia-style 8x8 patch shapes), tissue 1-99 % display windows, no CLAHE; rotated 180 degrees in x-y (em-pipe)"
 
 # Upload to Zetta's bucket: set destination once known; the key goes in ~/.cloudvolume/secrets/ (by hand).
 upload:
