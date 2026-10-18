@@ -63,6 +63,28 @@ def test_export_matches_every_scale(make_config, tmp_path, sharded):
         assert precomputed.main(["verify", "--config", str(cfg)]) == 0
 
 
+def test_empty_regions_are_not_stored_and_verify_accepts_them(make_config, tmp_path):
+    """Shards with no data (all zero: outside the imaged area) get no file; that is fine where the
+    zarr is empty too, and still an error where it has data."""
+    out = tmp_path / "out"
+    root, data = _volume(out)
+    data[0][:32, :64, :64] = 0          # exactly the first s0 shard (64 x 64 x 32 voxels in x, y, z)
+    omezarr.open_scale(root, 0)[...].write(data[0]).result()
+    cfg = make_config(tmp_path / "raw", precomputed={"chunk": [32, 32, 16], "shard_chunks_log2": 3,
+                                                      "minishard_chunks_log2": 1})
+    assert precomputed.main(["init", "--config", str(cfg)]) == 0
+    assert precomputed.main(["run", "--config", str(cfg)]) == 0
+    dest = out / "synthetic.precomputed"
+    sc = json.loads((dest / "info").read_text())["scales"][0]
+    empty = dest / precomputed.shard_file(sc["key"], sc["sharding"], 0)
+    assert not empty.exists()
+    np.testing.assert_array_equal(_read(dest, 0), data[0])       # read back as zeros
+    assert precomputed.main(["verify", "--config", str(cfg)]) == 0
+    data[0][5, 5, 5] = 9                # the zarr gains data there: now the missing shard is an error
+    omezarr.open_scale(root, 0)[...].write(data[0]).result()
+    assert precomputed.main(["verify", "--config", str(cfg)]) == 1
+
+
 @pytest.mark.parametrize("grid", [(5, 3, 7), (1, 1, 9), (13, 1, 2), (4, 4, 4), (1, 1, 1)])
 @pytest.mark.parametrize("k", [0, 2, 3, 6, 20])
 def test_shard_blocks_cover_every_chunk_once(grid, k):

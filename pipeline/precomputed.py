@@ -190,7 +190,7 @@ def run(cfg, task_id, num_tasks, overwrite=False):
     units = my_chunks(_units(info, p), task_id, num_tasks)
     log.info("task %d/%d: %d shards", task_id, num_tasks, len(units))
     stores, sources = {}, {}
-    done = skipped = 0
+    done = skipped = empty = 0
     for i, s, origin, block in units:
         sc = info["scales"][i]
         if "sharding" in sc and not overwrite and (dest / shard_file(sc["key"], sc["sharding"], s)).exists():
@@ -205,17 +205,22 @@ def run(cfg, task_id, num_tasks, overwrite=False):
         lo = [o * cc for o, cc in zip(origin, c)]
         hi = [min((o + b) * cc, n) for o, b, cc, n in zip(origin, block, c, sc["size"])]
         data = sources[i][lo[2]:hi[2], lo[1]:hi[1], lo[0]:hi[0]].read().result()
+        if not data.any():   # no data here (outside the imaged area): nothing to store, reads as zeros
+            empty += 1
+            continue
         txn = ts.Transaction()
         stores[i].with_transaction(txn)[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2], 0].write(
             np.ascontiguousarray(np.transpose(data, (2, 1, 0)))).result()
         txn.commit_async().result()
         done += 1
-    log.info("task %d: wrote %d shards, %d already done", task_id, done, skipped)
+    log.info("task %d: wrote %d shards, %d with no data (not stored), %d already done", task_id, done, empty, skipped)
     return 0
 
 
 def verify(cfg, samples=24, seed=0):
-    """Every shard file present; random chunk-sized blocks of every scale equal to the zarr."""
+    """Every shard file present, except where the zarr has no data at all (all-zero blocks are not
+    stored and read as zeros: outside the imaged area); random chunk-sized blocks of every scale
+    equal to the zarr."""
     p = cfg["precomputed"]
     zarr_root, dest = paths(cfg)
     info = json.loads((dest / "info").read_text())
@@ -225,12 +230,22 @@ def verify(cfg, samples=24, seed=0):
     for i, sc in enumerate(info["scales"]):
         if "sharding" in sc:
             grid = [math.ceil(a / b) for a, b in zip(sc["size"], sc["chunk_sizes"][0])]
-            missing = [s for s, _, _ in shard_blocks(grid, int(p["shard_chunks_log2"]))
+            missing = [(s, o, b) for s, o, b in shard_blocks(grid, int(p["shard_chunks_log2"]))
                        if not (dest / shard_file(sc["key"], sc["sharding"], s)).exists()]
-            if missing:
-                log.error("scale %s: %d shard files missing, e.g. %s", sc["key"], len(missing), missing[:5])
+            src = omezarr.open_scale(zarr_root, zarr_scales[i])
+            c = sc["chunk_sizes"][0]
+            lost = []
+            for s, origin, block in missing:   # cheap where the zarr has no data: its empty chunks aren't stored either
+                lo = [o * cc for o, cc in zip(origin, c)]
+                hi = [min((o + b) * cc, n) for o, b, cc, n in zip(origin, block, c, sc["size"])]
+                if src[lo[2]:hi[2], lo[1]:hi[1], lo[0]:hi[0]].read().result().any():
+                    lost.append(s)
+            if lost:
+                log.error("scale %s: %d shard files missing where the zarr has data, e.g. %s", sc["key"], len(lost), lost[:5])
                 bad += 1
                 continue
+            if missing:
+                log.info("scale %s: %d shards with no data in the zarr (not stored, read as zeros)", sc["key"], len(missing))
         store = ts.open({"driver": "neuroglancer_precomputed", "kvstore": {"driver": "file", "path": str(dest) + "/"},
                          "scale_index": i}, open=True).result()
         src = omezarr.open_scale(zarr_root, zarr_scales[i])
