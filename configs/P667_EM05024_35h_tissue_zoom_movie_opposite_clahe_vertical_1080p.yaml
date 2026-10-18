@@ -1,0 +1,17 @@
+# Video 4b (CLAHE) in portrait for mobile (9:16, 1080x1920): P667_EM05024_35h_tissue_zoom_movie_opposite_clahe_1080p.yaml in a tall frame, the same timeline and
+# motion. The lens is the landscape one turned 90 degrees (fov_deg across the frame's long side), the 3D shots
+# frame the block across 90% of the frame's width, and the fly-through starts on the whole slice across the
+# width and ends on the target at the frame centre (1 voxel/px, as landscape).
+#   sbatch --output=<output_dir>/work/logs/em-movie-tissue-%j.out slurm/movie_tissue.sbatch configs/P667_EM05024_35h_tissue_zoom_movie_opposite_clahe_vertical_1080p.yaml
+# -> <output_dir>/P667_EM05024_35h_tissue_zoom_movie_opposite_clahe_vertical_1080p.mp4
+base: P667_EM05024_35h_tissue_zoom_movie_opposite_clahe_1080p.yaml
+
+movie:
+  size: [1080, 1920]
+  target: [21404, 14825, 8936]  # 420 px (3.4 um) higher on screen than landscape (y - 420): the tall
+                                # frame's lower edge where the landscape one's is, clear of the cell bodies
+
+tissue_movie:
+  name: P667_EM05024_35h_tissue_zoom_movie_opposite_clahe_vertical_1080p
+  size: [1080, 1920]
+  fill: 0.9                    # the block across 90% of the width (landscape: 84% of the height)

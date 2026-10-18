@@ -98,7 +98,8 @@ DEFAULTS = {
         "ease_s": 3.0,             # the drift after the turn eases out over this long at the end; the growth
                                    # speeds up from rest and slows to rest over this long (at most half the
                                    # build)
-        "fov_deg": 40,             # horizontal field of view
+        "fov_deg": 40,             # field of view across the frame's long side (the width, landscape; in portrait
+                                   # the same lens turned)
         "fill": 0.84,              # the block's share of the frame height (or width): sets the distance
         "push_in": 0.1,            # the camera comes this fraction closer from the fade's start to the orbit's end
         # Opacity
@@ -125,8 +126,8 @@ DEFAULTS = {
                                    # zoom), the scroll reversing: the cut runs back to z = 0, the removed
                                    # slices reappearing on the face towards the camera ...
         "zoom_out_cut": 0.9,       # ... this far into it, the outro takes over (the pull-back, the spin):
-        "back_rate": 60,           # the scroll-back: slices/s per zoom (voxels per frame px, on a ref_width wide
-        "ref_width": 1920,         # frame: the same speeds for any frame size)
+        "back_rate": 60,           # the scroll-back: slices/s per zoom (voxels per frame px, on a frame ref_width
+        "ref_width": 1920,         # px along its long side: the same speeds for any frame size)
         "back_boost_zoom": 10,     # ... and faster when far out: x (1 + (zoom / this)^2) (null: no boost)
         "back_turn_s": 0.5,        # ... reversing from the forward scroll within this long
         "back_land_s": 0.4,        # ... slowing to rest over about this long as the last slice lands
@@ -686,6 +687,12 @@ def _composite(scene, axis, cam, size, focal, resin, cut, back=None):
 # Timeline and frames
 
 
+def focal_px(m):
+    """The camera's focal length in frame px: fov_deg across the frame's long side (landscape: its width;
+    portrait: the same lens turned 90 degrees)."""
+    return max(m["size"]) / 2 / math.tan(math.radians(m["fov_deg"]) / 2)
+
+
 def fit(corners, yaw, tilt, up, size, focal, fill):
     """(look-at point, distance) of a camera turned by ``yaw`` and raised by ``tilt`` (radians; see
     pipeline.movie.camera) that frames the points ``corners``: their picture centred and ``fill`` of
@@ -822,7 +829,7 @@ def timeline(m, scene, fly=None):
         raise ValueError("tissue_movie.fly_through: needs the fly-through's timeline and approach_s > 0")
     fps = m["fps"]
     up = -1 if m["view_rotation_deg"] == 0 else 1
-    focal = w / 2 / math.tan(math.radians(m["fov_deg"]) / 2)
+    focal = focal_px(m)
     ov = m["blend_s"]
     t0 = m["build_s"]                                   # the stack is complete
     first = max(t0 + m["block_s"] - ov, 0.0)            # the next phase starts
@@ -902,7 +909,8 @@ def _fly_rows(m, scene, fly, n0, t0, focal, up):
     """The fly-through's rows from frame ``n0`` (time ``t0``): its zoom, cx, cy, z, rotation and ``blend``,
     the fine slice's weight on the cut (in over handover_s, out again before the outro). With a zoom-out,
     the scroll reverses as it starts, within back_turn_s, and runs back at back_rate slices/s per zoom
-    (voxels per frame px on a ref_width wide frame: the same speed on screen), and faster still when far out (x (1 + (zoom /
+    (voxels per frame px on a frame ref_width px along its long side: the same speed on screen), and faster
+    still when far out (x (1 + (zoom /
     back_boost_zoom)^2)), the removed slices
     reappearing on the face towards the camera. zoom_out_cut of the way through the zoom-out the outro
     takes over: the camera, keeping its speed, pulls back face-on to the whole tissue volume (over at
@@ -918,7 +926,7 @@ def _fly_rows(m, scene, fly, n0, t0, focal, up):
     boost = m["back_boost_zoom"]
 
     def back_speed(zoom):                             # slices/s at ``zoom`` (this frame size's)
-        full = zoom * w / m["ref_width"]              # (the zoom on a ref_width wide frame)
+        full = zoom * max(w, h) / m["ref_width"]      # (the zoom on a frame ref_width px along its long side)
         return m["back_rate"] * full * (1 + (full / boost) ** 2 if boost else 1)
 
     zo0 = tf[-1] + 1 / fps - m["zoom_out_s"]          # the zoom-out ends with the fly-through
@@ -1007,7 +1015,7 @@ def render_row(scene, m, row):
     """Float frame (unrotated) of a timeline row of part "build" or "orbit"."""
     size = m["size"]
     up = -1 if m["view_rotation_deg"] == 0 else 1
-    focal = size[0] / 2 / math.tan(math.radians(m["fov_deg"]) / 2)
+    focal = focal_px(m)
     cam = camera((row.lx, row.ly, row.lz), math.radians(row.yaw), math.radians(row.tilt), row.dist, up)
     cut = None if not np.isfinite(row.cut) else row.cut
     back = None if not np.isfinite(row.back) else row.back
@@ -1137,7 +1145,7 @@ def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0):
     from the scene."""
     m = cfg["tissue_movie"]
     size = m["size"]
-    focal = size[0] / 2 / math.tan(math.radians(m["fov_deg"]) / 2)
+    focal = focal_px(m)
     up = -1 if m["view_rotation_deg"] == 0 else 1
     cam = camera((cx, cy, z + 0.5), 0.0, 0.0, focal * zoom, up)
     picture = render_volume(state["scene"], cam, size, focal, 0.0, z + 0.5, m["blend_axes"])

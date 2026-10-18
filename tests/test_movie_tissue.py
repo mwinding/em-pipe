@@ -424,3 +424,30 @@ def test_mask_from_another_volume(tmp_path):
     assert ((shown > 0) == (plain > 0)).all() and (shown[plain > 0] == np.maximum(clahe[plain > 0], 1)).all()
     own = _cfg(tmp_path, volume="clahe.ome.zarr", name="own", trim_edge_px=0, mask=mask_settings)
     assert (np.asarray(mt.load_scene(own).mask) > 0).sum() > (np.asarray(scene.mask) > 0).sum()   # resin kept
+
+
+def test_portrait_frames(tmp_path):
+    """Portrait: the same lens as landscape turned (fov_deg across the long side; landscape exactly as
+    before), the block filling `fill` of the frame's width, the fly-through starting on the whole slice
+    across the width and ending on the target at the frame centre."""
+    land, port = {"size": [64, 48], "fov_deg": 40}, {"size": [48, 64], "fov_deg": 40}
+    assert mt.focal_px(land) == 64 / 2 / math.tan(math.radians(20))           # (landscape: as before)
+    assert mt.focal_px(port) == mt.focal_px(land)
+    vol, _ = _tissue_volume(shape=(48, 64, 96))
+    _pyramid(tmp_path / "out" / "vol.ome.zarr", vol)
+    cfg = _cfg(tmp_path, fly_through=True, level=1, trim_edge_px=0, mask={"rim_px": 4, "min_resin": 1000},
+               zoom_overlap_s=0.3, approach_s=1.0, size=[48, 64])
+    cfg["movie"] = {**cfg["movie"], "size": [48, 64]}
+    mt._WORKER.clear()
+    scene, plan = mt.plan_of(cfg)
+    m = cfg["tissue_movie"]
+    r = plan.iloc[0]
+    cam = movie.camera((r.lx, r.ly, r.lz), math.radians(r.yaw), math.radians(r.tilt), r.dist, -1)
+    p = movie.project(scene.box(), cam, m["size"], mt.focal_px(m))
+    assert np.ptp(p[:, 0]) / 48 == pytest.approx(0.84, abs=0.03) and np.ptp(p[:, 1]) < 64   # the width is the limit
+    fly = plan[plan["part"] == "fly"]
+    full = mt.fly_plan(cfg, (48, 64, 96))
+    assert full["zoom"].iloc[0] == pytest.approx(96 / 48)                      # the whole slice across the width
+    end = full[full["t"] >= 1.0 - 1e-9].iloc[0]                                # (zoom_s 1): on the target
+    assert (end["cx"], end["cy"], end["zoom"]) == pytest.approx((40, 32, 1))
+    assert len(fly) and fly["zoom"].iloc[0] < full["zoom"].iloc[0]
