@@ -1,0 +1,16 @@
+# CLAHE version of the 35h final volume, for Zetta to compare segmentation with and without CLAHE
+# (Oct 2026). Everything as configs/P667_EM05024_35h.yaml (same levels, corrections, rotation, cut
+# blend), plus CLAHE on each 8 nm plane: clip 1.5, 256 px tiles, the gentlest of the settings tested
+# (qc: clip 2.0 made noise coarser; tiles of 1024 px gave no benefit). Own volume and precomputed copy.
+#   ./run_pipeline.sh configs/P667_EM05024_35h_clahe.yaml --steps render,pyramid,precomputed
+base: P667_EM05024_35h.yaml
+
+render:
+  name: P667_EM05024_35h_8nm_clahe.ome.zarr
+  clahe:
+    enabled: true
+    clip_limit: 1.5
+    tile_px: 256
+
+precomputed:
+  description: "P667 EM05024 35h, FIB-SEM, 8 nm isotropic; stitched, aligned; tile intensities flat-fielded and matched across overlaps (per-tile levels per slice + Janelia-style 8x8 patch shapes), tissue 1-99 % display windows, CLAHE (clip 1.5, 256 px tiles at 8 nm); rotated 180 degrees in x-y (em-pipe)"
