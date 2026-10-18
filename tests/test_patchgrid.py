@@ -4,7 +4,6 @@ import json
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -161,8 +160,7 @@ def test_35h_cut_off_drops_a_mostly_resin_corner_bin():
     corner = seam & bins["pa"].eq(63) & bins["pb"].eq(56)
     set_gain(bins, corner, 1.53)
     bins.loc[corner, "cnr"] = 6.2
-    c = load_config(Path(__file__).resolve().parents[1] / "configs" / "P667_EM05024_35h.yaml",
-                    step_defaults=patchgrid.DEFAULTS)["patchgrid"]
+    c = {"smooth": 1.0, "prior": 0.02, "gain_power": 2.0, "gain_cnr_min": 8.0}   # the 35h volume's settings
     kw = {k: c[k] for k in ("smooth", "prior", "gain_power")}
     bent = patchgrid.solve_slice(bins, 8, R, gain_cnr_min=5.0, **kw)
     assert gain_ratio(bent) > 1.05

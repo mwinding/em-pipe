@@ -17,7 +17,7 @@ in x-y only: the real pyramid also averages 4 slices in z). Writes
   WORK_DIR/crops8/z<z>.tif                 for z in CROP_Z: a CROP x CROP px 8 nm crop centred on a
                                            tile junction, [no CLAHE, every variant].
 In an array job SLURM_ARRAY_TASK_ID / SLURM_ARRAY_TASK_COUNT split the z list.
-Runs on NEMO (reads the raw tiles): sbatch --cpus-per-task=8 --mem=128G.
+Runs on the cluster (reads the raw tiles): sbatch --cpus-per-task=8 --mem=128G.
 """
 import json
 import os

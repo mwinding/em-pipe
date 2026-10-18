@@ -5,7 +5,6 @@
 # A run task reads only the overlap strips (~0.4 s per left/right strip of a 13k px tile).
 
 #SBATCH --job-name=em-overlaps
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G

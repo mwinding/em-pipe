@@ -21,7 +21,7 @@ them than the percentiles suggest.
    CONFIG's render.name with _clahe exists) | widened | widened + CLAHE (render.clahe settings of
    the CLAHE config, default clip 1.5, 256 px).
 
-Writes <output_dir>/qc/clipping/clipping.csv, spot_<k>_z<z>.png and prints a summary. Runs on NEMO.
+Writes <output_dir>/qc/clipping/clipping.csv, spot_<k>_z<z>.png and prints a summary. Runs on the cluster.
 """
 import argparse
 import json

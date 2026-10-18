@@ -21,7 +21,7 @@ OUT_PREFIX_seams.<task>.csv etc. (concatenate them).
 and along seams, and the rounded code of such a pixel can be another tile's label: e.g. a 1-px line
 of "1-0" along the bottom edge of tile 2-0 at z 1000, which puts 2-0 pixels near the slice's edge
 into the 1-0|2-0 band. Pixels that a 5 x 5 opening of their own label removes become no data.
-Runs on NEMO (reads the render plan): sbatch --cpus-per-task=8 --mem=64G.
+Runs on the cluster (reads the render plan): sbatch --cpus-per-task=8 --mem=64G.
 """
 import os
 import sys

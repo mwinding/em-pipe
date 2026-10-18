@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 slurm-*.out
+key
 
 # credentials: never commit a key (pipeline/upload.py refuses a key file inside the repository)
 *secret*.json
@@ -12,3 +13,9 @@ slurm-*.out
 
 # fetched QC output (plots, before/after stacks) for looking at locally: not versioned
 qc/
+
+# site-specific: dataset configs (paths on your storage) and cluster settings stay outside the
+# repository; configs/example.yaml and slurm/site.example.sh are the templates
+configs/*
+!configs/example.yaml
+slurm/site.sh

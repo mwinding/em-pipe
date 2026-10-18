@@ -143,7 +143,7 @@ def compute_levels(cfg):
     by_run = df.groupby(["tile", "block"])
     for col in ("lo", "hi"):
         df[col] = by_run[f"{col}_raw"].transform(lambda s: running_median(s, c["smooth_slices"]))
-    # Raw P667 tiles jump by 1-2 % of the display range from slice to slice, independently of each
+    # Raw FIB-SEM tiles (ours) jump by 1-2 % of the display range from slice to slice, independently of each
     # other; tissue changes slowly, so the tile median's deviation from its trend is that jump.
     # (A column, so it stays with its rows through balance's merge.)
     df["jump"] = df[mid] - by_run[mid].transform(lambda s: running_median(s, c["smooth_slices"]))

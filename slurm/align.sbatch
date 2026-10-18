@@ -5,7 +5,6 @@
 #   solve: single job; global least-squares solve over all chunks (~11,500 slices: <1 min, ~5 GB)
 
 #SBATCH --job-name=em-align
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G

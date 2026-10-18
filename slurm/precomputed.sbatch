@@ -3,7 +3,6 @@
 # Usage: sbatch [--array=0-N] slurm/precomputed.sbatch CONFIG init|run|verify   (normally run_pipeline.sh)
 
 #SBATCH --job-name=em-precomputed
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G

@@ -180,7 +180,7 @@ def test_atomic_write_uses_normal_permissions(tmp_path):
 
 
 def test_atomic_write_follows_default_acl(tmp_path):
-    """In a folder with a default ACL (NEMO lab folders) outputs get the ACL's rw-rw----, not 0666 & ~umask."""
+    """In a folder with a default ACL (shared lab folders) outputs get the ACL's rw-rw----, not 0666 & ~umask."""
     import os
     import shutil
     import subprocess

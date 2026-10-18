@@ -4,7 +4,6 @@
 # Needs the service-account key at upload.credentials (default ~/.cloudvolume/secrets/google-secret.json).
 
 #SBATCH --job-name=em-upload
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G

@@ -1297,7 +1297,7 @@ def main(argv=None):
         print(shlex.join(encode_command(cfg)))
     else:
         if not shutil.which(cfg["tissue_movie"]["ffmpeg"]):
-            raise FileNotFoundError(f"{cfg['tissue_movie']['ffmpeg']} not found (on NEMO: ml FFmpeg)")
+            raise FileNotFoundError(f"{cfg['tissue_movie']['ffmpeg']} not found (an FFmpeg module? EM_PIPE_FFMPEG_MODULE in slurm/site.sh)")
         encode(cfg)
     return 0
 

@@ -5,7 +5,6 @@
 # Usage: sbatch --output=LOG slurm/movie_tissue.sbatch CONFIG [frames options, e.g. --overwrite]
 
 #SBATCH --job-name=em-movie-tissue
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -20,7 +19,7 @@ source slurm/env.sh
 
 python -u -m pipeline.movie_tissue --config "$CONFIG" frames --workers "${SLURM_CPUS_PER_TASK:-8}" "$@"
 ENCODE=$(python -m pipeline.movie_tissue --config "$CONFIG" encode --print)
-# NEMO's FFmpeg module, loaded only after python: its libraries would shadow the conda env's.
-ml FFmpeg/7.1.1-GCCcore-14.2.0
+# The site's FFmpeg module (slurm/site.sh), loaded only after python: its libraries could shadow the env's.
+[ -z "${EM_PIPE_FFMPEG_MODULE:-}" ] || ml "$EM_PIPE_FFMPEG_MODULE"
 eval "$ENCODE"
 echo "movie: ${ENCODE##* }"

@@ -59,7 +59,7 @@ _RUN_KEYS = ("coarse_factor", "min_coarse_factor", "fine_factor", "fine_margin_p
 _NPARAM = {"translation": 2, "rigid": 3, "similarity": 4, "affine": 6}
 MODELS = (*_NPARAM, "affine_rigid")
 # Point-match filtering (RANSAC) model per tile model. Within one overlap strip tiles relate by a
-# rotation and shift; affine filtering would keep matches no per-tile affine can explain (real P667
+# rotation and shift; affine filtering would keep matches no per-tile affine can explain (our real
 # data: median joint residual 4-6 px with affine filtering vs 2.2-2.4 px with rigid).
 _PAIR_MODEL = {"affine_rigid": "rigid"}
 _IDENTITY = {"translation": [0, 0], "rigid": [0, 0, 0], "similarity": [1, 0, 0, 0], "affine": [1, 0, 0, 0, 1, 0]}
@@ -326,7 +326,7 @@ def stitch_slice(rows, cache, opts, reference):
     if reference not in by_tile:  # no gauge shared with the segment's other samples
         rec["reason"] = f"reference tile {reference} missing"
         return rec
-    if len(tiles) == 1:  # one large field of view (e.g. the start of P667 35i): it is the montage
+    if len(tiles) == 1:  # one large field of view (e.g. the start of an acquisition): it is the montage
         rec.update(ok=True, tiles={reference: transforms.identity().tolist()})
         return rec
     shapes = {t: (int(r["height"]), int(r["width"])) for t, r in by_tile.items()}

@@ -475,7 +475,7 @@ def _real_like_2x2():
 
 
 def test_affine_rigid_fixes_real_like_loop_closure():
-    """On the geometry seen in the real P667 tiles, translation-only leaves a loop-closure error of
+    """On the geometry seen in our real tiles, translation-only leaves a loop-closure error of
     several px (the first real run failed with 7.5-9.5 px); Janelia's affine_rigid solve closes it."""
     true, pairs = _real_like_2x2()
     tiles = list(true)
@@ -508,7 +508,7 @@ def test_affine_rigid_lambda_near_one_is_rigid():
 
 
 def test_single_tile_segment_then_grid(tmp_path):
-    """A 1x1 phase (one large field of view, as at the start of P667 35i) before a 2x2 grid: the
+    """A 1x1 phase (one large field of view, as at the start of one of our acquisitions) before a 2x2 grid: the
     single tile is its own montage (identity) instead of crashing the solve."""
     a = synth.make_dataset(tmp_path / "raw", n_slices=6, grid=(1, 1), tile_shape=(240, 300),
                            start=datetime(2026, 6, 5, 12), seed=4)

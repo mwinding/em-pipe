@@ -28,7 +28,7 @@ systematic along the seam; the anatomy differs from stretch to stretch, so the m
 stretches is reported. Writes CSV (default <output_dir>/qc/seam_steps.csv; columns z, seam, class,
 stretches, before, one per NAME) and prints a summary.
 
-Runs on NEMO (reads the render plan): sbatch --cpus-per-task=8 --mem=64G --wrap "...". In parallel:
+Runs on the cluster (reads the render plan): sbatch --cpus-per-task=8 --mem=64G --wrap "...". In parallel:
 sbatch --array=0-<n-1> ...; task k of n takes every n-th z from the k-th and writes
 <CSV stem>.<run>.part<k>of<n>.csv, run = a short hash of OLD_VOLUME, the whole z list and the
 NAME=DIR list. Then --merge (e.g. sbatch --dependency=afterok:<array job>) checks that the parts

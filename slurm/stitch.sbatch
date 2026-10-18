@@ -3,7 +3,6 @@
 # Usage: sbatch slurm/stitch.sbatch CONFIG run|merge [extra args]   (normally submitted by run_pipeline.sh)
 
 #SBATCH --job-name=em-stitch
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=8G

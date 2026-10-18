@@ -17,7 +17,7 @@ blended linearly, so scrolling stays smooth when zoomed out.
 
     python -m pipeline.movie --config C frames     # PNG frames -> work/movie/<name>/
     python -m pipeline.movie --config C encode     # ffmpeg -> output_dir/<name>.mp4
-    sbatch slurm/movie.sbatch C                    # both, on NEMO
+    sbatch slurm/movie.sbatch C                    # both, on the cluster
 
 Coordinates (``movie.target``) are full-resolution voxels as neuroglancer shows them for the
 volume (x, y, z).
@@ -649,7 +649,7 @@ def main(argv=None):
         print(shlex.join(encode_command(cfg)))
     else:
         if not shutil.which(cfg["movie"]["ffmpeg"]):
-            raise FileNotFoundError(f"{cfg['movie']['ffmpeg']} not found (on NEMO: ml FFmpeg)")
+            raise FileNotFoundError(f"{cfg['movie']['ffmpeg']} not found (an FFmpeg module? EM_PIPE_FFMPEG_MODULE in slurm/site.sh)")
         encode(cfg)
     return 0
 

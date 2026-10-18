@@ -7,7 +7,7 @@ work/render/); new = the slice rendered now from the raw tiles with the current 
 config's corrections as render init would plan them (flat-field, and patchgrid's tile shapes when
 enabled: the levels are windows on the corrected values), on OLD_VOLUME's canvas.
 Writes <output_dir>/qc/<NAME, default shading_test>/z<z>.tif (ImageJ stack: old, new) and z<z>.png side by side.
-Runs on NEMO (reads the raw tiles): sbatch --cpus-per-task=8 --mem=64G --wrap "source slurm/env.sh; python ..."
+Runs on the cluster (reads the raw tiles): sbatch --cpus-per-task=8 --mem=64G --wrap "source slurm/env.sh; python ..."
 """
 import json
 import sys

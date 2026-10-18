@@ -3,7 +3,6 @@
 # Usage: sbatch --array=0-N slurm/pyramid.sbatch CONFIG run --scale S   (one job per scale, each after the previous)
 
 #SBATCH --job-name=em-pyramid
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G

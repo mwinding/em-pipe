@@ -3,7 +3,6 @@
 # Usage: sbatch slurm/intensity.sbatch CONFIG [extra args]   (normally submitted by run_pipeline.sh)
 
 #SBATCH --job-name=em-intensity
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G

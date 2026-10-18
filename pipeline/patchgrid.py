@@ -79,7 +79,7 @@ DEFAULTS = {
         "smooth": 1.0,         # equality of neighbouring patches, relative to the median relation weight sqrt(n)
         "prior": 0.02,         # pull of each tile's mean gain towards 1, relative to the same
         "gain_power": 2.0,     # a bin's gain equation is weighted by min(1, cnr / 10) ** gain_power
-        "gain_cnr_min": 5.0,   # bins with less contrast than this (resin) give no gain equation (35h: 8)
+        "gain_cnr_min": 5.0,   # bins with less contrast than this (resin) give no gain equation (8 for 2x2 tiles of ~13k px)
         "reference": None,     # R, the raw intensity at which c is defined; null: the median bin centre
     },
 }

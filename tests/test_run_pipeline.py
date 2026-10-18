@@ -165,15 +165,21 @@ def test_example_config_is_the_defaults():
     assert example == defaults
 
 
-@pytest.mark.parametrize("name", ["P667_EM05024_35h.yaml", "P667_EM05024_35h_overview.yaml",
-                                  "P667_EM05024_35h_overview_masked-norm.yaml", "P667_EM05024_35h_overview_tissue1-99.yaml", "P667_EM05024_35h_clahe.yaml",
-                                  "P667_test_2day.yaml", "P667_test_2day_movie.yaml", "P667_EM05024_35h_movie.yaml",
-                                  "P667_test_3x3.yaml", "P667_test_small_tiles.yaml"])
-def test_dataset_configs_are_valid(name):
-    cfg = config.load_config(ROOT / "configs" / name, step_defaults=config.step_defaults())
-    assert set(cfg) <= set(config.DEFAULTS) | set(config.STEPS) | {"config_path"}
+# Dataset configs live outside the repository: set EM_PIPE_CONFIGS to a folder of them to check those too.
+DATASET_CONFIGS = [ROOT / "configs" / "example.yaml"] + sorted(
+    Path(os.environ["EM_PIPE_CONFIGS"]).glob("*.yaml") if os.environ.get("EM_PIPE_CONFIGS") else [])
+
+
+@pytest.mark.parametrize("path", DATASET_CONFIGS, ids=lambda p: p.name)
+def test_dataset_configs_are_valid(path):
+    from pipeline import movie_build, movie_tissue
+    tools = {**movie_build.DEFAULTS, **movie_tissue.DEFAULTS}   # sections of the movie tools (not steps)
+    cfg = config.load_config(path, step_defaults=config.step_defaults())
+    assert set(cfg) <= set(config.DEFAULTS) | set(config.STEPS) | set(tools) | {"config_path"}
     for section in config.STEPS:   # no misspelt keys: every key is one the steps know
         assert set(cfg[section]) <= set(config.step_defaults(section)[section]), section
+    for section in set(cfg) & set(tools):
+        assert set(cfg[section]) <= set(tools[section]), section
     assert {k["action"] for k in cfg["check"]["known_issues"]} <= {"exclude", "ignore"}
     for job in config.JOBS:
         config.sbatch_args(cfg, job)   # raises on unknown keys or unquoted times

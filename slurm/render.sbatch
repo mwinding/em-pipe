@@ -12,7 +12,6 @@
 # task (= ceil(planes / slab) / array size). init needs only a few GB (e.g. --mem=16G).
 
 #SBATCH --job-name=em-render
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=160G

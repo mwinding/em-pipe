@@ -66,7 +66,7 @@ def _create_tmp(directory, prefix, suffix):
     """Create an empty, uniquely named file the way ``open(..., "w")`` would.
 
     mkstemp makes files private (0600), and a chmod from the umask afterwards overrides the folder's
-    default ACL (NEMO lab folders: rw for the lab, nothing for others). Creating with mode 0666 lets
+    default ACL (shared lab folders: rw for the group, nothing for others). Creating with mode 0666 lets
     the OS apply the umask or the default ACL, so outputs get a normal write's permissions.
     """
     for _ in range(100):

@@ -3,7 +3,6 @@
 # Usage: sbatch slurm/check.sbatch CONFIG [extra args]   (normally submitted by run_pipeline.sh)
 
 #SBATCH --job-name=em-check
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G

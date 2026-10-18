@@ -268,7 +268,7 @@ def test_solve_uses_only_the_largest_connected_set_of_tiles():
 
 
 def test_per_slice_follows_tile_brightness_jumps(tmp_path):
-    """A tile that is brighter on single slices (as raw P667 tiles are, by 1-2 % of the range) gets
+    """A tile that is brighter on single slices (as real raw tiles are, by 1-2 % of the range) gets
     its window shifted on exactly those slices, so it doesn't flicker; other tiles are untouched."""
     out = tmp_path / "out"
     zs, expected = write_stats_only(out, seam_z=100, segment_z=100, excluded=(), outlier_z=-1)

@@ -19,7 +19,7 @@ are compared in 150 px stretches along the seam: step = median(B side) - median(
 grey levels, for tissue and for bright resin separately (background.mask on the before image).
 A real step is systematic along the seam; the anatomy differs from stretch to stretch, so the
 median over stretches is reported. Writes OUT_CSV and prints a summary.
-Runs on NEMO (reads the render plan): sbatch --cpus-per-task=8 --mem=64G --wrap "...".
+Runs on the cluster (reads the render plan): sbatch --cpus-per-task=8 --mem=64G --wrap "...".
 """
 import json
 import math

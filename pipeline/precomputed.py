@@ -1,6 +1,6 @@
 """Export a rendered volume (OME-Zarr, every pyramid scale) as a Neuroglancer precomputed volume.
 
-Precomputed is what Zetta's and the CloudVolume tools read. ``init`` writes the ``info`` (one scale
+Precomputed is what CloudVolume and the segmentation tools built on it read. ``init`` writes the ``info`` (one scale
 per zarr scale: size, resolution, chunk size, encoding, sharding) and a ``provenance`` file;
 ``run`` (array) writes whole shards, each read from the zarr in one block, so tasks never share a
 file and a shard that exists is skipped (re-runs continue); ``verify`` compares random chunk-sized
@@ -40,7 +40,7 @@ DEFAULTS = {
         "minishard_chunks_log2": 3,  # chunks per minishard = 2^this
         "scales": None,             # zarr scales to export, e.g. [0, 1, 2]; null: all
         "description": "",          # provenance
-        "owners": [],               # provenance, e.g. ["name@crick.ac.uk"]
+        "owners": [],               # provenance, e.g. ["name@example.org"]
     }
 }
 ENCODINGS = ("raw", "jpeg")

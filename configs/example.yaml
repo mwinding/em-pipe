@@ -142,7 +142,7 @@ patchgrid:                   # within-tile brightness shapes per tile position a
   smooth: 1.0                # equality of neighbouring patches, relative to the median relation weight sqrt(n)
   prior: 0.02                # pull of each tile's mean gain towards 1, relative to the same
   gain_power: 2.0            # a bin's gain equation is weighted by min(1, cnr / 10) ** gain_power
-  gain_cnr_min: 5.0          # bins with less contrast than this (resin) give no gain equation (35h: 8)
+  gain_cnr_min: 5.0          # bins with less contrast than this (resin) give no gain equation (8 for 2x2 tiles of ~13k px)
   reference: null            # R, the raw intensity at which the shapes' change c is defined; null: the median bin centre
 
 # Curtaining removal inside render. Tune first: python -m pipeline.destreak test --config C --z Z --tile r-c
@@ -205,7 +205,8 @@ serve:
   bind: 127.0.0.1            # listen address (--bind overrides); 0.0.0.0 to tunnel via the login host
 
 # Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
-# string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch.
+# string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch (partition: SBATCH_PARTITION
+# from slurm/site.sh, else the cluster's default).
 # Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, shading, overlaps, overlaps_merge,
 # patchgrid, intensity, zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale, each with this
 # array size), export.
@@ -220,7 +221,7 @@ precomputed:
   minishard_chunks_log2: 3   # chunks per minishard = 2^this
   scales: null               # zarr scales to export, e.g. [0, 1, 2]; null: all
   description: ""            # provenance
-  owners: []                 # provenance, e.g. ["name@crick.ac.uk"]
+  owners: []                 # provenance, e.g. ["name@example.org"]
 
 upload:
   enabled: false             # run_pipeline.sh: upload after the precomputed export

@@ -17,7 +17,7 @@ fades in during the last second before the fly-through, which shows the whole sl
 
     python -m pipeline.movie_build --config C frames     # PNG frames -> work/movie/<name>/
     python -m pipeline.movie_build --config C encode     # ffmpeg -> output_dir/<name>.mp4
-    sbatch slurm/movie_build.sbatch C                    # both, on NEMO
+    sbatch slurm/movie_build.sbatch C                    # both, on the cluster
 
 Coordinates are continuous s0 voxels (x, y, z) as in pipeline.movie; slice z fills z to z + 1.
 """
@@ -548,7 +548,7 @@ def main(argv=None):
         print(shlex.join(movie.encode_command(cfg)))
     else:
         if not shutil.which(cfg["movie"]["ffmpeg"]):
-            raise FileNotFoundError(f"{cfg['movie']['ffmpeg']} not found (on NEMO: ml FFmpeg)")
+            raise FileNotFoundError(f"{cfg['movie']['ffmpeg']} not found (an FFmpeg module? EM_PIPE_FFMPEG_MODULE in slurm/site.sh)")
         encode(cfg)
     return 0
 

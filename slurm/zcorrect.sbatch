@@ -7,7 +7,6 @@
 # of a 2x2-grid file) and keeps max_distance slices of crops in memory; solve takes minutes and < 1 GB.
 
 #SBATCH --job-name=em-zcorrect
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G

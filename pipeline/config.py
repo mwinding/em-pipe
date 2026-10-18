@@ -31,7 +31,8 @@ DEFAULTS = {
     # Restricts every step after check. Keys: start, end (timestamps), z_start, z_end (inclusive).
     "selection": {},
     # Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
-    # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch.
+    # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch (partition: SBATCH_PARTITION
+    # from slurm/site.sh, else the cluster's default).
     # Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, shading, overlaps,
     # overlaps_merge, patchgrid, intensity,
     # zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale), export.

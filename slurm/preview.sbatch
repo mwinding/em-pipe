@@ -4,7 +4,6 @@
 # A run task reads one ~354 MB tile slice at a time; ~70 GB of raw reads per 50-slice chunk of a 2x2 grid.
 
 #SBATCH --job-name=em-preview
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G

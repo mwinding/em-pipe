@@ -3,7 +3,6 @@
 # Usage: sbatch slurm/shading.sbatch CONFIG [extra args]   (normally submitted by run_pipeline.sh)
 
 #SBATCH --job-name=em-shading
-#SBATCH --partition=ncpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
