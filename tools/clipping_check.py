@@ -2,6 +2,8 @@
 the darkest structures (e.g. dense granules) look like without the clip.
 
     python tools/clipping_check.py CONFIG Z[,Z...] [--spots 3] [--crop 1024] [--headroom 15,240]
+    python tools/clipping_check.py CONFIG --at Z:ROW:COL[,...] [--crop 1024]   # chosen spots only (centres,
+                                                                             # volume px as stored)
 
 CONFIG names the rendered volume (render.name; its work/render/<stem>/render.json and tiles.csv).
 The display windows come from tissue percentiles measured on 16x downsampled previews, where small
@@ -83,7 +85,8 @@ def label(img, text):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("config")
-    p.add_argument("z")
+    p.add_argument("z", nargs="?", default="")
+    p.add_argument("--at", help="Z:ROW:COL,...: panels for these spot centres only (no slice statistics)")
     p.add_argument("--spots", type=int, default=3)
     p.add_argument("--crop", type=int, default=1024)
     p.add_argument("--headroom", default="15,240")
@@ -100,11 +103,12 @@ def main():
     clahe_cfg = (cfg["render"]["clahe"] if cfg["render"]["clahe"]["enabled"] else {"clip_limit": 1.5, "tile_px": 256})
     qc = out / "qc" / "clipping"
     qc.mkdir(parents=True, exist_ok=True)
-    zs = [int(v) for v in args.z.split(",")]
-    plane_of = {z: next(i for i, pl in enumerate(meta0["planes"]) if pl[0][0] == z) for z in zs}
     c = args.crop
+    at = [tuple(int(v) for v in a.split(":")) for a in args.at.split(",")] if args.at else []
+    zs = [int(v) for v in args.z.split(",") if v] + [a[0] for a in at]
+    plane_of = {z: next(i for i, pl in enumerate(meta0["planes"]) if pl[0][0] == z) for z in zs}
     rows_out, spots = [], []
-    for z in zs:
+    for z in ([] if at else zs):
         plane = vol[plane_of[z]].read().result()
         tissue = tissue_mask(plane)
         t = plane[tissue]
@@ -121,9 +125,10 @@ def main():
                     continue
                 spots.append((float((plane[r0:r0 + c, c0:c0 + c][m] == 0).mean()), z, r0, c0))
         del plane, tissue
-    df = pd.DataFrame(rows_out)
-    df.to_csv(qc / "clipping.csv", index=False)
-    print("\ntissue pixels clipped (median over slices): black %.2f %%, white %.2f %%" % (df.at_0_pct.median(), df.at_255_pct.median()))
+    if rows_out:
+        df = pd.DataFrame(rows_out)
+        df.to_csv(qc / "clipping.csv", index=False)
+        print("\ntissue pixels clipped (median over slices): black %.2f %%, white %.2f %%" % (df.at_0_pct.median(), df.at_255_pct.median()))
     spots.sort(reverse=True)
     chosen, used = [], set()
     for s in spots:
@@ -132,6 +137,13 @@ def main():
             used.add(s[1])
         if len(chosen) == args.spots:
             break
+    if at:
+        chosen = []
+        for z, r, col in at:
+            r0, c0 = r - c // 2, col - c // 2
+            blk = vol[plane_of[z], r0:r0 + c, c0:c0 + c].read().result()
+            chosen.append((float((blk == 0).mean()), z, r0, c0))
+    prefix = "neuropil" if at else "spot"
     for k, (frac, z, r0, c0) in enumerate(chosen):
         rows, cols = slice(r0, r0 + c), slice(c0, c0 + c)
         cur = vol[plane_of[z], r0:r0 + c, c0:c0 + c].read().result()
@@ -140,7 +152,8 @@ def main():
         valid = wide > 0
         diff = np.abs(same.astype(int) - cur.astype(int))
         wide_clahe = render._clahe(wide, valid, clahe_cfg["clip_limit"], clahe_cfg["tile_px"])
-        panels = [label(cur, f"z {z}: volume (black-clipped tissue {100 * frac:.1f} %)")]
+        panels = [label(cur, f"z {z}: volume ({100 * frac:.1f} % of px at 0)" if at else
+                        f"z {z}: volume (black-clipped tissue {100 * frac:.1f} %)")]
         if cvol is not None:
             panels.append(label(cvol[plane_of[z], r0:r0 + c, c0:c0 + c].read().result(), "CLAHE volume"))
         panels += [label(wide, f"unclipped: black/white points at {widen[0]:g}/{widen[1]:g}"),
@@ -149,12 +162,14 @@ def main():
         img = panels[0]
         for pn in panels[1:]:
             img = np.concatenate([img, gap, pn], axis=1)
-        name = f"spot_{k}_z{z}.png"
+        name = f"{prefix}_{k}_z{z}.png"
         cv2.imwrite(str(qc / name), img)
         below = (wide[valid] < widen[0]).mean() * 100
+        above = (wide[valid] > widen[1]).mean() * 100
         print(f"{name}: rows {r0}-{r0 + c}, cols {c0}-{c0 + c} (rotated volume px); re-render vs volume: "
               f"max |diff| {diff.max()}, {100 * (diff > 1).mean():.3f} % px > 1; below the old black point: "
-              f"{below:.1f} % of px, darkest {int(wide[valid].min())} (old black point = {widen[0]:g})", flush=True)
+              f"{below:.2f} % of px, above the old white point: {above:.2f} %, range {int(wide[valid].min())}-"
+              f"{int(wide[valid].max())} (old points {widen[0]:g}/{widen[1]:g})", flush=True)
 
 
 if __name__ == "__main__":
