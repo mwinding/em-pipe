@@ -55,7 +55,8 @@ def tissue_mask(plane):
 
 def render_crop(cfg, meta0, tiles, z, rows, cols, widen):
     """The volume's plane z on rotated-volume pixels rows x cols, rendered from the raw tiles; tile
-    windows widened so black/white points land on ``widen`` (None: the volume's own windows)."""
+    windows widened so black/white points land on ``widen`` (None: the volume's own windows).
+    Returns (uint8 crop, data mask): tissue clipped to 0 is data, unlike pixels no tile covers."""
     H, W = meta0["shape"][1:]
     rotated = meta0["settings"].get("rotate_deg", 0) == 180
     if rotated:   # rotated pixel (r, c) is unrotated (H - 1 - r, W - 1 - c)
@@ -71,9 +72,11 @@ def render_crop(cfg, meta0, tiles, z, rows, cols, widen):
         new_span = span * 255.0 / (b - a)
         plan["lo"] = plan["lo"] - a / 255.0 * new_span
         plan["hi"] = plan["lo"] + new_span
-    with ThreadPoolExecutor(8) as pool:
-        out = render._Renderer(cfg, meta, plan, pool).plane([(z, 1.0)])
-    return out[::-1, ::-1] if rotated else out
+    with ThreadPoolExecutor(8) as pool:   # _Renderer.plane for one source slice, keeping its data mask
+        r = render._Renderer(cfg, meta, plan, pool)
+        val, valid = r._warp(z, *r._slice([pool.submit(r._tile, t) for t in r.tiles.get(z, [])]))
+    out = cv2.convertScaleAbs(val, alpha=255.0)
+    return (out[::-1, ::-1], valid[::-1, ::-1]) if rotated else (out, valid)
 
 
 def label(img, text):
@@ -147,11 +150,11 @@ def main():
     for k, (frac, z, r0, c0) in enumerate(chosen):
         rows, cols = slice(r0, r0 + c), slice(c0, c0 + c)
         cur = vol[plane_of[z], r0:r0 + c, c0:c0 + c].read().result()
-        same = render_crop(cfg, meta0, tiles, z, rows, cols, None)
-        wide = render_crop(cfg, meta0, tiles, z, rows, cols, widen)
-        valid = wide > 0
+        same, _ = render_crop(cfg, meta0, tiles, z, rows, cols, None)
+        wide, valid = render_crop(cfg, meta0, tiles, z, rows, cols, widen)
         diff = np.abs(same.astype(int) - cur.astype(int))
-        wide_clahe = render._clahe(wide, valid, clahe_cfg["clip_limit"], clahe_cfg["tile_px"])
+        # _clahe fills no-data in its input with random draws from the histogram: give it a copy
+        wide_clahe = render._clahe(wide.copy(), valid, clahe_cfg["clip_limit"], clahe_cfg["tile_px"])
         panels = [label(cur, f"z {z}: volume ({100 * frac:.1f} % of px at 0)" if at else
                         f"z {z}: volume (black-clipped tissue {100 * frac:.1f} %)")]
         if cvol is not None:
@@ -165,11 +168,12 @@ def main():
         name = f"{prefix}_{k}_z{z}.png"
         cv2.imwrite(str(qc / name), img)
         below = (wide[valid] < widen[0]).mean() * 100
+        still = (wide[valid] == 0).mean() * 100
         above = (wide[valid] > widen[1]).mean() * 100
         print(f"{name}: rows {r0}-{r0 + c}, cols {c0}-{c0 + c} (rotated volume px); re-render vs volume: "
               f"max |diff| {diff.max()}, {100 * (diff > 1).mean():.3f} % px > 1; below the old black point: "
-              f"{below:.2f} % of px, above the old white point: {above:.2f} %, range {int(wide[valid].min())}-"
-              f"{int(wide[valid].max())} (old points {widen[0]:g}/{widen[1]:g})", flush=True)
+              f"{below:.2f} % of px ({still:.2f} % still at 0), above the old white point: {above:.2f} % "
+              f"(old points {widen[0]:g}/{widen[1]:g}; {100 * (~valid).mean():.2f} % of the crop has no data)", flush=True)
 
 
 if __name__ == "__main__":

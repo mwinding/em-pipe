@@ -388,6 +388,7 @@ def _clahe(img, valid, clip_limit, tile):
 
     No-data is first filled with values drawn from the plane's own histogram: a block of zeros
     would skew the CLAHE tiles at the data's edge, which moves with the drift from plane to plane.
+    The fill is written into ``img`` itself (no plane-sized copy): pass a copy to keep the input.
     """
     invalid = ~valid
     n = int(np.count_nonzero(invalid))
