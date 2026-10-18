@@ -12,4 +12,4 @@ tissue_movie:
   yaw_deg: [-120, 0]           # three quarters from the +z end (and the -x side, as the main version), round
                                # through the side view to the front, z = 0
   turn_s: 9.0                  # twice the main version's angle: a longer turn
-  fade_start_s: 1.5            # the resin fades from 1.5 s after the slicing stops
+  fade_start_s: 1.0            # the resin fades from 1 s after the slicing stops

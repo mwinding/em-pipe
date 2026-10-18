@@ -11,4 +11,4 @@ tissue_movie:
   build_order: imaging           # from the +z end: the slices as imaged, z = 0 first
   yaw_deg: [120, 0]              # negated: [-120, 0]
   turn_s: 9.0
-  fade_start_s: 1.5              # the resin fades from 1.5 s after the slicing stops
+  fade_start_s: 1.0              # the resin fades from 1 s after the slicing stops
