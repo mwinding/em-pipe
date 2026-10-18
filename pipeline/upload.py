@@ -74,15 +74,21 @@ class LocalTarget:
 
 
 class GCSTarget:
-    """A bucket prefix, with the service-account key at ``credentials``."""
+    """A bucket prefix, with the service-account key at ``credentials``; ``threads`` uploads share
+    the client, so its connection pool holds as many connections (requests' default is 10: more
+    threads would reconnect for every file)."""
 
-    def __init__(self, destination, credentials):
+    def __init__(self, destination, credentials, threads=16):
         from google.cloud import storage
         from google.oauth2 import service_account
+        from requests.adapters import HTTPAdapter
         bucket, _, prefix = destination.removeprefix("gs://").partition("/")
         self.prefix = prefix.strip("/") + "/" if prefix.strip("/") else ""
         creds = service_account.Credentials.from_service_account_file(str(credentials))
-        self.bucket = storage.Client(credentials=creds, project=creds.project_id).bucket(bucket)
+        client = storage.Client(credentials=creds, project=creds.project_id)
+        n = max(10, int(threads))
+        client._http.mount("https://", HTTPAdapter(pool_connections=n, pool_maxsize=n))
+        self.bucket = client.bucket(bucket)
 
     def list(self):
         n = len(self.prefix)
@@ -114,7 +120,7 @@ def target(cfg):
     if dest.startswith("file://"):
         return LocalTarget(dest.removeprefix("file://"))
     if dest.startswith("gs://"):
-        return GCSTarget(dest, credentials_path(u))
+        return GCSTarget(dest, credentials_path(u), u["threads"])
     raise ValueError(f"upload.destination must start with gs:// or file://, not {dest!r}")
 
 
