@@ -66,6 +66,8 @@ DEFAULTS = {
         "view_rotation_deg": 0,    # rotates the picture in the frame plane: 0 or 180 (as movie.view_rotation_deg)
         "fps": 30,
         "level": 5,                # pyramid level rendered and masked (5: 32x, 256 nm voxels at 8 nm)
+        "mask_volume": None,       # the tissue mask (and what is imaged) from this volume in output_dir (the same
+                                   # geometry), e.g. the plain one for a CLAHE version; null: the volume itself
         # Timeline (s). The orbit runs through it, from rest and back to rest.
         "build_s": 7.0,            # the stack growing slice by slice, from the last slice to the first, each
                                    # new slice on the face towards the camera (0: none)
@@ -174,6 +176,12 @@ DEFAULTS = {
 def volume_path(cfg):
     m = cfg["tissue_movie"]
     return Path(cfg["output_dir"]) / (m["volume"] or f"{cfg['name']}.ome.zarr")
+
+
+def mask_volume_path(cfg):
+    """The volume the tissue mask is made from: ``mask_volume`` (the same geometry), else the volume itself."""
+    m = cfg["tissue_movie"]
+    return Path(cfg["output_dir"]) / m["mask_volume"] if m.get("mask_volume") else volume_path(cfg)
 
 
 def movie_name(cfg):
@@ -386,39 +394,54 @@ def mask_qc(vol, mask, path, n_xy=6):
 def load_scene(cfg, overwrite_mask=False):
     """The Scene at the movie's level: the level read once from the pyramid, the tissue mask (with its
     QC image, qc/<name>_mask.png) made once, and the level as shown (``imaged_part``), all kept in the
-    work folder's scene/ and memory-mapped from there."""
+    work folder's scene/ and memory-mapped from there. With ``mask_volume``, the mask and what counts
+    as imaged come from that volume's level, the grey values shown from the volume's."""
     m = cfg["tissue_movie"]
-    root = volume_path(cfg)
+    root, mroot = volume_path(cfg), mask_volume_path(cfg)
     level = int(m["level"])
     out = work_dir(cfg) / "scene"
     out.mkdir(parents=True, exist_ok=True)
-    path = {k: out / f"{k}_s{level}.npy" for k in ("grey", "mask", "shown")}
-    stamps = {k: out / f"{k}_s{level}.json" for k in ("grey", "mask", "shown")}
+    path = {k: out / f"{k}_s{level}.npy" for k in ("grey", "mgrey", "mask", "shown")}
+    stamps = {k: out / f"{k}_s{level}.json" for k in ("grey", "mgrey", "mask", "shown")}
     info = out / "pyramid.json"                                   # the full-resolution shape
     read = json.dumps({"volume": str(root), "level": level})
-    made = json.dumps({"read": read, "mask": m["mask"], "version": 9}, sort_keys=True)
-    shown = json.dumps({"read": read, "trim_edge_px": m["trim_edge_px"], "crop": m["crop"], "version": 2},
-                       sort_keys=True)
+    mread = json.dumps({"volume": str(mroot), "level": level})
+    made = json.dumps({"read": mread, "mask": m["mask"], "version": 9}, sort_keys=True)
+    shown = {"read": read, "trim_edge_px": m["trim_edge_px"], "crop": m["crop"], "version": 2}
+    shown = json.dumps(shown if mroot == root else {**shown, "mask_read": mread}, sort_keys=True)
 
     def current(key, text):
         return path[key].exists() and stamps[key].exists() and stamps[key].read_text() == text
 
-    if not current("grey", read):
-        levels = open_levels(root, 1)
+    def read_level(key, volume, stamp):
+        levels = open_levels(volume, 1)
         if level >= len(levels):
-            raise ValueError(f"tissue_movie.level {level}: {root.name} has levels s0-s{len(levels) - 1}")
-        log.info("reading s%d of %s %s", level, root.name, levels[level].shape)
-        grey = levels[level].read().result()
-        if grey.dtype != np.uint8:
-            raise ValueError(f"{root.name}: uint8 volumes only, not {grey.dtype}")
-        cli.atomic_write(path["grey"], lambda p: np.save(p, grey))
+            raise ValueError(f"tissue_movie.level {level}: {volume.name} has levels s0-s{len(levels) - 1}")
+        log.info("reading s%d of %s %s", level, volume.name, levels[level].shape)
+        data = levels[level].read().result()
+        if data.dtype != np.uint8:
+            raise ValueError(f"{volume.name}: uint8 volumes only, not {data.dtype}")
+        cli.atomic_write(path[key], lambda p: np.save(p, data))
+        cli.atomic_write(stamps[key], lambda p: Path(p).write_text(stamp))
+        return levels
+
+    if not current("grey", read):
+        levels = read_level("grey", root, read)
         cli.atomic_write(info, lambda p: Path(p).write_text(json.dumps({"shape0": list(levels[0].shape)})))
-        cli.atomic_write(stamps["grey"], lambda p: Path(p).write_text(read))
         stamps["mask"].unlink(missing_ok=True)
     if not info.exists():
         shape0 = list(open_levels(root, 0.1)[0].shape)
         cli.atomic_write(info, lambda p: Path(p).write_text(json.dumps({"shape0": shape0})))
     grey = np.load(path["grey"], mmap_mode="r")
+    if mroot == root:
+        mgrey = grey
+    else:
+        if not current("mgrey", mread):
+            read_level("mgrey", mroot, mread)
+        mgrey = np.load(path["mgrey"], mmap_mode="r")
+        if mgrey.shape != grey.shape:
+            raise ValueError(f"tissue_movie.mask_volume {mroot.name}: s{level} is {mgrey.shape}, "
+                             f"{root.name}'s {grey.shape}: the same geometry is needed")
     src = m.get("mask_level")
     if src is not None and src < level:               # a coarser scene (a preview): the finer mask, pooled
         base = load_scene({**cfg, "tissue_movie": {**m, "level": src, "mask_level": None}}, overwrite_mask)
@@ -429,11 +452,11 @@ def load_scene(cfg, overwrite_mask=False):
             fine = np.pad(fine, [(0, k * n - v) for n, v in zip(grey.shape, fine.shape)], mode="edge")
             nz, ny, nx = grey.shape
             pooled = fine.reshape(nz, k, ny, k, nx, k).mean(axis=(1, 3, 5))
-            mask = np.where(np.asarray(grey) > 0, np.rint(pooled), 0).astype(np.uint8)
+            mask = np.where(np.asarray(mgrey) > 0, np.rint(pooled), 0).astype(np.uint8)
             cli.atomic_write(path["mask"], lambda p: np.save(p, mask))
             cli.atomic_write(stamps["mask"], lambda p: Path(p).write_text(made))
     elif overwrite_mask or not current("mask", made):
-        g = np.asarray(grey)
+        g = np.asarray(mgrey)
         log.info("tissue mask of s%d %s", level, g.shape)
         mask = tissue_mask(g, **m["mask"])
         qc = mask_qc(g, mask, qc_path(cfg, f"{movie_name(cfg)}_mask.png"))
@@ -441,7 +464,10 @@ def load_scene(cfg, overwrite_mask=False):
         cli.atomic_write(path["mask"], lambda p: np.save(p, mask))
         cli.atomic_write(stamps["mask"], lambda p: Path(p).write_text(made))
     if not current("shown", shown):
-        part = crop_volume(imaged_part(np.asarray(grey), m["trim_edge_px"]), m["crop"], 2 ** level)
+        g = np.asarray(grey)
+        if mroot != root:                              # imaged where the mask volume says (0: no data)
+            g = np.where(np.asarray(mgrey) > 0, np.maximum(g, 1), 0).astype(np.uint8)
+        part = crop_volume(imaged_part(g, m["trim_edge_px"]), m["crop"], 2 ** level)
         cli.atomic_write(path["shown"], lambda p: np.save(p, part))
         cli.atomic_write(stamps["shown"], lambda p: Path(p).write_text(shown))
     return Scene(np.load(path["shown"], mmap_mode="r"), np.load(path["mask"], mmap_mode="r"), 2 ** level,
@@ -1073,6 +1099,9 @@ def _state(cfg, levels=False):
         _WORKER["scene"] = load_scene(cfg)
     if levels and "levels" not in _WORKER:
         _WORKER["levels"] = open_levels(movie.volume_path(cfg), cfg["movie"]["cache_gb"])
+        mroot = mask_volume_path(cfg)
+        _WORKER["mask_levels"] = (open_levels(mroot, cfg["movie"]["cache_gb"])
+                                  if mroot != volume_path(cfg) else None)
     return _WORKER
 
 
@@ -1115,7 +1144,10 @@ def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0):
     if fine_weight > 0:
         levels = _state(cfg, levels=True)["levels"]
         fine = movie.render_frame(levels, size, zoom, cx, cy, z, rotation)[0].astype(np.float32)
-        tissue = refine_edge(tissue_in_frame(state["scene"], size, zoom, cx, cy, z), fine) * np.float32(fine_weight)
+        guide = fine                                  # (the edge placed from the mask volume's greys)
+        if state.get("mask_levels") is not None:
+            guide = movie.render_frame(state["mask_levels"], size, zoom, cx, cy, z, rotation)[0].astype(np.float32)
+        tissue = refine_edge(tissue_in_frame(state["scene"], size, zoom, cx, cy, z), guide) * np.float32(fine_weight)
         if m["crop"]:
             tissue = tissue * crop_in_frame(m["crop"], size, zoom, cx, cy)
         picture = tissue * fine + (1 - tissue) * picture

@@ -404,3 +404,23 @@ def test_twice_the_frame_size_is_the_same_movie(tmp_path):
     for col in ("yaw", "tilt", "lx", "ly", "lz", "dist", "resin", "cut", "cx", "cy", "z"):
         np.testing.assert_allclose(a[col].to_numpy(float), b[col].to_numpy(float), rtol=1e-6, atol=1e-6, err_msg=col)
     np.testing.assert_allclose(b["zoom"].to_numpy(float), a["zoom"].to_numpy(float) / 2, rtol=1e-9)
+
+
+def test_mask_from_another_volume(tmp_path):
+    """With mask_volume, the tissue mask (and what counts as imaged) comes from that volume and the grey
+    values shown from the movie's: a CLAHE-like version with texture in its resin keeps the plain
+    volume's mask."""
+    plain, _ = _tissue_volume(shape=(32, 64, 72))
+    rng = np.random.default_rng(3)
+    clahe = np.clip(plain.astype(int) + rng.integers(-25, 26, plain.shape), 1, 255).astype(np.uint8)
+    clahe[plain == 0] = 0
+    _pyramid(tmp_path / "out" / "plain.ome.zarr", plain)
+    _pyramid(tmp_path / "out" / "clahe.ome.zarr", clahe)
+    mask_settings = {"rim_px": 4, "min_resin": 1000}
+    cfg = _cfg(tmp_path, volume="clahe.ome.zarr", mask_volume="plain.ome.zarr", trim_edge_px=0, mask=mask_settings)
+    scene = mt.load_scene(cfg)
+    np.testing.assert_array_equal(scene.mask, mt.tissue_mask(plain, **mt.DEFAULTS["tissue_movie"]["mask"] | mask_settings))
+    shown = np.asarray(scene.grey)
+    assert ((shown > 0) == (plain > 0)).all() and (shown[plain > 0] == np.maximum(clahe[plain > 0], 1)).all()
+    own = _cfg(tmp_path, volume="clahe.ome.zarr", name="own", trim_edge_px=0, mask=mask_settings)
+    assert (np.asarray(mt.load_scene(own).mask) > 0).sum() > (np.asarray(scene.mask) > 0).sum()   # resin kept
