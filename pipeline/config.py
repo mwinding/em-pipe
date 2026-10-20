@@ -23,7 +23,7 @@ DEFAULTS = {
         # col, optional part (default 1); a name without row/col takes its tile from its slice labels.
         "file_pattern": r"^M(?P<month>\d{2})_D(?P<day>\d{2})_tile(?P<row>\d+)-(?P<col>\d+)(?:_part(?P<part>\d+))?\.tif$",
         # Per-slice ImageJ labels, e.g. G460-0186_26-10-06_000146_0-1-1_InLens_raw.tif
-        "label_pattern": r"^(?P<instrument>.+?)_(?P<date>\d{2}-\d{2}-\d{2})_(?P<time>\d{6})_(?P<group>\d+)-(?P<row>\d+)-(?P<col>\d+)_(?P<detector>[^_]+)_raw\.tif$",
+        "label_pattern": r"^(?P<instrument>.+?)_(?P<date>\d{2}-\d{2}-\d{2})_(?P<time>\d{6})_(?P<group>\d+)-(?P<row>\d+)-(?P<col>\d+)_(?P<detector>[^_]+)(?:_raw)?\.tif$",
         # Applied to f"{date}_{time}" from the label pattern
         "label_time_format": "%y-%m-%d_%H%M%S",
         "recursive": True,

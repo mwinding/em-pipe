@@ -1,6 +1,7 @@
 """Tests for pipeline.check on synthetic datasets with known faults."""
 
 import os
+import re
 import shutil
 import time
 from datetime import datetime, timedelta, timezone
@@ -519,6 +520,18 @@ def test_timezone_recorded_and_enforced(tmp_path):
 
 # 35i-style names: an optional _N part, and a tile only in the later files (M06_D05_1.tif, M06_D06_3_tile_0-0.tif)
 UNTILED_PATTERN = r"^M(?P<month>\d{2})_D(?P<day>\d{2})(?:_(?P<part>\d+))?(?:_tile_(?P<row>\d+)-(?P<col>\d+))?\.tif$"
+
+
+def test_labels_with_or_without_raw_suffix():
+    """Exports name their slices ..._InLens_raw.tif or, in newer exports, ..._InLens.tif: the default
+    label pattern reads the time and tile from both."""
+    from pipeline.config import DEFAULTS
+    label_re = re.compile(DEFAULTS["raw"]["label_pattern"])
+    got = check.parse_labels(["G460-0186_26-10-16_114604_0-1-0_InLens.tif",
+                              "G460-0186_26-09-17_000034_0-0-1_InLens_raw.tif"],
+                             label_re, DEFAULTS["raw"]["label_time_format"])
+    assert got == [(datetime(2026, 10, 16, 11, 46, 4), "1-0"), (datetime(2026, 9, 17, 0, 0, 34), "0-1")]
+    assert label_re.match("G460-0186_26-09-17_000034_0-0-1_InLens_raw.tif")["detector"] == "InLens"
 
 
 def test_untiled_files_take_tile_from_labels(tmp_path):
