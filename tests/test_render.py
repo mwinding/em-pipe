@@ -642,3 +642,91 @@ def test_elastic_field_moves_slice_content(truth, tmp_path):
     a, b = plain[2].astype(float), warped[2].astype(float)
     np.testing.assert_allclose(b[10:-10, 10:-10], np.roll(a, (-2, 3), axis=(0, 1))[10:-10, 10:-10], atol=1)
     assert elastic.displacement(json.loads((out / "work" / "align" / "elastic.json").read_text()), 1, [0], [0]) is None
+
+
+def _append(path, truth, z_end, **kw):
+    """_setup for the slices up to z_end with render.append on."""
+    return _setup(path, truth, selection={"z_end": z_end}, render={"append": True, **kw.pop("render", {})}, **kw)
+
+
+def test_append_keeps_rendered_planes_and_adds_new_slices(truth, full, tmp_path, caplog):
+    """render.append: 12 slices rendered (slabs of 8), then all 20 with every transform moved by (+3, -2) px
+    (as a new global align solve may move them). Slab 0 is kept untouched (blanked here behind its
+    marker's back, it stays blank); planes 8-19 come from the new plan moved back into the volume's frame,
+    so they equal a full render of the 20 slices where the two canvases overlap."""
+    cfg, out = _append(tmp_path, truth, 11)
+    _render(cfg)
+    meta0 = _meta(out)
+    omezarr.open_scale(out / "synthetic.ome.zarr", 0)[0:8].write(np.zeros((8, *_read(out).shape[1:]), np.uint8)).result()
+    cfg, out = _append(tmp_path, truth, N - 1, align=lambda dx, dy: transforms.translation(dx + 3, dy - 2))
+    with caplog.at_level(logging.WARNING):
+        _render(cfg)
+    vol, meta = _read(out), _meta(out)
+    assert meta["shape"] == [N, *meta0["shape"][1:]] and vol.shape[0] == N
+    assert meta["origin_xy"] == meta0["origin_xy"] and meta["created"] == meta0["created"]
+    assert not vol[:8].any()
+    ref, fmeta = full[1], _meta(full[0])
+    dx, dy = np.subtract(meta["origin_xy"], fmeta["origin_xy"])
+    assert dx >= 0 and dy >= 0
+    sub = ref[8:, dy:dy + vol.shape[1], dx:dx + vol.shape[2]]
+    np.testing.assert_array_equal(vol[8:, :sub.shape[1], :sub.shape[2]], sub)
+    if (dx, dy) != (0, 0) or fmeta["canvas_size_xy"] != meta0["canvas_size_xy"]:   # later slices drift past it
+        assert "beyond the volume's canvas" in caplog.text
+    done = out / "work" / "render" / "synthetic" / "done"
+    assert all(m.read_text().strip() == meta["digest"] for m in done.glob("slab_*"))
+
+
+def test_append_refuses_changed_rendered_slices_and_settings(truth, tmp_path):
+    cfg, out = _append(tmp_path, truth, 11)
+    _render(cfg)
+    vol = _read(out)
+    cfg, _ = _append(tmp_path, truth, N - 1, exclude=(3,))            # a kept plane's slice gone (z renumbered)
+    assert render.main(["init", "--config", str(cfg)]) == 1
+    cfg, _ = _append(tmp_path, truth, N - 1, render={"blend": "cut"})
+    assert render.main(["init", "--config", str(cfg)]) == 1
+    np.testing.assert_array_equal(_read(out), vol)
+    cfg, _ = _append(tmp_path, truth, N - 1)
+    _render(cfg)
+    meta = _meta(out)
+    assert render.main(["init", "--config", str(cfg)]) == 0      # nothing new: kept as it is
+    assert _meta(out) == meta
+
+
+def test_append_keeps_the_fixed_window(truth, tmp_path):
+    """render.intensity false: the appended slices keep the volume's window, not one from the new stats."""
+    def stats(out, lo, hi):
+        sl = pd.read_csv(out / "work" / "check" / "slices.csv", dtype={"tile": str})
+        (out / "work" / "preview").mkdir(parents=True, exist_ok=True)
+        sl[["z", "tile"]].assign(p0_5=lo, p99_5=hi).to_csv(out / "work" / "preview" / "stats.csv", index=False)
+
+    cfg, out = _append(tmp_path, truth, 11, render={"intensity": False})
+    stats(out, 26000, 41000)
+    assert render.main(["init", "--config", str(cfg)]) == 0
+    cfg, out = _append(tmp_path, truth, N - 1, render={"intensity": False})
+    stats(out, 20000, 50000)
+    assert render.main(["init", "--config", str(cfg)]) == 0
+    plan = pd.read_csv(out / "work" / "render" / "synthetic" / "tiles.csv")
+    assert plan["z"].max() == N - 1 and (plan["lo"] == 26000).all() and (plan["hi"] == 41000).all()
+
+
+def test_append_leaves_out_elastic_fields_that_touch_rendered_planes(truth, tmp_path, caplog):
+    """A field warping slices 6-13 (kept planes too) isn't applied to the new planes; one warping
+    slice 16 only is."""
+    field = {"x0": -1000.0, "y0": -1000.0, "spacing": 1000.0, "g": [[[6.0, -4.0]] * 4] * 4}
+    weights = {**{str(z): [[0, 0.5]] for z in range(6, 14)}, "16": [[1, 0.5]]}
+    vols = {}
+    for name, fields in (("plain", None), ("warped", {"fields": [field, field], "weights": weights})):
+        cfg, out = _append(tmp_path / name, truth, 11, render={"blend": "cut"})
+        _render(cfg)
+        cfg, out = _append(tmp_path / name, truth, N - 1, render={"blend": "cut"})
+        if fields:
+            (out / "work" / "align" / "elastic.json").write_text(json.dumps(fields))
+        with caplog.at_level(logging.WARNING):
+            _render(cfg)
+        vols[name] = _read(out)
+    a, b = vols["plain"], vols["warped"]
+    np.testing.assert_array_equal(b[:16], a[:16])
+    np.testing.assert_array_equal(b[17:], a[17:])
+    np.testing.assert_allclose(b[16][10:-10, 10:-10].astype(float),
+                               np.roll(a[16], (-2, 3), axis=(0, 1))[10:-10, 10:-10].astype(float), atol=1)
+    assert "elastic field 0 (slices 6-13) also warps planes already rendered" in caplog.text

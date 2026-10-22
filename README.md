@@ -124,6 +124,12 @@ The export serves like any volume: `python3 -m pipeline.serve FOLDER` lists `*.p
 - **Clock changes:** if the label clock is local time, set `check.timezone` to its zone (an IANA
   name such as `Europe/Paris`) before a daylight-saving change (the repeated hour would otherwise
   break the slice order). Re-run check after changing it; later steps refuse a mismatched timezone.
+- **Diagnostic volumes during an acquisition:** with `render.append: true`, re-running the chain on
+  new data adds the new slices to the existing volume instead of asking for `--overwrite`. Planes
+  already rendered (whole slabs) are kept as they are and the new ones are placed in the volume's
+  frame; pyramid redoes only what changed. Give the volume room for drift with
+  `render.append_margin_px` when it is first created. Not for final volumes: those need one render
+  from a single global alignment (`init --overwrite`).
 - **Several volumes** (e.g. a 32 nm overview and a full-resolution `render.bbox` region) can share
   one `output_dir` if they have different `render.name`s.
 - **destreak and zcorrect** are off by default; tune destreak with

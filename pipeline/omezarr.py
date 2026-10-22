@@ -96,6 +96,17 @@ def create(root, shape0, voxel_nm, num_scales=7, chunk=(64, 64, 64), shard=(64, 
     return shapes
 
 
+def grow(root, shape0, num_scales):
+    """Extend every scale of an existing volume to the shapes ``shape0`` gives (z only; the data
+    already written stays). Rewrites the arrays' metadata files."""
+    for s, shape in enumerate(scale_shapes(shape0, num_scales)):
+        arr = open_scale(root, s)
+        if tuple(arr.shape[1:]) != tuple(shape[1:]) or arr.shape[0] > shape[0]:
+            raise ValueError(f"{Path(root) / f's{s}'}: only z can grow, not {tuple(arr.shape)} -> {tuple(shape)}")
+        if arr.shape[0] < shape[0]:
+            arr.resize(exclusive_max=list(shape), expand_only=True).result()
+
+
 def open_scale(root, scale):
     """Open an existing scale array for reading and writing."""
     # Encoding threads default to every core of the node; keep them to the Slurm allocation.

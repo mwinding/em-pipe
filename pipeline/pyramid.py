@@ -6,10 +6,13 @@ per scale, each after the previous; its array tasks take the shards strided.
 Each finished shard leaves ``<render work folder>/done/s{s}_{index:06d}`` (index in omezarr.shard_boxes
 order). A marker counts only if it is newer than its scale array (so render init redoes the
 pyramid) and than the s-1 shard files it was pooled from (so shards whose source was
-re-rendered, or written late, are redone without --overwrite).
+re-rendered, or written late, are redone without --overwrite). The array's creation time is
+render.json's ``created``, else its metadata file's time: render init with ``render.append`` grows
+the arrays in z, which rewrites that file but keeps ``created``.
 """
 
 import itertools
+import json
 import logging
 import math
 import sys
@@ -57,6 +60,15 @@ def _mtime(path):
         return -math.inf
 
 
+def _created(root, wdir, scale):
+    """When the arrays of the volume were made: render.json's ``created``, else scale's metadata file."""
+    try:
+        stamp = json.loads((wdir / "render.json").read_text()).get("created")
+    except FileNotFoundError:
+        stamp = None
+    return stamp if stamp is not None else _mtime(root / f"s{scale}" / "zarr.json")
+
+
 def _shard_file(root, scale, pos):
     """File of the shard at grid position ``pos`` (zarr v3 default chunk key encoding)."""
     return Path(root) / f"s{scale}" / "c" / "/".join(map(str, pos))
@@ -74,8 +86,9 @@ def run(cfg, args):
         return 1
     src, dst = omezarr.open_scale(root, s - 1), omezarr.open_scale(root, s)
     src_shard = omezarr.shard_shape(src)
-    done = volume_paths(cfg)[1] / "done"
-    created = _mtime(root / f"s{s}" / "zarr.json")
+    wdir = volume_paths(cfg)[1]
+    done = wdir / "done"
+    created = _created(root, wdir, s)
     boxes = omezarr.shard_boxes(dst.shape, omezarr.shard_shape(dst))
     task_id, num_tasks = task_info(args)
     mine = my_chunks(list(enumerate(boxes)), task_id, num_tasks)
@@ -90,7 +103,7 @@ def run(cfg, args):
             todo.append((i, box, src_box, sources))
 
     if s >= 2:  # only the s-1 shards this task reads; for s = 1, render's s0 is complete by job order
-        prev = _mtime(root / f"s{s - 1}" / "zarr.json")
+        prev = _created(root, wdir, s - 1)
         grid = [-(-n // c) for n, c in zip(src.shape, src_shard)]
         need = sorted({int(np.ravel_multi_index(p, grid)) for *_, sources in todo for p in sources})
         missing = [j for j in need if _mtime(done / f"s{s - 1}_{j:06d}") <= prev]

@@ -194,6 +194,12 @@ render:
     clip_limit: 2.0          # cv2 CLAHE clip limit
     tile_px: 512             # CLAHE tile size in full-resolution px
   threads: 8                 # tiles rendered concurrently (does not change the output)
+  # Diagnostic volumes while an acquisition grows, never a final volume: when the inputs changed, render
+  # init adds the new slices to the existing volume instead of refusing. Planes up to the last full slab
+  # keep their pixels, transforms and levels; the rest come from the current inputs, placed in the
+  # volume's frame. Re-render in full (init --overwrite) for anything final.
+  append: false
+  append_margin_px: 0        # canvas margin when a volume is created: room for later slices' drift
 
 pyramid: {}                  # no settings: scales, chunks and shards are fixed by render init
 

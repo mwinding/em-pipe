@@ -22,6 +22,18 @@ Geometry: output pixel (row i, col j) at downsample f is the mean of the aligned
 ``origin_xy + (f*j, f*i) + [0, f)``. Pixel centres sit at integer coordinates (as in OpenCV).
 With ``render.rotate_deg: 180`` every plane is rotated 180 degrees in x-y about the canvas centre:
 pixel (i, j) then holds what (H-1-i, W-1-j) holds without it (a rotation, not a mirror image).
+
+``render.append`` (diagnostic volumes while an acquisition grows, never a final volume): when the
+inputs changed, init adds to the existing volume instead of refusing. The planes up to the last full
+slab keep their pixels, transforms and levels; their slices must be the same files and positions as
+before, else init refuses (e.g. a re-export that renumbered z) and the volume needs --overwrite. The
+later planes (the old partial slab and the new slices) come from the current plan, moved into the
+volume's frame by an affine fitted between the old and current transforms of the last kept slices:
+a new global align solve may move every slice. Kept as well: the canvas (slices beyond it are cut
+off, with a warning; ``render.append_margin_px`` adds room when a volume is created) and the fixed
+window of ``render.intensity: false``. Elastic fields that also warp kept planes are not applied to
+the new ones. Every scale grows in z, the kept slabs' markers carry over, and render.json keeps its
+``created`` stamp, so pyramid redoes only shards whose source shards were rewritten.
 """
 
 import hashlib
@@ -76,6 +88,10 @@ DEFAULTS = {
             "tile_px": 512,         # CLAHE tile size in full-resolution px
         },
         "threads": 8,               # tiles rendered concurrently (does not change the output)
+        # Diagnostic volumes while an acquisition grows, never a final volume: when the inputs changed,
+        # init adds the new slices to the existing volume instead of refusing (see the module docstring).
+        "append": False,
+        "append_margin_px": 0,      # canvas margin when a volume is created: room for later slices' drift
     }
 }
 
@@ -118,6 +134,12 @@ def _settings(cfg):
         raise ValueError(f"render.rotate_deg must be 0 or 180, got {r['rotate_deg']!r}")
     if not r["rotate_deg"]:
         del r["rotate_deg"]   # unrotated: the same plan digest as volumes rendered before the setting existed
+    del r["append"]           # how init treats an existing volume, not what a plan renders
+    m = r["append_margin_px"]
+    if isinstance(m, bool) or not isinstance(m, int) or m < 0:
+        raise ValueError(f"render.append_margin_px must be an integer >= 0, got {m!r}")
+    if not m:
+        del r["append_margin_px"]   # as rotate_deg
     return r
 
 
@@ -200,8 +222,9 @@ def _fixed_window(cfg, plan):
     return lo, hi
 
 
-def _canvas(plan, bbox):
-    """(x0, y0, width, height) of the full-resolution canvas in aligned px."""
+def _canvas(plan, bbox, margin=0):
+    """(x0, y0, width, height) of the full-resolution canvas in aligned px; ``margin`` px added on
+    every side of the data (not of a given bbox)."""
     if bbox is None:
         boxes = np.array([transforms.bbox(transforms.from_row(r), r["width"], r["height"])
                           for r in plan.to_dict("records")])
@@ -214,6 +237,7 @@ def _canvas(plan, bbox):
         if np.any(size > 1.5 * typical):
             log.warning("canvas %s px (x, y) is over 1.5x the median slice extent %s: check "
                         "align/transforms.csv for outliers, or set render.bbox", size.round(), typical.round())
+        bbox = (bbox[0] - margin, bbox[1] - margin, bbox[2] + margin, bbox[3] + margin)
     x0, y0 = math.floor(bbox[0]), math.floor(bbox[1])
     return x0, y0, math.ceil(bbox[2]) - x0, math.ceil(bbox[3]) - y0
 
@@ -272,7 +296,7 @@ def init(cfg, overwrite=False):
     f = s["downsample"]
     plan = _tile_plan(cfg)
     zs = z_values(plan)
-    x0, y0, w, h = _canvas(plan, s["bbox"])
+    x0, y0, w, h = _canvas(plan, s["bbox"], s.get("append_margin_px", 0))
     vz, vy, vx = voxel_size_nm(cfg, plan["file"].unique())
     positions = _positions(cfg, zs)
     planes = plane_sources(zs, f, positions, vz * f)
@@ -307,6 +331,8 @@ def init(cfg, overwrite=False):
         if old.get("digest") == meta["digest"] and (root / "zarr.json").exists():
             log.info("%s matches the current inputs and settings: volume kept", meta_path)
             return 0
+        if cfg["render"]["append"] and (root / "zarr.json").exists():
+            return _append(cfg, s, plan, old, root, wdir)
         log.error("render inputs or settings changed since %s was written: re-run init with "
                   "--overwrite to re-create %s (deletes everything rendered so far)", meta_path, root)
         return 1
@@ -316,12 +342,151 @@ def init(cfg, overwrite=False):
     shutil.rmtree(root, ignore_errors=True)
     omezarr.create(root, meta["shape"], meta["voxel_nm"], num_scales=s["num_scales"], chunk=s["chunk"],
                    shard=meta["shard"], compression=s["compression"], name=cfg.get("name") or "volume")
+    # After the digest: when the arrays were made (pyramid markers older than this don't count), by the
+    # file system's clock like the markers; kept when init appends and rewrites the arrays' metadata.
+    meta["created"] = _created_stamp(root, s["num_scales"])
     atomic_write(wdir / "tiles.csv", lambda p: plan.to_csv(p, index=False))
     atomic_write(meta_path, lambda p: Path(p).write_text(json.dumps(meta, indent=1)))
     n_slabs = math.ceil(meta["shape"][0] / s["slab"])
     log.info("created %s: shape %s (z, y, x), voxel %s nm, origin %s, %d slices -> %d planes in %d slabs "
              "(run array size <= %d)", root, meta["shape"], meta["voxel_nm"], meta["origin_xy"], len(zs),
              len(planes), n_slabs, n_slabs)
+    return 0
+
+
+def _created_stamp(root, num_scales):
+    """The newest modification time of the volume's array metadata files (made together by init)."""
+    return max((Path(root) / f"s{k}" / "zarr.json").stat().st_mtime for k in range(num_scales))
+
+
+def _anchor(old_plan, plan, zs, extent):
+    """Affine taking the current plan's aligned frame onto the old plan's, fitted by least squares on
+    the tile corners of slices ``zs`` that both plans hold (same file and position). A translation
+    when the linear part would move no point of an ``extent`` px canvas by more than 0.5 px against
+    one, so translation-only tile transforms stay translations (whole px, no interpolation)."""
+    key = ["z", "tile", "file", "index"]
+    both = old_plan[old_plan["z"].isin(zs)].astype({"file": str}).merge(
+        plan.astype({"file": str}), on=key, suffixes=("_old", ""))
+    if both.empty:
+        raise ValueError("render.append: none of the last rendered slices is in the current plan")
+    src, dst = [], []
+    for r in both.to_dict("records"):
+        pts = transforms.corners(r["width"], r["height"])
+        src.append(transforms.apply(transforms.from_row(r), pts))
+        dst.append(transforms.apply(transforms.from_row({k: r[f"{k}_old"] for k in transforms.COLUMNS}), pts))
+    src, dst = np.concatenate(src), np.concatenate(dst)
+    C = np.linalg.lstsq(np.c_[src, np.ones(len(src))], dst, rcond=None)[0].T
+    if np.abs(C[:, :2] - np.eye(2)).max() * extent <= 0.5:
+        return transforms.translation(*np.median(dst - src, axis=0))
+    return C
+
+
+def _elastic_for(fields, kept_last, zs):
+    """``fields`` (align's elastic.json) with the weights of slices ``zs`` only, and without the fields
+    that also warp slices up to ``kept_last`` (already rendered: warping only the new ones would cut
+    the volume where they meet). Returns (fields or None, [(field, first z, last z) left out])."""
+    if not fields:
+        return None, []
+    span = {}
+    for z, entries in fields["weights"].items():
+        for i, _ in entries:
+            a, b = span.get(i, (int(z), int(z)))
+            span[i] = (min(a, int(z)), max(b, int(z)))
+    keep = {i for i, (a, _) in span.items() if a > kept_last}
+    weights = {}
+    for z, entries in fields["weights"].items():
+        if int(z) in zs and [e for e in entries if e[0] in keep]:
+            weights[z] = [e for e in entries if e[0] in keep]
+    dropped = sorted((i, *ab) for i, ab in span.items() if i not in keep and ab[1] > kept_last)
+    return ({"fields": fields["fields"], "weights": weights} if weights else None), dropped
+
+
+def _append(cfg, s, plan, old, root, wdir):
+    """render.append: add the current plan's new slices to the volume of ``old`` (its render.json),
+    keeping the planes up to its last full slab. Returns an exit code."""
+    if old.get("zcorrected") or get(cfg, "zcorrect.enabled", False):
+        log.error("render.append needs z-correction off: z-corrected planes interpolate between slices")
+        return 1
+    differ = sorted(k for k in (set(s) | set(old["settings"])) - {"append_margin_px"}
+                    if s.get(k) != old["settings"].get(k))
+    if differ:
+        log.error("render.append: render settings %s differ from those %s was made with: re-create it "
+                  "(init --overwrite)", differ, root.name)
+        return 1
+    slab, n_old = int(s["slab"]), int(old["shape"][0])
+    kept = n_old // slab * slab                       # planes kept: whole slabs only
+    planes = [[[int(z), float(w)] for z, w in p] for p in plane_sources(z_values(plan), s["downsample"])]
+    old_plan = pd.read_csv(wdir / "tiles.csv", dtype={"tile": str, "file": str})
+    kept_z = {z for p in old["planes"][:kept] for z, _ in p}
+    key = ["z", "tile", "file", "index"]
+
+    def rows(p):
+        return p.loc[p["z"].isin(kept_z), key].astype(str).sort_values(key).reset_index(drop=True)
+
+    if planes[:kept] != old["planes"][:kept] or not rows(old_plan).equals(rows(plan)):
+        log.error("render.append: the slices of the %d planes already rendered changed (e.g. a re-export "
+                  "renumbered z, or the selection or exclusions changed): re-create %s (init --overwrite)",
+                  kept, root.name)
+        return 1
+
+    (ox, oy), (w, h) = old["origin_xy"], old["canvas_size_xy"]
+    new = plan[~plan["z"].isin(kept_z)].copy()
+    ref = sorted(set(old_plan["z"]))[-16:]           # the last slices of the volume, kept or re-rendered
+    C = _anchor(old_plan, plan, ref, max(w, h))
+    if len(new):
+        mats = []
+        for r in new.to_dict("records"):
+            T = transforms.compose(C, transforms.from_row(r))
+            if s["integer_shifts"] and transforms.is_translation(T):
+                T = transforms.translation(*np.floor(T[:, 2] + 0.5))
+            mats.append(np.round(T, 10))   # the same plan (digest) when init runs again on the same inputs
+        new[transforms.COLUMNS] = np.array(mats).reshape(-1, 6)
+        if not cfg["render"]["intensity"]:            # the volume's one window, not one from today's stats
+            new["lo"], new["hi"] = old_plan["lo"].iloc[0], old_plan["hi"].iloc[0]
+        boxes = np.array([transforms.bbox(transforms.from_row(r), r["width"], r["height"])
+                          for r in new.to_dict("records")])
+        beyond = max(ox - boxes[:, 0].min(), oy - boxes[:, 1].min(), boxes[:, 2].max() - ox - w,
+                     boxes[:, 3].max() - oy - h, 0)
+        if beyond > 0:
+            log.warning("render.append: new slices reach up to %.0f px beyond the volume's canvas and are cut "
+                        "off there (render.append_margin_px gives room when a volume is created)", beyond)
+    fields, dropped = _elastic_for(elastic.load(cfg), max(kept_z, default=-1), set(new["z"]))
+    for i, a, b in dropped:
+        log.warning("render.append: elastic field %d (slices %d-%d) also warps planes already rendered: not "
+                    "applied to the new ones (a full render applies it)", i, a, b)
+    merged = pd.concat([old_plan[old_plan["z"].isin(kept_z)], new], ignore_index=True)[list(plan.columns)]
+    merged = merged.sort_values(["z", "tile"], kind="stable").reset_index(drop=True)
+
+    meta = {k: v for k, v in old.items() if k not in ("digest", "created", "patchgrid")}
+    meta.update(shape=[len(planes), *old["shape"][1:]], settings=s, destreak=_destreak_settings(cfg),
+                shading=shading.digest(cfg), elastic=fields, planes=planes)
+    pg = patchgrid.digest(cfg)
+    if pg is not None:
+        patchgrid.load(cfg)
+        meta["patchgrid"] = pg
+    digest = hashlib.sha256(json.dumps(meta, sort_keys=True).encode())
+    digest.update(merged.to_csv(index=False).encode())
+    meta["digest"] = digest.hexdigest()
+    if meta["digest"] == old["digest"]:
+        log.info("render.append: nothing new for %s: volume kept", root.name)
+        return 0
+
+    # Before growing the arrays: a volume made before the stamp existed is dated by their metadata files.
+    meta["created"] = old.get("created") or _created_stamp(root, s["num_scales"])
+    omezarr.grow(root, meta["shape"], s["num_scales"])
+    done = wdir / "done"
+    for m in sorted(done.glob("slab_*")):              # kept slabs stay done, the rest are redone
+        k = int(m.name.removeprefix("slab_"))
+        if k >= kept // slab:
+            m.unlink()
+        elif _done(m, old["digest"]) or _done(m, meta["digest"]):
+            atomic_write(m, lambda p: Path(p).write_text(meta["digest"] + "\n"))
+    atomic_write(wdir / "tiles.csv", lambda p: merged.to_csv(p, index=False))
+    atomic_write(wdir / "render.json", lambda p: Path(p).write_text(json.dumps(meta, indent=1)))
+    shift = transforms.apply(C, [[ox + w / 2, oy + h / 2]])[0] - [ox + w / 2, oy + h / 2]
+    log.info("render.append: %s planes 0-%d kept, planes %d-%d from the current plan (%d slices new; moved "
+             "into the volume's frame by (%.1f, %.1f) px at the canvas centre): shape %s", root.name, kept - 1,
+             kept, len(planes) - 1, len(set(new["z"]) - set(old_plan["z"])), *shift, meta["shape"])
     return 0
 
 

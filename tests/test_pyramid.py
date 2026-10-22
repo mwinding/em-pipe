@@ -1,5 +1,6 @@
 """Tests for pipeline.pyramid: scales against a float/NaN reference, task split, markers, resume."""
 
+import json
 import os
 
 import numpy as np
@@ -179,3 +180,23 @@ def test_task_checks_only_the_shards_it_reads(volume):
     run(cfg, 1)
     assert pyramid.main(task + ["3"]) == 0
     np.testing.assert_array_equal(read(root, 2), reference(reference(data)))
+
+
+def test_volume_grown_in_z_redoes_only_shards_with_new_sources(volume):
+    """render init with render.append grows every scale in z, which rewrites the arrays' metadata, and
+    keeps render.json's ``created``: s1 shards pooled only from unchanged s0 shards stay done."""
+    cfg, root, data = volume((20, 40, 36))
+    wdir = root.parent / "work" / "render" / "test"
+    wdir.mkdir(parents=True, exist_ok=True)
+    (wdir / "render.json").write_text(json.dumps({"created": (root / "s1" / "zarr.json").stat().st_mtime}))
+    run(cfg, 1)
+    before = marker_times(root)
+    # Append: planes 16-19 (the partial slab) re-rendered, 20-31 new. s1 z-shard 0 (s0 z 0-15) is unchanged.
+    grown = np.concatenate([data, structured((12, 40, 36), seed=9)])
+    grown[16:20] = 255 - grown[16:20]
+    omezarr.grow(root, grown.shape, 4)
+    omezarr.open_scale(root, 0)[16:].write(grown[16:]).result()
+    run(cfg, 1)
+    np.testing.assert_array_equal(read(root, 1), reference(grown))
+    after = marker_times(root)
+    assert [k for k in sorted(after) if after[k] == before.get(k)] == [f"s1_00000{i}" for i in range(4)]
