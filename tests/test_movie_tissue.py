@@ -453,8 +453,8 @@ def test_portrait_frames(tmp_path):
     assert len(fly) and fly["zoom"].iloc[0] < full["zoom"].iloc[0]
 
 
-SEGMENTS = {"ids": [1, 2], "start_s": 0.2, "pause_s": 0.2, "rise_s": 0.3, "hold_s": 0.2, "fall_s": 0.3,
-            "depth": 20, "yaw_deg": 20, "tilt_deg": 10, "pull": 1.5}
+SEGMENTS = {"ids": [1, 2], "start_s": 0.2, "slices_per_s": 6, "speed_s": 0.2, "reveal_s": 0.4, "rise_s": 0.3,
+            "fall_s": 0.3, "yaw_deg": 20, "tilt_deg": 10, "pull": 1.5}
 
 
 def _segments_cfg(tmp_path, **seg):
@@ -467,26 +467,57 @@ def _segments_cfg(tmp_path, **seg):
     return cfg
 
 
-def test_segments_reveal_pauses_the_scroll(tmp_path):
-    """The reveal comes in the hold after the zoom: the scroll eases to a stop pause_s before it and
-    stays stopped until it ends, then carries on at its speed; the reveal rises to 1 and back to 0."""
+def test_segments_reveal_speeds_up_the_scroll(tmp_path):
+    """The reveal comes in the hold after the zoom: the scroll speeds up to slices_per_s and back, the
+    meshes show from the plane where it started to the cut (nothing before it), and the camera turns."""
     cfg = _segments_cfg(tmp_path)
     plain = movie.timeline({**mt.fly_settings(cfg), "hold_start_s": 0.0}, (48, 64, 96))
     fly = mt.fly_plan(cfg, (48, 64, 96))
     t, z, z0 = fly["t"].to_numpy(), fly["z"].to_numpy(), plain["z"].to_numpy()
-    r0, r3 = 1.0 + 0.2, 1.0 + 0.2 + 0.8                                       # (zoom_s 1)
-    np.testing.assert_allclose(z[t <= r0 - 0.2], z0[t <= r0 - 0.2])            # as before until the pause
-    held = (t >= r0) & (t <= r3)
-    assert np.ptp(z[held]) == pytest.approx(0, abs=1e-6)                      # stopped through the reveal
-    after = t >= r3 + 0.2
-    assert np.ptp((z0 - z)[after]) == pytest.approx(0, abs=1e-6) and (z0 - z)[after][0] > 0   # then on again
+    r0 = 1.0 + 0.2                                                            # (zoom_s 1)
+    np.testing.assert_allclose(z[t <= r0], z0[t <= r0])                       # as before until the reveal
+    v = np.gradient(z, t)
+    fast = (t >= r0 + 0.2 + 0.05) & (t <= r0 + 0.6 - 0.05)
+    assert v[fast] == pytest.approx(6, rel=0.05)                              # sped up ...
+    assert v[t >= r0 + 0.8 + 0.05][:3] == pytest.approx(2, rel=0.05)          # ... and back to the scroll's speed
+    start = fly["mesh_from"].to_numpy()
+    assert np.isnan(start[t < r0]).all() and np.nanmax(start) == pytest.approx(np.nanmin(start))
+    assert start[t >= r0][0] == pytest.approx(np.interp(r0, t, z) + 0.5)      # the cut when the reveal started
+    assert ms.shown(z[t < r0][-1], start[t < r0][-1]) is None                 # nothing before it
+    lo, hi = ms.shown(z[-1], start[-1])
+    assert hi - lo == pytest.approx(z[-1] - np.interp(r0, t, z))              # all it has scrolled through since
     reveal = fly["reveal"].to_numpy()
-    assert reveal.max() == pytest.approx(1) and reveal[t < r0].max() == 0 and reveal[t > r3].max() == 0
-    _, plan = mt.plan_of(cfg)
-    assert plan.loc[plan["part"] == "fly", "reveal"].max() == pytest.approx(1)
-    cfg["movie"]["hold_end_s"] = 1.0
-    with pytest.raises(ValueError, match="hold_end_s >= 1.2"):
+    assert reveal[t < r0].max() == 0 and reveal[(t >= r0 + 0.3) & (t <= 2.6)].min() == pytest.approx(1)
+    cfg["movie"]["hold_end_s"] = 0.9
+    with pytest.raises(ValueError, match="hold_end_s >= 1"):
         mt.fly_plan(cfg, (48, 64, 96))
+
+
+def test_segments_swallowed_before_the_outro(tmp_path):
+    """With a zoom-out, the scroll-back swallows the meshes and the camera is face-on again before the
+    outro takes over; a fall that would not end in time is an error."""
+    cfg = _segments_cfg(tmp_path)
+    cfg["tissue_movie"].update(zoom_out_s=2.0, back_rate=2000)
+    _, plan = mt.plan_of(cfg)
+    fly = plan[plan["part"] == "fly"]
+    assert fly["reveal"].iloc[-1] == 0 and ms.shown(fly["z"].iloc[-1], fly["mesh_from"].iloc[-1]) is None
+    shows = ms.layer_rows(plan)
+    assert shows.any() and not shows[plan["part"].to_numpy() != "fly"].any()
+    cfg["tissue_movie"]["segments"] = {**cfg["tissue_movie"]["segments"], "fall_s": 3.0}
+    mt._WORKER.clear()
+    with pytest.raises(ValueError, match="face-on again"):
+        mt.plan_of(cfg)
+
+
+def test_camera_falls_back_to_the_middle_of_the_meshes():
+    """Turned, the camera looks at the middle of the meshes shown, not at the cut, and pulls back."""
+    s = {**SEGMENTS}
+    focal = 100.0
+    face = ms.fly_camera(s, 1.0, 0, 0, 99.5, 0.0, 60.0, focal, -1)
+    turned = ms.fly_camera(s, 1.0, 0, 0, 99.5, 1.0, 60.0, focal, -1)
+    assert face[0] == pytest.approx([0, 0, 100 - focal])                       # face-on at the cut
+    look = turned[0] + focal * 1.5 * turned[1]                                # (pull 1.5)
+    assert look == pytest.approx([0, 0, 80])                                  # halfway from 60 to the cut, 100
 
 
 def test_blender_camera_projects_as_the_movie_camera():

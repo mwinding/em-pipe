@@ -904,6 +904,11 @@ def timeline(m, scene, fly=None):
                          "resin": resin, "cut": cut, "back": back, "light": light})
     if m["fly_through"]:
         plan = pd.concat([plan, _fly_rows(m, scene, fly, n, t4, focal, up)], ignore_index=True)
+        if m["zoom_out_s"] and "reveal" in plan:          # the outro follows: the meshes gone, face-on
+            last = plan[plan["part"] == "fly"].iloc[-1]
+            if last.reveal > 1e-6 or movie_segments.shown(last.z, last.mesh_from):
+                raise ValueError("tissue_movie.segments: the camera must be face-on again (fall_s) and the meshes "
+                                 "swallowed by the scroll-back before the zoom-out's outro (zoom_out_cut) takes over")
     return plan
 
 
@@ -920,7 +925,7 @@ def _fly_rows(m, scene, fly, n0, t0, focal, up):
     the camera then turns once round the volume (spin_s, starting spin_overlap_s before that), easing to
     rest, and the frame fades to black over end_fade_s."""
     tf = fly["t"].to_numpy()
-    cols = ["zoom", "cx", "cy", "z", "rotation"] + (["reveal"] if "reveal" in fly else [])
+    cols = ["zoom", "cx", "cy", "z", "rotation"] + [c for c in ("reveal", "mesh_from") if c in fly]
     rows = fly[cols].assign(frame=fly["frame"] + n0, t=tf + t0, part="fly")
     rows["blend"] = _ease(tf, 0, m["handover_s"])
     if not m["zoom_out_s"]:
@@ -1016,6 +1021,9 @@ def fly_plan(cfg, shape0):
     plan = movie.timeline(mv, shape0)
     if movie_segments.enabled(cfg["tissue_movie"]):
         plan = movie_segments.add_reveal(plan, mv, cfg["tissue_movie"]["segments"])
+        if plan["z"].max() > shape0[0] - 1 + 1e-6:
+            raise ValueError(f"tissue_movie.segments: the reveal's scroll reaches z {plan['z'].max():.0f}, past the "
+                             f"volume's last slice ({shape0[0] - 1}): a smaller target z, or a shorter or slower reveal")
     return plan
 
 
@@ -1135,13 +1143,14 @@ def render_frame(cfg, row):
     state = _state(cfg, levels=row.part == "fly")
     reveal = getattr(row, "reveal", 0.0)
     reveal = float(reveal) if reveal is not None and np.isfinite(reveal) else 0.0
+    mesh_from = getattr(row, "mesh_from", None)
     if row.part == "fly":
-        frame = fly_picture(cfg, state, row.zoom, row.cx, row.cy, row.z, row.rotation, row.blend, reveal)
+        frame = fly_picture(cfg, state, row.zoom, row.cx, row.cy, row.z, row.rotation, row.blend, reveal, mesh_from)
     else:
         frame = render_row(state["scene"], m, row)
     if movie_segments.enabled(m):                     # colour frames throughout (BGR)
         frame = np.repeat(frame[..., None], 3, -1)
-        if reveal > 0:
+        if row.part == "fly" and movie_segments.shown(row.z, mesh_from):
             path = frames_dir(cfg) / "meshes" / f"m{row.frame:05d}.png"
             layer = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
             if layer is None:
@@ -1155,23 +1164,23 @@ def render_frame(cfg, row):
     return frame
 
 
-def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0, reveal=0.0):
+def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0, reveal=0.0, mesh_from=None):
     """A fly-through frame (float, unrotated), tissue only and in 3D: the camera face-on to slice ``z``
     at the distance that shows it at ``zoom`` s0 voxels per frame px around (cx, cy), the volume in front
     cut away there; on the cut, the slice from the level the zoom needs (pipeline.movie.render_frame),
     its tissue only (``refine_edge`` of ``tissue_in_frame``), ``fine_weight`` of it over the scene's own
     picture of the cut (the hand-over from the scene's level); through the resin, the tissue behind it,
-    from the scene. With a segments ``reveal`` (0-1), the camera turned, raised and pulled back about the
-    point it looks at (pipeline.movie_segments.fly_camera), the slice on the cut seen in perspective."""
+    from the scene. With a segments ``reveal`` (0-1), the camera turned, raised and pulled back, looking at a
+    point between the cut and ``mesh_from`` (pipeline.movie_segments.fly_camera), the cut seen in perspective."""
     m = cfg["tissue_movie"]
     size = m["size"]
     focal = focal_px(m)
     up = -1 if m["view_rotation_deg"] == 0 else 1
-    cam = movie_segments.fly_camera(m["segments"], zoom, cx, cy, z, reveal, focal, up)
+    cam = movie_segments.fly_camera(m["segments"], zoom, cx, cy, z, reveal, mesh_from, focal, up)
     picture = render_volume(state["scene"], cam, size, focal, 0.0, z + 0.5, m["blend_axes"])
     if fine_weight > 0:
         if reveal > 0:
-            fine, tissue = _cut_in_view(cfg, state, cam, zoom, z, fine_weight)
+            fine, tissue = _cut_in_view(cfg, state, cam, z, fine_weight)
             return fine + (1 - tissue) * picture
         levels = _state(cfg, levels=True)["levels"]
         fine = movie.render_frame(levels, size, zoom, cx, cy, z, rotation)[0].astype(np.float32)
@@ -1185,10 +1194,10 @@ def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0, reve
     return picture
 
 
-def _cut_in_view(cfg, state, cam, zoom, z, fine_weight):
+def _cut_in_view(cfg, state, cam, z, fine_weight):
     """(the slice's tissue x grey, the tissue's weight) on the cut z + 0.5 seen by ``cam`` in perspective:
-    the slice (and its tissue, as in fly_picture) face-on at ``zoom`` over the part of the cut the frame
-    shows, warped onto the frame."""
+    the slice (and its tissue, as in fly_picture) face-on over the part of the cut the frame shows, at the
+    scale the frame shows the cut's middle at, warped onto the frame."""
     m = cfg["tissue_movie"]
     size, focal = m["size"], focal_px(m)
     w, h = size
@@ -1199,6 +1208,8 @@ def _cut_in_view(cfg, state, cam, zoom, z, fine_weight):
         raise ValueError("tissue_movie.segments: the turned camera sees past the cut's horizon (less yaw or tilt)")
     hit = np.array([pos + (zc - pos[2]) / r[2] * r for r in rays])
     (x0, y0), (x1, y1) = hit[:, :2].min(0), hit[:, :2].max(0)
+    middle = pos + (zc - pos[2]) / forward[2] * forward              # where the view's axis meets the cut
+    zoom = float((middle - pos) @ forward) / focal                   # s0 voxels per frame px there
     sw, sh = (2 * math.ceil((b - a) / zoom / 2) + 4 for a, b in ((x0, x1), (y0, y1)))
     bx, by = (x0 + x1) / 2, (y0 + y1) / 2
     levels = _state(cfg, levels=True)["levels"]
@@ -1270,7 +1281,8 @@ def make_frames(cfg, only=None, overwrite=False, workers=None):
         # the frames before the reveal.
         settings["segments"] = True
         look = json.dumps({k: v for k, v in m["segments"].items() if k != "blender"}, sort_keys=True)
-        plan = plan.assign(meshes=np.where(plan["reveal"].fillna(0) > 0, hashlib.sha1(look.encode()).hexdigest()[:12], ""))
+        mine = (plan["reveal"].fillna(0) > 0).to_numpy() | movie_segments.layer_rows(plan)
+        plan = plan.assign(meshes=np.where(mine, hashlib.sha1(look.encode()).hexdigest()[:12], ""))
     plan_text = f"# {json.dumps(settings, sort_keys=True)}\n" + plan.to_csv(index=False, float_format="%.6f")
     if overwrite or not plan_csv.exists() or plan_csv.read_text() != plan_text:
         old_text = "" if overwrite or not plan_csv.exists() else plan_csv.read_text()

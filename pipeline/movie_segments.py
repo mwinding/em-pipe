@@ -1,10 +1,12 @@
-"""Segment meshes rising out of the cut in the tissue movie's fly-through (``tissue_movie.segments``).
+"""Segment meshes revealed by the scroll in the tissue movie's fly-through (``tissue_movie.segments``).
 
-At full zoom (in the fly-through's hold, ``movie.hold_end_s``) the scroll eases to a stop; the meshes of
-the chosen segments then rise out of the cut towards the camera, as deep as ``depth`` s0 voxels, while the
-camera turns (``yaw_deg``, ``tilt_deg``) and pulls back (``pull``) about the point on the cut it looks at;
-they hold, sink back into the cut as the camera comes face-on again, and the scroll carries on. What the
-meshes show is the segments' part in front of the cut: the tissue that the scroll has milled away.
+At full zoom (in the fly-through's hold, ``movie.hold_end_s``) the scroll speeds up (``slices_per_s``) and
+every slice it passes leaves the chosen segments' part of it behind as their meshes: from the plane where
+the reveal started to the cut, the tissue the scroll has milled away. Meanwhile the camera turns
+(``yaw_deg``, ``tilt_deg``) and pulls back (``pull``) and the point it looks at falls back to halfway
+between that plane and the cut (it moves at half the scroll's speed): the section recedes and the
+segments stand in front of it. The scroll slows back down and the segments hold; with the zoom-out the
+scroll reverses and the returning section swallows them, as the camera comes face-on again (``fall_s``).
 
 The meshes come from a Neuroglancer precomputed segmentation (``source``, e.g. precomputed://https://...;
 read with CloudVolume, no credentials) in the volume's own frame (nm, as the volume's voxel size makes s0
@@ -35,15 +37,15 @@ DEFAULTS = {
     "source": None,       # precomputed segmentation with meshes, in the volume's frame: precomputed://https://...
     "ids": [],            # segment IDs shown (none: no reveal)
     "colors": None,       # [r, g, b] (0-1) per segment; null: PALETTE
-    "start_s": 1.0,       # the reveal starts this long after the fly-through's zoom ends (in movie.hold_end_s)
-    "pause_s": 1.0,       # the scroll eases to a stop over this long before it, and back up after it
-    "rise_s": 2.5,        # the meshes rise out of the cut as the camera turns and pulls back ...
-    "hold_s": 2.0,        # ... stay ...
-    "fall_s": 2.0,        # ... and sink back as the camera comes face-on again
-    "depth": 1500,        # how far in front of the cut the meshes reach (s0 voxels; 12 um at 8 nm)
+    "start_s": 0.5,       # the reveal starts this long after the fly-through's zoom ends (in movie.hold_end_s)
+    "slices_per_s": 500,  # the scroll's speed while it reveals ...
+    "speed_s": 1.0,       # ... reached over this long (and back to the fly-through's over this long) ...
+    "reveal_s": 5.0,      # ... and kept this long; the rest of movie.hold_end_s at the fly-through's speed
+    "rise_s": 2.0,        # the camera turns and pulls back over this long from the reveal's start ...
+    "fall_s": 2.5,        # ... and comes face-on again over this long from the zoom-out's start
     "yaw_deg": 25,        # the camera's turn about the y axis ...
     "tilt_deg": 12,       # ... its rise towards up on screen ...
-    "pull": 1.8,          # ... and its distance (x the face-on distance), at the height of the reveal
+    "pull": 1.8,          # ... and its distance (x the face-on distance), turned
     # The look (Blender, Cycles)
     "roughness": 0.45,    # the meshes' surface (Principled BSDF)
     "subsurface": 0.0,    # subsurface scattering weight (1: waxy, light passes into the mesh) ...
@@ -67,48 +69,53 @@ def enabled(m):
     return bool(m["segments"]["ids"])
 
 
-def envelope(t, s, t_end_zoom):
-    """The reveal (0-1) at times ``t``: up over rise_s from start_s after the zoom's end, held over hold_s,
-    down over fall_s."""
-    r0 = t_end_zoom + s["start_s"]
-    r1 = r0 + s["rise_s"]
-    r2 = r1 + s["hold_s"]
-    return ease(t, r0, r1) * (1 - ease(t, r2, r2 + s["fall_s"]))
-
-
 def add_reveal(fly, mv, s):
-    """The fly-through's timeline (pipeline.movie.timeline, no hold at the start) with the reveal: column
-    ``reveal`` (0-1) and the scroll paused around it (z held from pause_s before it to pause_s after)."""
+    """The fly-through's timeline (pipeline.movie.timeline, no hold at the start; zoom-out at its end) with
+    the reveal: the scroll sped up to slices_per_s (z), the camera's turn ``reveal`` (0-1: up over rise_s
+    from the reveal's start, down over fall_s from the zoom-out's start) and ``mesh_from``, the plane where
+    the reveal started (the cut then; NaN before it): the meshes show between it and the cut."""
     t = fly["t"].to_numpy()
-    t1 = mv["zoom_s"]
+    t1, t4 = mv["zoom_s"], mv["zoom_s"] + mv["hold_end_s"]
     r0 = t1 + s["start_s"]
-    r3 = r0 + s["rise_s"] + s["hold_s"] + s["fall_s"]
-    if min(s["start_s"], s["pause_s"], s["hold_s"]) < 0 or min(s["rise_s"], s["fall_s"]) <= 0:
-        raise ValueError("tissue_movie.segments: the times must be >= 0, rise_s and fall_s > 0")
-    if r3 + s["pause_s"] > t1 + mv["hold_end_s"] + 1e-9:
-        raise ValueError(f"tissue_movie.segments: the reveal and the scroll's pause need movie.hold_end_s >= "
-                         f"{s['start_s'] + s['rise_s'] + s['hold_s'] + s['fall_s'] + s['pause_s']:g}")
+    r1 = r0 + s["speed_s"] + s["reveal_s"]
+    if min(s["start_s"], s["speed_s"], s["reveal_s"]) < 0 or min(s["rise_s"], s["fall_s"], s["slices_per_s"]) <= 0:
+        raise ValueError("tissue_movie.segments: the times must be >= 0, rise_s, fall_s and slices_per_s > 0")
+    if max(r1 + s["speed_s"], r0 + s["rise_s"]) > t4 + 1e-9:
+        raise ValueError(f"tissue_movie.segments: the reveal needs movie.hold_end_s >= "
+                         f"{s['start_s'] + max(2 * s['speed_s'] + s['reveal_s'], s['rise_s']):g}")
     z = fly["z"].to_numpy()
     v = np.gradient(z, t) if len(t) > 1 else np.zeros_like(z)
-    stop = ease(t, r0 - s["pause_s"], r0) * (1 - ease(t, r3, r3 + s["pause_s"]))   # 1: stopped
-    lost = np.concatenate([[0], np.cumsum((stop[1:] * v[1:] + stop[:-1] * v[:-1]) / 2 * np.diff(t))])
+    fast = ease(t, r0, r0 + s["speed_s"]) * (1 - ease(t, r1, r1 + s["speed_s"]))
+    extra = (np.sign(mv["direction"]) * s["slices_per_s"] - v) * fast
     out = fly.copy()
-    out["z"] = z - lost
-    out["reveal"] = envelope(t, s, t1)
+    out["z"] = z + np.concatenate([[0], np.cumsum((extra[1:] + extra[:-1]) / 2 * np.diff(t))])
+    out["reveal"] = ease(t, r0, r0 + s["rise_s"]) * (1 - ease(t, t4, t4 + s["fall_s"]))
+    out["mesh_from"] = np.where(t >= r0, float(np.interp(r0, t, out["z"])) + 0.5, np.nan)
     return out
 
 
+def shown(z, mesh_from):
+    """The meshes' z range (lo, hi: the reveal's start plane, the cut z + 0.5) at a frame, or None."""
+    if mesh_from is None or not np.isfinite(mesh_from) or z + 0.5 <= mesh_from:
+        return None
+    return float(mesh_from), float(z + 0.5)
+
+
 def view(s, reveal):
-    """(yaw, tilt in radians, distance factor, mesh depth in s0 voxels) at ``reveal`` (0-1)."""
-    r = float(reveal) if np.isfinite(reveal) else 0.0
-    return (math.radians(s["yaw_deg"]) * r, math.radians(s["tilt_deg"]) * r, 1 + (s["pull"] - 1) * r, s["depth"] * r)
+    """(yaw, tilt in radians, distance factor) at ``reveal`` (0-1)."""
+    r = float(reveal) if reveal is not None and np.isfinite(reveal) else 0.0
+    return math.radians(s["yaw_deg"]) * r, math.radians(s["tilt_deg"]) * r, 1 + (s["pull"] - 1) * r
 
 
-def fly_camera(s, zoom, cx, cy, z, reveal, focal, up):
+def fly_camera(s, zoom, cx, cy, z, reveal, mesh_from, focal, up):
     """The fly-through's camera at a frame: face-on to the cut z + 0.5 at the distance that shows it at
-    ``zoom``, turned, raised and pulled back about the point it looks at by the reveal."""
-    yaw, tilt, pull, _ = view(s, reveal)
-    return camera((cx, cy, z + 0.5), yaw, tilt, focal * zoom * pull, up)
+    ``zoom``; by the ``reveal``, turned, raised and pulled back about the point it looks at, which falls back
+    from the cut to halfway between it and the plane ``mesh_from`` (the middle of the meshes shown)."""
+    yaw, tilt, pull = view(s, reveal)
+    span = shown(z, mesh_from)
+    r = float(reveal) if reveal is not None and np.isfinite(reveal) else 0.0
+    look = z + 0.5 - (r * (span[1] - span[0]) / 2 if span else 0.0)
+    return camera((cx, cy, look), yaw, tilt, focal * zoom * pull, up)
 
 
 def blender_camera(cam, size, focal, origin):
@@ -187,12 +194,20 @@ def colors(s):
     return [list(map(float, v)) for v in c]
 
 
+def layer_rows(plan):
+    """The timeline rows (a boolean mask) whose frames show meshes: fly-through rows whose cut is past the
+    reveal's start plane."""
+    if "mesh_from" not in plan.columns:
+        return np.zeros(len(plan), bool)
+    return ((plan["part"] == "fly") & plan["mesh_from"].notna() & (plan["z"] + 0.5 > plan["mesh_from"])).to_numpy()
+
+
 def render_layers(cfg, plan, frames_dir, volume, work, size, focal, up, overwrite=False):
-    """Render the mesh layers (RGBA PNG, ``frames_dir``/meshes/m<frame>.png) of the frames whose reveal
-    is above 0, with Blender; layers from an earlier run with the same settings are kept."""
+    """Render the mesh layers (RGBA PNG, ``frames_dir``/meshes/m<frame>.png) of the frames that show meshes
+    (``layer_rows``), with Blender; layers from an earlier run with the same settings are kept."""
     s = cfg["tissue_movie"]["segments"]
     paths = fetch(s, volume, work)
-    rows = plan[(plan["part"] == "fly") & (plan["reveal"].fillna(0) > 0)] if "reveal" in plan.columns else plan[:0]
+    rows = plan[layer_rows(plan)]
     out = Path(frames_dir) / "meshes"
     out.mkdir(parents=True, exist_ok=True)
     origin = [float(v) for v in cfg["movie"]["target"]]
@@ -208,11 +223,10 @@ def render_layers(cfg, plan, frames_dir, volume, work, size, focal, up, overwrit
         path = out / f"m{row.frame:05d}.png"
         if path.exists():
             continue
-        cam = fly_camera(s, row.zoom, row.cx, row.cy, row.z, row.reveal, focal, up)
-        _, _, _, depth = view(s, row.reveal)
-        zc = row.z + 0.5 - origin[2]
+        cam = fly_camera(s, row.zoom, row.cx, row.cy, row.z, row.reveal, row.mesh_from, focal, up)
+        lo, hi = shown(row.z, row.mesh_from)
         frames.append({"path": str(path), "camera": blender_camera(cam, size, focal, origin),
-                       "clip": [zc - depth, zc]})
+                       "clip": [lo - origin[2], hi - origin[2]]})
     if not frames:
         log.info("mesh layers: all %d done", len(rows))
         return out
