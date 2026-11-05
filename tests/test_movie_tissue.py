@@ -454,7 +454,7 @@ def test_portrait_frames(tmp_path):
 
 
 SEGMENTS = {"ids": [1, 2], "start_s": 0.2, "slices_per_s": 6, "speed_s": 0.2, "reveal_s": 0.4, "rise_s": 0.3,
-            "fall_s": 0.3, "yaw_deg": 20, "tilt_deg": 10, "pull": 1.5}
+            "fall_s": 0.3, "fade_s": 0.3, "yaw_deg": 20, "tilt_deg": 10, "pull": 1.5}
 
 
 def _segments_cfg(tmp_path, **seg):
@@ -488,15 +488,17 @@ def test_segments_reveal_speeds_up_the_scroll(tmp_path):
     assert hi - lo == pytest.approx(z[-1] - np.interp(r0, t, z))              # all it has scrolled through since
     reveal = fly["reveal"].to_numpy()
     assert reveal[t < r0].max() == 0 and reveal[(t >= r0 + 0.3) & (t <= 2.6)].min() == pytest.approx(1)
+    alpha = fly["mesh_alpha"].to_numpy()                                      # fading out by the zoom-out (2.6 s)
+    assert alpha[t <= 2.3].min() == 1 and alpha[-1] < 0.5 and (np.diff(alpha) <= 1e-12).all()
     cfg["movie"]["hold_end_s"] = 0.9
     with pytest.raises(ValueError, match="hold_end_s >= 1"):
         mt.fly_plan(cfg, (48, 64, 96))
 
 
 def test_segments_swallowed_before_the_outro(tmp_path):
-    """With a zoom-out, the scroll-back swallows the meshes and the camera is face-on again before the
-    outro takes over; a fall that would not end in time is an error."""
-    cfg = _segments_cfg(tmp_path)
+    """With a zoom-out (and no fade), the scroll-back swallows the meshes and the camera is face-on again
+    before the outro takes over; a fall that would not end in time is an error."""
+    cfg = _segments_cfg(tmp_path, fade_s=0)
     cfg["tissue_movie"].update(zoom_out_s=2.0, back_rate=2000)
     _, plan = mt.plan_of(cfg)
     fly = plan[plan["part"] == "fly"]
@@ -607,3 +609,24 @@ def test_frames_without_meshes(tmp_path):
     mt.make_frames(cfg, only=pick, no_meshes=True)                            # (no layers: would fail without)
     out = mt.frames_dir(cfg)
     assert (out / f"f{pick[0]:05d}.png").exists() and not (out / f"f{pick[1]:05d}.png").exists()
+
+
+def test_meshes_fade_before_the_zoom_out(tmp_path):
+    """Faded, the meshes need no layers from the zoom-out on, and the frame shows the layer at its opacity."""
+    cfg = _segments_cfg(tmp_path)
+    cfg["tissue_movie"].update(zoom_out_s=2.0, back_rate=0)                  # (nothing swallows them)
+    _, plan = mt.plan_of(cfg)
+    fly = plan[plan["part"] == "fly"]
+    shows = ms.layer_rows(plan)
+    assert shows.any() and (fly.loc[shows[plan["part"] == "fly"], "mesh_alpha"] > 0).all()
+    assert (plan.loc[plan["part"] == "fly", "mesh_alpha"].iloc[-1:] == 0).all()   # gone by the end
+    k = int(plan.loc[(plan["mesh_alpha"] > 0.1) & (plan["mesh_alpha"] < 0.9), "frame"].iloc[0])
+    out = mt.frames_dir(cfg)
+    (out / "meshes").mkdir(parents=True, exist_ok=True)
+    layer = np.zeros((48, 64, 4), np.uint8)
+    layer[10:20, 10:20] = (0, 0, 255, 255)
+    cv2.imwrite(str(out / "meshes" / f"m{k:05d}.png"), layer)
+    row = plan.iloc[k]
+    frame = mt.render_frame(cfg, SimpleNamespace(**row.to_dict())).astype(float)
+    a = row.mesh_alpha
+    assert 0 < frame[15, 15, 0] and frame[15, 15, 2] == pytest.approx(255 * a + frame[15, 15, 0], abs=2)

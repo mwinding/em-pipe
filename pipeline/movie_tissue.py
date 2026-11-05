@@ -906,9 +906,10 @@ def timeline(m, scene, fly=None):
         plan = pd.concat([plan, _fly_rows(m, scene, fly, n, t4, focal, up)], ignore_index=True)
         if m["zoom_out_s"] and "reveal" in plan:          # the outro follows: the meshes gone, face-on
             last = plan[plan["part"] == "fly"].iloc[-1]
-            if last.reveal > 1e-6 or movie_segments.shown(last.z, last.mesh_from):
+            if last.reveal > 1e-6 or (movie_segments.shown(last.z, last.mesh_from) and last.mesh_alpha > 0):
                 raise ValueError("tissue_movie.segments: the camera must be face-on again (fall_s) and the meshes "
-                                 "swallowed by the scroll-back before the zoom-out's outro (zoom_out_cut) takes over")
+                                 "faded (fade_s) or swallowed by the scroll-back before the zoom-out's outro "
+                                 "(zoom_out_cut) takes over")
     return plan
 
 
@@ -925,7 +926,7 @@ def _fly_rows(m, scene, fly, n0, t0, focal, up):
     the camera then turns once round the volume (spin_s, starting spin_overlap_s before that), easing to
     rest, and the frame fades to black over end_fade_s."""
     tf = fly["t"].to_numpy()
-    cols = ["zoom", "cx", "cy", "z", "rotation"] + [c for c in ("reveal", "mesh_from") if c in fly]
+    cols = ["zoom", "cx", "cy", "z", "rotation"] + [c for c in ("reveal", "mesh_from", "mesh_alpha") if c in fly]
     rows = fly[cols].assign(frame=fly["frame"] + n0, t=tf + t0, part="fly")
     rows["blend"] = _ease(tf, 0, m["handover_s"])
     if not m["zoom_out_s"]:
@@ -1150,12 +1151,13 @@ def render_frame(cfg, row):
         frame = render_row(state["scene"], m, row)
     if movie_segments.enabled(m):                     # colour frames throughout (BGR)
         frame = np.repeat(frame[..., None], 3, -1)
-        if row.part == "fly" and movie_segments.shown(row.z, mesh_from):
+        alpha = float(getattr(row, "mesh_alpha", 1.0))
+        if row.part == "fly" and movie_segments.shown(row.z, mesh_from) and alpha > 0:
             path = frames_dir(cfg) / "meshes" / f"m{row.frame:05d}.png"
             layer = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
             if layer is None:
                 raise FileNotFoundError(f"{path}: no mesh layer (run 'meshes' first)")
-            a = layer[..., 3:].astype(np.float32) / 255
+            a = layer[..., 3:].astype(np.float32) * (alpha / 255)
             frame = layer[..., :3].astype(np.float32) * a + frame * (1 - a)
     frame = np.clip(np.rint(frame), 0, 255).astype(np.uint8)
     frame = np.ascontiguousarray(np.rot90(frame, 2)) if m["view_rotation_deg"] == 180 else frame
@@ -1330,9 +1332,9 @@ def make_frames(cfg, only=None, overwrite=False, workers=None, no_meshes=False):
     return out
 
 
-def render_meshes(cfg, overwrite=False):
-    """The segments' mesh layers for the frames of their reveal (pipeline.movie_segments; none without
-    segments)."""
+def render_meshes(cfg, overwrite=False, only=None):
+    """The segments' mesh layers for the frames of their reveal (of those, the frame numbers in ``only``;
+    pipeline.movie_segments; none without segments)."""
     m = cfg["tissue_movie"]
     if not movie_segments.enabled(m):
         log.info("no tissue_movie.segments.ids: no mesh layers")
@@ -1341,7 +1343,7 @@ def render_meshes(cfg, overwrite=False):
     _, plan = plan_of(cfg)
     up = -1 if m["view_rotation_deg"] == 0 else 1
     return movie_segments.render_layers(cfg, plan, frames_dir(cfg), movie.volume_path(cfg), work_dir(cfg),
-                                        m["size"], focal_px(m), up, overwrite)
+                                        m["size"], focal_px(m), up, overwrite, only)
 
 
 def encode_command(cfg):
@@ -1369,7 +1371,7 @@ def encode(cfg):
 def main(argv=None):
     p = cli.base_parser(__doc__.split("\n\n")[0])
     p.add_argument("action", choices=("mask", "meshes", "frames", "encode"))
-    p.add_argument("--frames", help="frames: only these frame numbers, e.g. 0,240,480 (a quick look)")
+    p.add_argument("--frames", help="frames, meshes: only these frame numbers, e.g. 0,240,480 (a quick look)")
     p.add_argument("--workers", type=int, help="frames: parallel processes (default: tissue_movie.workers)")
     p.add_argument("--no-meshes", action="store_true", help="frames: only the frames that show no segment meshes "
                    "(while their mesh layers render elsewhere); meshes: nothing")
@@ -1385,7 +1387,7 @@ def main(argv=None):
         load_scene(cfg, overwrite_mask=args.overwrite)
     elif args.action == "meshes":
         if not args.no_meshes:
-            render_meshes(cfg, args.overwrite)
+            render_meshes(cfg, args.overwrite, [int(v) for v in args.frames.split(",")] if args.frames else None)
     elif args.action == "frames":
         only = [int(v) for v in args.frames.split(",")] if args.frames else None
         make_frames(cfg, only, args.overwrite, args.workers, args.no_meshes)

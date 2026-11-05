@@ -5,8 +5,9 @@ every slice it passes leaves the chosen segments' part of it behind as their mes
 the reveal started to the cut, the tissue the scroll has milled away. Meanwhile the camera turns
 (``yaw_deg``, ``tilt_deg``) and pulls back (``pull``) and the point it looks at falls back to halfway
 between that plane and the cut (it moves at half the scroll's speed): the section recedes and the
-segments stand in front of it. The scroll slows back down and the segments hold; with the zoom-out the
-scroll reverses and the returning section swallows them, as the camera comes face-on again (``fall_s``).
+segments stand in front of it. The scroll slows back down and the segments hold, then fade out
+(``fade_s``) before the zoom-out, whose scroll-back would swallow them, as the camera comes face-on again
+(``fall_s``): the edges of a segmentation cutout never show as the view widens.
 
 The meshes come from a Neuroglancer precomputed segmentation (``source``, e.g. precomputed://https://...;
 read with CloudVolume, no credentials) in the volume's own frame (nm, as the volume's voxel size makes s0
@@ -43,6 +44,8 @@ DEFAULTS = {
     "reveal_s": 5.0,      # ... and kept this long; the rest of movie.hold_end_s at the fly-through's speed
     "rise_s": 2.0,        # the camera turns and pulls back over this long from the reveal's start ...
     "fall_s": 2.5,        # ... and comes face-on again over this long from the zoom-out's start
+    "fade_s": 1.0,        # the meshes fade out over this long, ending as the zoom-out starts (0: they stay,
+                          # until the scroll-back swallows them)
     "yaw_deg": 25,        # the camera's turn about the y axis ...
     "tilt_deg": 12,       # ... its rise towards up on screen ...
     "pull": 1.8,          # ... and its distance (x the face-on distance), turned
@@ -72,14 +75,18 @@ def enabled(m):
 def add_reveal(fly, mv, s):
     """The fly-through's timeline (pipeline.movie.timeline, no hold at the start; zoom-out at its end) with
     the reveal: the scroll sped up to slices_per_s (z), the camera's turn ``reveal`` (0-1: up over rise_s
-    from the reveal's start, down over fall_s from the zoom-out's start) and ``mesh_from``, the plane where
-    the reveal started (the cut then; NaN before it): the meshes show between it and the cut."""
+    from the reveal's start, down over fall_s from the zoom-out's start), ``mesh_from``, the plane where
+    the reveal started (the cut then; NaN before it: the meshes show between it and the cut) and
+    ``mesh_alpha``, their opacity (fading out over fade_s before the zoom-out)."""
     t = fly["t"].to_numpy()
     t1, t4 = mv["zoom_s"], mv["zoom_s"] + mv["hold_end_s"]
     r0 = t1 + s["start_s"]
     r1 = r0 + s["speed_s"] + s["reveal_s"]
-    if min(s["start_s"], s["speed_s"], s["reveal_s"]) < 0 or min(s["rise_s"], s["fall_s"], s["slices_per_s"]) <= 0:
+    if min(s["start_s"], s["speed_s"], s["reveal_s"], s["fade_s"]) < 0 or min(s["rise_s"], s["fall_s"],
+                                                                         s["slices_per_s"]) <= 0:
         raise ValueError("tissue_movie.segments: the times must be >= 0, rise_s, fall_s and slices_per_s > 0")
+    if s["fade_s"] and t4 - s["fade_s"] <= r0:
+        raise ValueError("tissue_movie.segments: fade_s must start after the reveal does (a longer movie.hold_end_s)")
     if max(r1 + s["speed_s"], r0 + s["rise_s"]) > t4 + 1e-9:
         raise ValueError(f"tissue_movie.segments: the reveal needs movie.hold_end_s >= "
                          f"{s['start_s'] + max(2 * s['speed_s'] + s['reveal_s'], s['rise_s']):g}")
@@ -91,6 +98,7 @@ def add_reveal(fly, mv, s):
     out["z"] = z + np.concatenate([[0], np.cumsum((extra[1:] + extra[:-1]) / 2 * np.diff(t))])
     out["reveal"] = ease(t, r0, r0 + s["rise_s"]) * (1 - ease(t, t4, t4 + s["fall_s"]))
     out["mesh_from"] = np.where(t >= r0, float(np.interp(r0, t, out["z"])) + 0.5, np.nan)
+    out["mesh_alpha"] = 1 - ease(t, t4 - s["fade_s"], t4) if s["fade_s"] else np.ones(len(t))
     return out
 
 
@@ -196,22 +204,26 @@ def colors(s):
 
 def layer_rows(plan):
     """The timeline rows (a boolean mask) whose frames show meshes: fly-through rows whose cut is past the
-    reveal's start plane."""
+    reveal's start plane, the meshes not faded out."""
     if "mesh_from" not in plan.columns:
         return np.zeros(len(plan), bool)
-    return ((plan["part"] == "fly") & plan["mesh_from"].notna() & (plan["z"] + 0.5 > plan["mesh_from"])).to_numpy()
+    return ((plan["part"] == "fly") & plan["mesh_from"].notna() & (plan["z"] + 0.5 > plan["mesh_from"])
+            & (plan["mesh_alpha"] > 0)).to_numpy()
 
 
-def render_layers(cfg, plan, frames_dir, volume, work, size, focal, up, overwrite=False):
+def render_layers(cfg, plan, frames_dir, volume, work, size, focal, up, overwrite=False, only=None):
     """Render the mesh layers (RGBA PNG, ``frames_dir``/meshes/m<frame>.png) of the frames that show meshes
-    (``layer_rows``), with Blender; layers from an earlier run with the same settings are kept."""
+    (``layer_rows``; of those, the frame numbers in ``only``), with Blender; layers from an earlier run
+    with the same settings are kept."""
     s = cfg["tissue_movie"]["segments"]
     paths = fetch(s, volume, work)
     rows = plan[layer_rows(plan)]
+    if only is not None:
+        rows = rows[rows["frame"].isin(only)]
     out = Path(frames_dir) / "meshes"
     out.mkdir(parents=True, exist_ok=True)
     origin = [float(v) for v in cfg["movie"]["target"]]
-    settings = {k: v for k, v in s.items() if k != "blender"} | {"size": list(size), "origin": origin}
+    settings = {k: v for k, v in s.items() if k not in ("blender", "fade_s")} | {"size": list(size), "origin": origin}
     stamp = out / "settings.json"
     text = json.dumps(settings, sort_keys=True)
     if overwrite or not stamp.exists() or stamp.read_text() != text:
