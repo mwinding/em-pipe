@@ -4,7 +4,8 @@
 
 job.json: size [w, h], samples, origin (s0 voxels, subtracted from everything), meshes [{path (PLY, s0
 voxels), color [r, g, b]}], frames [{path (PNG out), camera {matrix (4 x 4 rows), lens, sensor}, clip [lo, hi]
-(world z, shifted: only the meshes' part between these is shown)}]. Cycles, lit by a key and a fill light
+(world z, shifted: only the meshes' part between these is shown)}]. Cycles (on an NVIDIA GPU if there is
+one: OptiX, else CUDA; else the CPU), lit by a key and a fill light
 that move with the camera and a grey sky; a transparent background (RGBA, straight alpha); where the clip
 opens a mesh, its inside shows as a flat, darker cap.
 """
@@ -21,6 +22,19 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
 scene.render.engine = "CYCLES"
 scene.cycles.device = "CPU"
+prefs = bpy.context.preferences.addons["cycles"].preferences
+for kind in ("OPTIX", "CUDA"):                       # an NVIDIA GPU if there is one
+    try:
+        prefs.compute_device_type = kind
+    except TypeError:                                # (this build lacks the backend)
+        continue
+    prefs.get_devices()
+    if any(d.type == kind for d in prefs.devices):
+        for d in prefs.devices:
+            d.use = d.type == kind
+        scene.cycles.device = "GPU"
+        break
+print(f"Cycles device: {scene.cycles.device} ({prefs.compute_device_type})", flush=True)
 scene.cycles.samples = int(job["samples"])
 scene.cycles.use_denoising = True
 scene.cycles.max_bounces = 4
