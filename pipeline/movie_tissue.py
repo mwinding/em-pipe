@@ -1263,9 +1263,10 @@ def _reusable(old_text, new_text):
     return {int(row[0]): found[tuple(row[1:])] for row in new.itertuples(index=False) if tuple(row[1:]) in found}
 
 
-def make_frames(cfg, only=None, overwrite=False, workers=None):
-    """Write the PNG frames (all, or the frame numbers in ``only``); frames from an earlier run with the
-    same look and the same timeline row (if at another time) are kept, the others redone."""
+def make_frames(cfg, only=None, overwrite=False, workers=None, no_meshes=False):
+    """Write the PNG frames (all, or the frame numbers in ``only``; with ``no_meshes``, of those only the
+    ones that show no segment meshes, which need no mesh layers); frames from an earlier run with the same
+    look and the same timeline row (if at another time) are kept, the others redone."""
     m = cfg["tissue_movie"]
     _WORKER.clear()
     scene, plan = plan_of(cfg)
@@ -1301,6 +1302,8 @@ def make_frames(cfg, only=None, overwrite=False, workers=None):
             log.info("%d frames kept from the earlier run", len(reuse))
         cli.atomic_write(plan_csv, lambda p: Path(p).write_text(plan_text))
     rows = plan if only is None else plan[plan["frame"].isin(only)]
+    if no_meshes:
+        rows = rows[~movie_segments.layer_rows(rows)]
     todo = [row for row in rows.to_dict("records") if not (out / f"f{row['frame']:05d}.png").exists()]
     workers = max(1, int(workers or m["workers"]))
     log.info("%s: %d of %d frames to render (%dx%d, %.1f s at %d fps) from s%d %s, %d worker(s)",
@@ -1368,6 +1371,8 @@ def main(argv=None):
     p.add_argument("action", choices=("mask", "meshes", "frames", "encode"))
     p.add_argument("--frames", help="frames: only these frame numbers, e.g. 0,240,480 (a quick look)")
     p.add_argument("--workers", type=int, help="frames: parallel processes (default: tissue_movie.workers)")
+    p.add_argument("--no-meshes", action="store_true", help="frames: only the frames that show no segment meshes "
+                   "(while their mesh layers render elsewhere); meshes: nothing")
     p.add_argument("--preview", type=int, help="frames, encode: a preview this many times smaller (default: "
                    "tissue_movie.preview_scale)")
     p.add_argument("--print", action="store_true", help="encode: print the ffmpeg command instead of running it")
@@ -1379,10 +1384,11 @@ def main(argv=None):
     if args.action == "mask":
         load_scene(cfg, overwrite_mask=args.overwrite)
     elif args.action == "meshes":
-        render_meshes(cfg, args.overwrite)
+        if not args.no_meshes:
+            render_meshes(cfg, args.overwrite)
     elif args.action == "frames":
         only = [int(v) for v in args.frames.split(",")] if args.frames else None
-        make_frames(cfg, only, args.overwrite, args.workers)
+        make_frames(cfg, only, args.overwrite, args.workers, args.no_meshes)
     elif args.print:
         print(shlex.join(encode_command(cfg)))
     else:

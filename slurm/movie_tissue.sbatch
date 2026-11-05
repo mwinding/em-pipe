@@ -2,8 +2,10 @@
 # Whole-volume movie (the block circling, the resin turning transparent, only the tissue left; with
 # tissue_movie.fly_through, then the fly-through) -> output_dir/<name>.mp4 (settings: the config's
 # tissue_movie: and, for fly_through, movie:). One frame per process: --workers below. With
-# tissue_movie.segments.ids, first their mesh layers (Blender: EM_PIPE_BLENDER in slurm/site.sh).
-# Usage: sbatch --output=LOG slurm/movie_tissue.sbatch CONFIG [options, e.g. --overwrite, --preview 4]
+# tissue_movie.segments.ids, first their mesh layers (Blender: EM_PIPE_BLENDER in slurm/site.sh); with
+# --no-meshes, only the frames without meshes and no movie (while slurm/movie_segments.sbatch renders the
+# layers on a GPU; then this job again without it).
+# Usage: sbatch --output=LOG slurm/movie_tissue.sbatch CONFIG [options, e.g. --overwrite, --preview 3, --no-meshes]
 
 #SBATCH --job-name=em-movie-tissue
 #SBATCH --ntasks=1
@@ -20,6 +22,7 @@ source slurm/env.sh
 
 python -u -m pipeline.movie_tissue --config "$CONFIG" meshes "$@"
 python -u -m pipeline.movie_tissue --config "$CONFIG" frames --workers "${SLURM_CPUS_PER_TASK:-8}" "$@"
+case " $* " in *" --no-meshes "*) exit 0 ;; esac
 ENCODE=$(python -m pipeline.movie_tissue --config "$CONFIG" encode --print "$@")
 # The site's FFmpeg module (slurm/site.sh), loaded only after python: its libraries could shadow the env's.
 [ -z "${EM_PIPE_FFMPEG_MODULE:-}" ] || ml "$EM_PIPE_FFMPEG_MODULE"

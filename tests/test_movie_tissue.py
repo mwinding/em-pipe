@@ -596,3 +596,14 @@ def test_changed_segments_keep_the_frames_before_the_reveal(tmp_path):
     cfg["tissue_movie"]["segments"] = {**cfg["tissue_movie"]["segments"], "colors": [[1, 0, 0], [0, 1, 0]]}
     mt.make_frames(cfg, only=[0])
     assert (out / "f00000.png").stat().st_ino == first and not (out / f"f{k:05d}.png").exists()
+
+
+def test_frames_without_meshes(tmp_path):
+    """--no-meshes renders the frames that show no meshes (no mesh layers needed) and leaves the others."""
+    cfg = _segments_cfg(tmp_path)
+    _, plan = mt.plan_of(cfg)
+    shows = ms.layer_rows(plan)
+    pick = [int(plan["frame"].iloc[0]), int(plan.loc[shows, "frame"].iloc[0])]
+    mt.make_frames(cfg, only=pick, no_meshes=True)                            # (no layers: would fail without)
+    out = mt.frames_dir(cfg)
+    assert (out / f"f{pick[0]:05d}.png").exists() and not (out / f"f{pick[1]:05d}.png").exists()
