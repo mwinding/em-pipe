@@ -13,6 +13,10 @@ EM_PIPE_MODULES=""
 # libraries could shadow the env's.
 EM_PIPE_FFMPEG_MODULE=""
 
+# Blender, for segment meshes in the tissue movie (tissue_movie.segments): the path of the blender
+# executable of an unpacked release from blender.org (no install needed).
+export EM_PIPE_BLENDER=""
+
 # The partition run_pipeline.sh submits to (a config's slurm: section can still set one per job).
 # Unset: the cluster's default partition.
 # export SBATCH_PARTITION=cpu

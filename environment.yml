@@ -17,3 +17,4 @@ dependencies:
       - opencv-python-headless
       - tensorstore
       - google-cloud-storage   # upload step
+      - cloud-volume           # movie segments: meshes from a precomputed segmentation

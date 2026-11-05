@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import yaml
 
-from pipeline import movie, movie_tissue as mt, omezarr
+from pipeline import movie, movie_segments as ms, movie_tissue as mt, omezarr
 from pipeline.config import deep_merge, load_config
 
 SIZE = [64, 48]
@@ -451,3 +451,102 @@ def test_portrait_frames(tmp_path):
     end = full[full["t"] >= 1.0 - 1e-9].iloc[0]                                # (zoom_s 1): on the target
     assert (end["cx"], end["cy"], end["zoom"]) == pytest.approx((40, 32, 1))
     assert len(fly) and fly["zoom"].iloc[0] < full["zoom"].iloc[0]
+
+
+SEGMENTS = {"ids": [1, 2], "start_s": 0.2, "pause_s": 0.2, "rise_s": 0.3, "hold_s": 0.2, "fall_s": 0.3,
+            "depth": 20, "yaw_deg": 20, "tilt_deg": 10, "pull": 1.5}
+
+
+def _segments_cfg(tmp_path, **seg):
+    vol, _ = _tissue_volume(shape=(48, 64, 96))
+    _pyramid(tmp_path / "out" / "vol.ome.zarr", vol)
+    cfg = _cfg(tmp_path, fly_through=True, level=1, trim_edge_px=0, mask={"rim_px": 4, "min_resin": 1000},
+               zoom_overlap_s=0.3, approach_s=1.0, segments={**SEGMENTS, **seg})
+    cfg["movie"] = {**cfg["movie"], "hold_end_s": 1.6, "target": [40, 32, 12]}
+    mt._WORKER.clear()
+    return cfg
+
+
+def test_segments_reveal_pauses_the_scroll(tmp_path):
+    """The reveal comes in the hold after the zoom: the scroll eases to a stop pause_s before it and
+    stays stopped until it ends, then carries on at its speed; the reveal rises to 1 and back to 0."""
+    cfg = _segments_cfg(tmp_path)
+    plain = movie.timeline({**mt.fly_settings(cfg), "hold_start_s": 0.0}, (48, 64, 96))
+    fly = mt.fly_plan(cfg, (48, 64, 96))
+    t, z, z0 = fly["t"].to_numpy(), fly["z"].to_numpy(), plain["z"].to_numpy()
+    r0, r3 = 1.0 + 0.2, 1.0 + 0.2 + 0.8                                       # (zoom_s 1)
+    np.testing.assert_allclose(z[t <= r0 - 0.2], z0[t <= r0 - 0.2])            # as before until the pause
+    held = (t >= r0) & (t <= r3)
+    assert np.ptp(z[held]) == pytest.approx(0, abs=1e-6)                      # stopped through the reveal
+    after = t >= r3 + 0.2
+    assert np.ptp((z0 - z)[after]) == pytest.approx(0, abs=1e-6) and (z0 - z)[after][0] > 0   # then on again
+    reveal = fly["reveal"].to_numpy()
+    assert reveal.max() == pytest.approx(1) and reveal[t < r0].max() == 0 and reveal[t > r3].max() == 0
+    _, plan = mt.plan_of(cfg)
+    assert plan.loc[plan["part"] == "fly", "reveal"].max() == pytest.approx(1)
+    cfg["movie"]["hold_end_s"] = 1.0
+    with pytest.raises(ValueError, match="hold_end_s >= 1.2"):
+        mt.fly_plan(cfg, (48, 64, 96))
+
+
+def test_blender_camera_projects_as_the_movie_camera():
+    """A point lands on the same frame px through the Blender camera as through pipeline.movie.camera."""
+    size, focal, origin = (1920, 1080), 2637.0, np.array([1000.0, 2000.0, 3000.0])
+    pts = np.random.default_rng(0).uniform(-300, 300, (20, 3)) + [1000, 2000, 3500]
+    for up in (-1, 1):
+        for yaw, tilt in ((0.0, 0.0), (0.4, 0.2), (-0.3, -0.1)):
+            cam = movie.camera([1000, 2000, 3500], yaw, tilt, 2000, up)
+            bcam = ms.blender_camera(cam, size, focal, origin)
+            mat = np.asarray(bcam["matrix"])[:3, :3]
+            assert np.linalg.det(mat) == pytest.approx(1)                     # a rotation
+            want = movie.project(pts, cam, size, focal)
+            got = np.array([ms.blender_project(bcam, size, p - origin) for p in pts])
+            np.testing.assert_allclose(got, want, atol=1e-6)
+
+
+def test_turned_view_of_the_cut_matches_face_on(tmp_path):
+    """The cut drawn in perspective (the reveal's path) with no turn and no pull-back is the face-on
+    picture; turned, the picture still shows the slice."""
+    cfg = _segments_cfg(tmp_path, yaw_deg=0, tilt_deg=0, pull=1.0)
+    mt.plan_of(cfg)
+    args = (2.0, 40.0, 32.0, 12.0)
+    face = mt.fly_picture(cfg, mt._WORKER, *args)
+    turned_path = mt.fly_picture(cfg, mt._WORKER, *args, reveal=1.0)
+    assert np.abs(face - turned_path)[3:-3, 3:-3].max() < 3
+    cfg = _segments_cfg(tmp_path)
+    mt.plan_of(cfg)
+    turned = mt.fly_picture(cfg, mt._WORKER, *args, reveal=1.0)
+    assert turned.shape == face.shape and turned.max() > 0 and np.abs(turned - face).mean() > 1
+
+
+def test_mesh_layer_over_the_frame(tmp_path):
+    """With segments the frames are colour; in the reveal, the mesh layer (RGBA) lies over the frame."""
+    cfg = _segments_cfg(tmp_path)
+    _, plan = mt.plan_of(cfg)
+    k = int(plan.loc[plan["reveal"].fillna(0) > 0.5, "frame"].iloc[0])
+    out = mt.frames_dir(cfg)
+    (out / "meshes").mkdir(parents=True, exist_ok=True)
+    layer = np.zeros((48, 64, 4), np.uint8)
+    layer[10:20, 10:20] = (0, 0, 255, 255)                                     # red (BGR), opaque
+    cv2.imwrite(str(out / "meshes" / f"m{k:05d}.png"), layer)
+    row = SimpleNamespace(**plan.iloc[k].to_dict())
+    frame = mt.render_frame(cfg, row)
+    assert frame.shape == (48, 64, 3)
+    assert (frame[12:18, 12:18] == (0, 0, 255)).all()
+    other = mt.render_frame(cfg, SimpleNamespace(**plan.iloc[0].to_dict()))  # (no reveal: grey, as BGR)
+    assert other.shape == (48, 64, 3) and (other[..., 0] == other[..., 2]).all()
+    (out / "meshes" / f"m{k:05d}.png").unlink()
+    with pytest.raises(FileNotFoundError, match="run 'meshes' first"):
+        mt.render_frame(cfg, row)
+
+
+def test_ply_file(tmp_path):
+    v = np.array([[0, 0, 0], [1, 0, 0], [0, 2, 0], [0, 0, 3]], float)
+    f = np.array([[0, 1, 2], [0, 1, 3]])
+    ms.write_ply(tmp_path / "m.ply", v, f)
+    data = (tmp_path / "m.ply").read_bytes()
+    head, body = data.split(b"end_header\n")
+    assert b"element vertex 4" in head and b"element face 2" in head
+    np.testing.assert_array_equal(np.frombuffer(body[:48], "<f4").reshape(4, 3), v)
+    faces = np.frombuffer(body[48:], [("n", "u1"), ("i", "<i4", (3,))])
+    assert (faces["n"] == 3).all() and (faces["i"] == f).all()

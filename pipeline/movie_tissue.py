@@ -52,7 +52,7 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage
 
-from . import cli, movie, serve
+from . import cli, movie, movie_segments, serve
 from .config import deep_merge, qc_path, step_dir
 from .movie import camera, open_levels, project
 
@@ -167,6 +167,7 @@ DEFAULTS = {
         "mask_level": None,        # (previews) the level whose tissue mask is pooled for this level's
         "preview_scale": 1,        # > 1: a preview this many times smaller (the same view, frames from coarser
                                    # levels; kept apart from the full-size frames)
+        "segments": movie_segments.DEFAULTS,   # meshes rising out of the cut in the fly-through (pipeline.movie_segments)
         "workers": 1,              # frames rendered in parallel processes
         "crf": 18,                 # x264 quality: lower is better and bigger (18: visually lossless)
         "ffmpeg": "ffmpeg",
@@ -918,7 +919,8 @@ def _fly_rows(m, scene, fly, n0, t0, focal, up):
     the camera then turns once round the volume (spin_s, starting spin_overlap_s before that), easing to
     rest, and the frame fades to black over end_fade_s."""
     tf = fly["t"].to_numpy()
-    rows = fly[["zoom", "cx", "cy", "z", "rotation"]].assign(frame=fly["frame"] + n0, t=tf + t0, part="fly")
+    cols = ["zoom", "cx", "cy", "z", "rotation"] + (["reveal"] if "reveal" in fly else [])
+    rows = fly[cols].assign(frame=fly["frame"] + n0, t=tf + t0, part="fly")
     rows["blend"] = _ease(tf, 0, m["handover_s"])
     if not m["zoom_out_s"]:
         return rows
@@ -1007,8 +1009,13 @@ def sweep_path(t, start, end, z_end, v_end):
 
 def fly_plan(cfg, shape0):
     """The fly-through's timeline: pipeline.movie.timeline of the ``movie:`` settings without the hold at
-    the start (the zoom starts as the cut's sweep ends: see zoom_overlap_s)."""
-    return movie.timeline({**fly_settings(cfg), "hold_start_s": 0.0}, shape0)
+    the start (the zoom starts as the cut's sweep ends: see zoom_overlap_s); with segments, their reveal
+    (pipeline.movie_segments.add_reveal)."""
+    mv = {**fly_settings(cfg), "hold_start_s": 0.0}
+    plan = movie.timeline(mv, shape0)
+    if movie_segments.enabled(cfg["tissue_movie"]):
+        plan = movie_segments.add_reveal(plan, mv, cfg["tissue_movie"]["segments"])
+    return plan
 
 
 def render_row(scene, m, row):
@@ -1125,10 +1132,21 @@ def render_frame(cfg, row):
     """Frame (uint8, as shown: rotated by view_rotation_deg) of a timeline row (a namespace)."""
     m = cfg["tissue_movie"]
     state = _state(cfg, levels=row.part == "fly")
+    reveal = getattr(row, "reveal", 0.0)
+    reveal = float(reveal) if reveal is not None and np.isfinite(reveal) else 0.0
     if row.part == "fly":
-        frame = fly_picture(cfg, state, row.zoom, row.cx, row.cy, row.z, row.rotation, row.blend)
+        frame = fly_picture(cfg, state, row.zoom, row.cx, row.cy, row.z, row.rotation, row.blend, reveal)
     else:
         frame = render_row(state["scene"], m, row)
+    if movie_segments.enabled(m):                     # colour frames throughout (BGR)
+        frame = np.repeat(frame[..., None], 3, -1)
+        if reveal > 0:
+            path = frames_dir(cfg) / "meshes" / f"m{row.frame:05d}.png"
+            layer = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+            if layer is None:
+                raise FileNotFoundError(f"{path}: no mesh layer (run 'meshes' first)")
+            a = layer[..., 3:].astype(np.float32) / 255
+            frame = layer[..., :3].astype(np.float32) * a + frame * (1 - a)
     frame = np.clip(np.rint(frame), 0, 255).astype(np.uint8)
     frame = np.ascontiguousarray(np.rot90(frame, 2)) if m["view_rotation_deg"] == 180 else frame
     if row.part == "fly" and cfg["movie"]["scale_bar"]:
@@ -1136,20 +1154,24 @@ def render_frame(cfg, row):
     return frame
 
 
-def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0):
+def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0, reveal=0.0):
     """A fly-through frame (float, unrotated), tissue only and in 3D: the camera face-on to slice ``z``
     at the distance that shows it at ``zoom`` s0 voxels per frame px around (cx, cy), the volume in front
     cut away there; on the cut, the slice from the level the zoom needs (pipeline.movie.render_frame),
     its tissue only (``refine_edge`` of ``tissue_in_frame``), ``fine_weight`` of it over the scene's own
     picture of the cut (the hand-over from the scene's level); through the resin, the tissue behind it,
-    from the scene."""
+    from the scene. With a segments ``reveal`` (0-1), the camera turned, raised and pulled back about the
+    point it looks at (pipeline.movie_segments.fly_camera), the slice on the cut seen in perspective."""
     m = cfg["tissue_movie"]
     size = m["size"]
     focal = focal_px(m)
     up = -1 if m["view_rotation_deg"] == 0 else 1
-    cam = camera((cx, cy, z + 0.5), 0.0, 0.0, focal * zoom, up)
+    cam = movie_segments.fly_camera(m["segments"], zoom, cx, cy, z, reveal, focal, up)
     picture = render_volume(state["scene"], cam, size, focal, 0.0, z + 0.5, m["blend_axes"])
     if fine_weight > 0:
+        if reveal > 0:
+            fine, tissue = _cut_in_view(cfg, state, cam, zoom, z, fine_weight)
+            return fine + (1 - tissue) * picture
         levels = _state(cfg, levels=True)["levels"]
         fine = movie.render_frame(levels, size, zoom, cx, cy, z, rotation)[0].astype(np.float32)
         guide = fine                                  # (the edge placed from the mask volume's greys)
@@ -1160,6 +1182,39 @@ def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0):
             tissue = tissue * crop_in_frame(m["crop"], size, zoom, cx, cy)
         picture = tissue * fine + (1 - tissue) * picture
     return picture
+
+
+def _cut_in_view(cfg, state, cam, zoom, z, fine_weight):
+    """(the slice's tissue x grey, the tissue's weight) on the cut z + 0.5 seen by ``cam`` in perspective:
+    the slice (and its tissue, as in fly_picture) face-on at ``zoom`` over the part of the cut the frame
+    shows, warped onto the frame."""
+    m = cfg["tissue_movie"]
+    size, focal = m["size"], focal_px(m)
+    w, h = size
+    pos, forward, right, down = cam
+    zc = z + 0.5
+    rays = [forward * focal + right * (u - w / 2) + down * (v - h / 2) for u, v in ((0, 0), (w, 0), (w, h), (0, h))]
+    if min(r[2] for r in rays) <= 1e-6:
+        raise ValueError("tissue_movie.segments: the turned camera sees past the cut's horizon (less yaw or tilt)")
+    hit = np.array([pos + (zc - pos[2]) / r[2] * r for r in rays])
+    (x0, y0), (x1, y1) = hit[:, :2].min(0), hit[:, :2].max(0)
+    sw, sh = (2 * math.ceil((b - a) / zoom / 2) + 4 for a, b in ((x0, x1), (y0, y1)))
+    bx, by = (x0 + x1) / 2, (y0 + y1) / 2
+    levels = _state(cfg, levels=True)["levels"]
+    fine = movie.render_frame(levels, (sw, sh), zoom, bx, by, z)[0].astype(np.float32)
+    guide = fine
+    if state.get("mask_levels") is not None:
+        guide = movie.render_frame(state["mask_levels"], (sw, sh), zoom, bx, by, z)[0].astype(np.float32)
+    tissue = refine_edge(tissue_in_frame(state["scene"], (sw, sh), zoom, bx, by, z), guide) * np.float32(fine_weight)
+    if m["crop"]:
+        tissue = tissue * crop_in_frame(m["crop"], (sw, sh), zoom, bx, by)
+    hw, hh = sw / 2 * zoom, sh / 2 * zoom
+    corners = [(bx - hw, by - hh, zc), (bx + hw, by - hh, zc), (bx + hw, by + hh, zc), (bx - hw, by + hh, zc)]
+    dst = movie.project(corners, cam, size, focal)
+    src = np.float32([[-0.5, -0.5], [sw - 0.5, -0.5], [sw - 0.5, sh - 0.5], [-0.5, sh - 0.5]])
+    warp = {"M": cv2.getPerspectiveTransform(src, (dst - 0.5).astype(np.float32)), "dsize": (w, h),
+            "flags": cv2.INTER_LINEAR, "borderMode": cv2.BORDER_CONSTANT}
+    return cv2.warpPerspective(tissue * fine, **warp), cv2.warpPerspective(tissue, **warp)
 
 
 def _write_frame(row, cfg=None):
@@ -1209,6 +1264,8 @@ def make_frames(cfg, only=None, overwrite=False, workers=None):
     if m["fly_through"]:
         settings["fly_volume"] = str(movie.volume_path(cfg))
         settings["scale_bar"] = cfg["movie"]["scale_bar"]
+    if movie_segments.enabled(m):
+        settings["segments"] = {k: v for k, v in m["segments"].items() if k != "blender"}
     plan_text = f"# {json.dumps(settings, sort_keys=True)}\n" + plan.to_csv(index=False, float_format="%.6f")
     if overwrite or not plan_csv.exists() or plan_csv.read_text() != plan_text:
         old_text = "" if overwrite or not plan_csv.exists() else plan_csv.read_text()
@@ -1253,6 +1310,20 @@ def make_frames(cfg, only=None, overwrite=False, workers=None):
     return out
 
 
+def render_meshes(cfg, overwrite=False):
+    """The segments' mesh layers for the frames of their reveal (pipeline.movie_segments; none without
+    segments)."""
+    m = cfg["tissue_movie"]
+    if not movie_segments.enabled(m):
+        log.info("no tissue_movie.segments.ids: no mesh layers")
+        return None
+    _WORKER.clear()
+    _, plan = plan_of(cfg)
+    up = -1 if m["view_rotation_deg"] == 0 else 1
+    return movie_segments.render_layers(cfg, plan, frames_dir(cfg), movie.volume_path(cfg), work_dir(cfg),
+                                        m["size"], focal_px(m), up, overwrite)
+
+
 def encode_command(cfg):
     m = cfg["tissue_movie"]
     scale = m["preview_scale"]
@@ -1277,7 +1348,7 @@ def encode(cfg):
 
 def main(argv=None):
     p = cli.base_parser(__doc__.split("\n\n")[0])
-    p.add_argument("action", choices=("mask", "frames", "encode"))
+    p.add_argument("action", choices=("mask", "meshes", "frames", "encode"))
     p.add_argument("--frames", help="frames: only these frame numbers, e.g. 0,240,480 (a quick look)")
     p.add_argument("--workers", type=int, help="frames: parallel processes (default: tissue_movie.workers)")
     p.add_argument("--preview", type=int, help="frames, encode: a preview this many times smaller (default: "
@@ -1290,6 +1361,8 @@ def main(argv=None):
         cfg = preview({**cfg, "tissue_movie": {**cfg["tissue_movie"], "preview_scale": 1}}, scale)
     if args.action == "mask":
         load_scene(cfg, overwrite_mask=args.overwrite)
+    elif args.action == "meshes":
+        render_meshes(cfg, args.overwrite)
     elif args.action == "frames":
         only = [int(v) for v in args.frames.split(",")] if args.frames else None
         make_frames(cfg, only, args.overwrite, args.workers)
