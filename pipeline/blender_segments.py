@@ -2,12 +2,14 @@
 
     blender -b --factory-startup --python pipeline/blender_segments.py -- job.json
 
-job.json: size [w, h], samples, origin (s0 voxels, subtracted from everything), meshes [{path (PLY, s0
-voxels), color [r, g, b]}], frames [{path (PNG out), camera {matrix (4 x 4 rows), lens, sensor}, clip [lo, hi]
-(world z, shifted: only the meshes' part between these is shown)}]. Cycles (on an NVIDIA GPU if there is
-one: OptiX, else CUDA; else the CPU), lit by a key and a fill light
-that move with the camera and a grey sky; a transparent background (RGBA, straight alpha); where the clip
-opens a mesh, its inside shows as a flat, darker cap.
+job.json: size [w, h], samples, origin (s0 voxels, subtracted from everything), the look (roughness,
+subsurface, subsurface_scale, hdri, hdri_rotation_deg, hdri_strength, exposure: pipeline.movie_segments),
+meshes [{path (PLY, s0 voxels), color [r, g, b] (linear)}], frames [{path (PNG out), camera {matrix (4 x 4
+rows), lens, sensor}, clip [lo, hi] (world z, shifted: only the meshes' part between these is shown)}].
+Cycles (on an NVIDIA GPU if there is one: OptiX, else CUDA; else the CPU), lit by the HDR image (its up
+turned to screen up, -y) or by a grey sky and a key and a fill light that move with the camera; a
+transparent background (RGBA, straight alpha); where the clip opens a mesh, its inside shows as a flat,
+darker cap.
 """
 
 import json
@@ -46,11 +48,26 @@ scene.render.resolution_percentage = 100
 scene.render.image_settings.file_format = "PNG"
 scene.render.image_settings.color_mode = "RGBA"
 scene.view_settings.view_transform = "Standard"       # the colours as given
+scene.cycles.film_exposure = float(job["exposure"])
 
 world = bpy.data.worlds.new("sky")
 world.use_nodes = True
-world.node_tree.nodes["Background"].inputs[0].default_value = (0.35, 0.35, 0.38, 1.0)
 scene.world = world
+background = world.node_tree.nodes["Background"]
+if job["hdri"]:
+    wn, wl = world.node_tree.nodes, world.node_tree.links
+    coords, upright, turned = wn.new("ShaderNodeTexCoord"), wn.new("ShaderNodeMapping"), wn.new("ShaderNodeMapping")
+    upright.inputs["Rotation"].default_value = (math.radians(-90), 0, 0)      # -y (screen up) -> +Z
+    turned.inputs["Rotation"].default_value = [math.radians(v) for v in job["hdri_rotation_deg"]]
+    env = wn.new("ShaderNodeTexEnvironment")
+    env.image = bpy.data.images.load(job["hdri"])
+    wl.new(coords.outputs["Generated"], upright.inputs["Vector"])
+    wl.new(upright.outputs["Vector"], turned.inputs["Vector"])
+    wl.new(turned.outputs["Vector"], env.inputs["Vector"])
+    wl.new(env.outputs["Color"], background.inputs["Color"])
+    background.inputs["Strength"].default_value = float(job["hdri_strength"])
+else:
+    background.inputs[0].default_value = (0.35, 0.35, 0.38, 1.0)
 
 cam_obj = bpy.data.objects.new("camera", bpy.data.cameras.new("camera"))
 scene.collection.objects.link(cam_obj)
@@ -69,8 +86,9 @@ def light(name, energy, direction):
     scene.collection.objects.link(obj)
 
 
-light("key", 3.0, (0.5, -0.6, -1.0))                  # from the upper left, in front
-light("fill", 0.8, (-0.7, 0.2, -0.6))                 # weaker, from the right
+if not job["hdri"]:
+    light("key", 3.0, (0.5, -0.6, -1.0))              # from the upper left, in front
+    light("fill", 0.8, (-0.7, 0.2, -0.6))             # weaker, from the right
 
 clips = []
 origin = job["origin"]
@@ -87,7 +105,10 @@ for i, mesh in enumerate(job["meshes"]):
     color = (*mesh["color"], 1.0)
     bsdf = nodes.new("ShaderNodeBsdfPrincipled")
     bsdf.inputs["Base Color"].default_value = color
-    bsdf.inputs["Roughness"].default_value = 0.45
+    bsdf.inputs["Roughness"].default_value = float(job["roughness"])
+    bsdf.inputs["Subsurface Weight"].default_value = float(job["subsurface"])
+    bsdf.inputs["Subsurface Radius"].default_value = (1.0, 1.0, 1.0)
+    bsdf.inputs["Subsurface Scale"].default_value = float(job["subsurface_scale"])
     cap = nodes.new("ShaderNodeEmission")               # the inside, where the clip opens the mesh
     cap.inputs["Color"].default_value = tuple(0.55 * c for c in mesh["color"]) + (1.0,)
     geo = nodes.new("ShaderNodeNewGeometry")

@@ -44,6 +44,15 @@ DEFAULTS = {
     "yaw_deg": 25,        # the camera's turn about the y axis ...
     "tilt_deg": 12,       # ... its rise towards up on screen ...
     "pull": 1.8,          # ... and its distance (x the face-on distance), at the height of the reveal
+    # The look (Blender, Cycles)
+    "roughness": 0.45,    # the meshes' surface (Principled BSDF)
+    "subsurface": 0.0,    # subsurface scattering weight (1: waxy, light passes into the mesh) ...
+    "subsurface_scale": 30,   # ... and how far (s0 voxels)
+    "hdri": None,         # an equirectangular HDR image lighting the meshes (no lamps); null: a grey sky, a key
+                          # and a fill light moving with the camera
+    "hdri_rotation_deg": [0, 0, 0],   # its rotation (Blender's mapping, XYZ Euler) with its up on screen up
+    "hdri_strength": 1.0,
+    "exposure": 1.0,      # film exposure (a multiplier)
     "samples": 32,        # Blender (Cycles) samples per px, denoised
     "blender": None,      # the Blender executable; null: $EM_PIPE_BLENDER, else blender
 }
@@ -207,7 +216,9 @@ def render_layers(cfg, plan, frames_dir, volume, work, size, focal, up, overwrit
     if not frames:
         log.info("mesh layers: all %d done", len(rows))
         return out
-    job = {"size": list(size), "samples": s["samples"], "origin": origin, "frames": frames,
+    look = ("samples", "roughness", "subsurface", "subsurface_scale", "hdri", "hdri_rotation_deg", "hdri_strength",
+            "exposure")
+    job = {"size": list(size), "origin": origin, "frames": frames, **{k: s[k] for k in look},
            "meshes": [{"path": str(p), "color": c} for p, c in zip(paths, colors(s))]}
     job_path = out / "job.json"
     cli.atomic_write(job_path, lambda p: Path(p).write_text(json.dumps(job)))
