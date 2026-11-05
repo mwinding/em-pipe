@@ -35,6 +35,7 @@ yaw 0 (the first slice facing it) and the orbit turns it about the y axis. z is 
 (pipeline.check numbers slices by their time stamps).
 """
 
+import hashlib
 import json
 import logging
 import math
@@ -1264,8 +1265,12 @@ def make_frames(cfg, only=None, overwrite=False, workers=None):
     if m["fly_through"]:
         settings["fly_volume"] = str(movie.volume_path(cfg))
         settings["scale_bar"] = cfg["movie"]["scale_bar"]
-    if movie_segments.enabled(m):
-        settings["segments"] = {k: v for k, v in m["segments"].items() if k != "blender"}
+    if movie_segments.enabled(m) and "reveal" in plan:
+        # Colour frames; the meshes' settings only in the rows that show them, so a change to them keeps
+        # the frames before the reveal.
+        settings["segments"] = True
+        look = json.dumps({k: v for k, v in m["segments"].items() if k != "blender"}, sort_keys=True)
+        plan = plan.assign(meshes=np.where(plan["reveal"].fillna(0) > 0, hashlib.sha1(look.encode()).hexdigest()[:12], ""))
     plan_text = f"# {json.dumps(settings, sort_keys=True)}\n" + plan.to_csv(index=False, float_format="%.6f")
     if overwrite or not plan_csv.exists() or plan_csv.read_text() != plan_text:
         old_text = "" if overwrite or not plan_csv.exists() else plan_csv.read_text()

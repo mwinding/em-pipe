@@ -550,3 +550,18 @@ def test_ply_file(tmp_path):
     np.testing.assert_array_equal(np.frombuffer(body[:48], "<f4").reshape(4, 3), v)
     faces = np.frombuffer(body[48:], [("n", "u1"), ("i", "<i4", (3,))])
     assert (faces["n"] == 3).all() and (faces["i"] == f).all()
+
+
+def test_changed_segments_keep_the_frames_before_the_reveal(tmp_path):
+    """Changing how the meshes look redoes only the frames that show them (and none before the reveal)."""
+    cfg = _segments_cfg(tmp_path)
+    _, plan = mt.plan_of(cfg)
+    k = int(plan.loc[plan["reveal"].fillna(0) > 0.5, "frame"].iloc[0])
+    out = mt.frames_dir(cfg)
+    (out / "meshes").mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out / "meshes" / f"m{k:05d}.png"), np.zeros((48, 64, 4), np.uint8))
+    mt.make_frames(cfg, only=[0, k])
+    first, shown = ((out / f"f{i:05d}.png").stat().st_ino for i in (0, k))
+    cfg["tissue_movie"]["segments"] = {**cfg["tissue_movie"]["segments"], "colors": [[1, 0, 0], [0, 1, 0]]}
+    mt.make_frames(cfg, only=[0])
+    assert (out / "f00000.png").stat().st_ino == first and not (out / f"f{k:05d}.png").exists()
