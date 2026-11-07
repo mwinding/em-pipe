@@ -1280,10 +1280,10 @@ def make_frames(cfg, only=None, overwrite=False, workers=None, no_meshes=False):
         settings["fly_volume"] = str(movie.volume_path(cfg))
         settings["scale_bar"] = cfg["movie"]["scale_bar"]
     if movie_segments.enabled(m) and "reveal" in plan:
-        # Colour frames; the meshes' settings only in the rows that show them, so a change to them keeps
-        # the frames before the reveal.
+        # Colour frames; the meshes' look only in the rows that show them (their timing changes the rows
+        # themselves), so a change keeps the frames it does not touch.
         settings["segments"] = True
-        look = json.dumps({k: v for k, v in m["segments"].items() if k != "blender"}, sort_keys=True)
+        look = json.dumps(movie_segments.look(m["segments"]), sort_keys=True)
         mine = (plan["reveal"].fillna(0) > 0).to_numpy() | movie_segments.layer_rows(plan)
         plan = plan.assign(meshes=np.where(mine, hashlib.sha1(look.encode()).hexdigest()[:12], ""))
     plan_text = f"# {json.dumps(settings, sort_keys=True)}\n" + plan.to_csv(index=False, float_format="%.6f")

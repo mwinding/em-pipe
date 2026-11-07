@@ -5,9 +5,11 @@ every slice it passes leaves the chosen segments' part of it behind as their mes
 the reveal started to the cut, the tissue the scroll has milled away. Meanwhile the camera turns
 (``yaw_deg``, ``tilt_deg``) and pulls back (``pull``) and the point it looks at falls back to halfway
 between that plane and the cut (it moves at half the scroll's speed): the section recedes and the
-segments stand in front of it. The scroll slows back down and the segments hold, then fade out
-(``fade_s``) before the zoom-out, whose scroll-back would swallow them, as the camera comes face-on again
-(``fall_s``): the edges of a segmentation cutout never show as the view widens.
+segments stand in front of it. The scroll slows back down and the segments hold; then (``hide``) the
+scroll reverses (``back_slices_per_s``) and the returning section swallows them slice by slice while the
+camera comes face-on again (``fall_s``), until the cut is back at the plane where the reveal started as
+the zoom-out begins, its own scroll-back carrying on from there; or they fade out (``fade_s``) before the
+zoom-out. Either way the edges of a segmentation cutout never show as the view widens.
 
 The meshes come from a Neuroglancer precomputed segmentation (``source``, e.g. precomputed://https://...;
 read with CloudVolume, no credentials) in the volume's own frame (nm, as the volume's voxel size makes s0
@@ -19,10 +21,12 @@ meshes (the volume in front of the cut is cut away), so no depth compositing is 
     python -m pipeline.movie_tissue --config C frames    # the frames, with the layers on them
 """
 
+import hashlib
 import json
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -43,9 +47,12 @@ DEFAULTS = {
     "speed_s": 1.0,       # ... reached over this long (and back to the fly-through's over this long) ...
     "reveal_s": 5.0,      # ... and kept this long; the rest of movie.hold_end_s at the fly-through's speed
     "rise_s": 2.0,        # the camera turns and pulls back over this long from the reveal's start ...
-    "fall_s": 2.5,        # ... and comes face-on again over this long from the zoom-out's start
-    "fade_s": 1.0,        # the meshes fade out over this long, ending as the zoom-out starts (0: they stay,
-                          # until the scroll-back swallows them)
+    "fall_s": 2.5,        # ... and comes face-on again over this long: ending as the zoom-out starts (hide:
+                          # scroll), or from its start (fade)
+    "hide": "scroll",     # how the meshes go before the zoom-out: scroll (the scroll reverses and the section
+                          # swallows them: the hold ends as late as that allows) or fade (fade_s)
+    "back_slices_per_s": None,   # scroll: the scroll's speed backwards (reached over speed_s); null: slices_per_s
+    "fade_s": 1.0,        # fade: the meshes fade out over this long, ending as the zoom-out starts
     "yaw_deg": 25,        # the camera's turn about the y axis ...
     "tilt_deg": 12,       # ... its rise towards up on screen ...
     "pull": 1.8,          # ... and its distance (x the face-on distance), turned
@@ -68,16 +75,27 @@ PALETTE = [(0.90, 0.25, 0.30), (0.20, 0.60, 0.95), (0.98, 0.75, 0.15), (0.35, 0.
            (0.85, 0.85, 0.85), (0.60, 0.35, 0.20)]
 
 
+# The settings that only time the reveal: they change the timeline's rows, not how a row looks.
+TIMING = ("start_s", "slices_per_s", "speed_s", "reveal_s", "rise_s", "fall_s", "hide", "back_slices_per_s",
+          "fade_s", "blender")
+
+
 def enabled(m):
     return bool(m["segments"]["ids"])
 
 
+def look(s):
+    """The segments' settings that decide how a frame with meshes looks, given its timeline row."""
+    return {k: v for k, v in s.items() if k not in TIMING}
+
+
 def add_reveal(fly, mv, s):
     """The fly-through's timeline (pipeline.movie.timeline, no hold at the start; zoom-out at its end) with
-    the reveal: the scroll sped up to slices_per_s (z), the camera's turn ``reveal`` (0-1: up over rise_s
-    from the reveal's start, down over fall_s from the zoom-out's start), ``mesh_from``, the plane where
-    the reveal started (the cut then; NaN before it: the meshes show between it and the cut) and
-    ``mesh_alpha``, their opacity (fading out over fade_s before the zoom-out)."""
+    the reveal: the scroll sped up to slices_per_s (z) and, hide scroll, reversed to swallow the meshes
+    before the zoom-out; the camera's turn ``reveal`` (0-1: up over rise_s from the reveal's start, down over
+    fall_s: ending as the zoom-out starts, or for hide fade from then); ``mesh_from``, the plane where the
+    reveal started (the cut then; NaN before it: the meshes show between it and the cut); ``mesh_alpha``,
+    their opacity (hide fade: fading out over fade_s before the zoom-out)."""
     t = fly["t"].to_numpy()
     t1, t4 = mv["zoom_s"], mv["zoom_s"] + mv["hold_end_s"]
     r0 = t1 + s["start_s"]
@@ -85,7 +103,11 @@ def add_reveal(fly, mv, s):
     if min(s["start_s"], s["speed_s"], s["reveal_s"], s["fade_s"]) < 0 or min(s["rise_s"], s["fall_s"],
                                                                          s["slices_per_s"]) <= 0:
         raise ValueError("tissue_movie.segments: the times must be >= 0, rise_s, fall_s and slices_per_s > 0")
-    if s["fade_s"] and t4 - s["fade_s"] <= r0:
+    if s["hide"] not in ("scroll", "fade"):
+        raise ValueError(f"tissue_movie.segments.hide must be scroll or fade, not {s['hide']!r}")
+    if mv["direction"] != 1:
+        raise ValueError("tissue_movie.segments: needs movie.direction 1 (the scroll towards higher z)")
+    if s["hide"] == "fade" and s["fade_s"] and t4 - s["fade_s"] <= r0:
         raise ValueError("tissue_movie.segments: fade_s must start after the reveal does (a longer movie.hold_end_s)")
     if max(r1 + s["speed_s"], r0 + s["rise_s"]) > t4 + 1e-9:
         raise ValueError(f"tissue_movie.segments: the reveal needs movie.hold_end_s >= "
@@ -95,11 +117,47 @@ def add_reveal(fly, mv, s):
     fast = ease(t, r0, r0 + s["speed_s"]) * (1 - ease(t, r1, r1 + s["speed_s"]))
     extra = (np.sign(mv["direction"]) * s["slices_per_s"] - v) * fast
     out = fly.copy()
-    out["z"] = z + np.concatenate([[0], np.cumsum((extra[1:] + extra[:-1]) / 2 * np.diff(t))])
-    out["reveal"] = ease(t, r0, r0 + s["rise_s"]) * (1 - ease(t, t4, t4 + s["fall_s"]))
-    out["mesh_from"] = np.where(t >= r0, float(np.interp(r0, t, out["z"])) + 0.5, np.nan)
-    out["mesh_alpha"] = 1 - ease(t, t4 - s["fade_s"], t4) if s["fade_s"] else np.ones(len(t))
+    out["z"] = z + _integral(extra, t)
+    start = float(np.interp(r0, t, out["z"])) + 0.5
+    if s["hide"] == "fade":
+        out["reveal"] = ease(t, r0, r0 + s["rise_s"]) * (1 - ease(t, t4, t4 + s["fall_s"]))
+        out["mesh_alpha"] = 1 - ease(t, t4 - s["fade_s"], t4) if s["fade_s"] else np.ones(len(t))
+    else:
+        out["z"] = out["z"] + _back(t, v, s, r1 + s["speed_s"], t4, out["z"].to_numpy(), start - 1)
+        out["reveal"] = ease(t, r0, r0 + s["rise_s"]) * (1 - ease(t, t4 - s["fall_s"], t4))
+        out["mesh_alpha"] = 1.0
+    out["mesh_from"] = np.where(t >= r0, start, np.nan)
     return out
+
+
+def _integral(v, t):
+    """The integral of ``v`` (sampled at times ``t``) from t[0] on (trapezoids)."""
+    return np.concatenate([[0], np.cumsum((v[1:] + v[:-1]) / 2 * np.diff(t))])
+
+
+def _back(t, v, s, earliest, t4, z, z_end):
+    """The change to ``z`` (the forward scroll, speed ``v``) by the reverse scroll that ends at ``t4`` (the
+    zoom-out) with the cut's slice at ``z_end``: from ``tb`` the speed eases from v to -back_slices_per_s
+    over speed_s, holds, and eases to -v over the last speed_s (the zoom-out's scroll-back takes over from
+    there); tb as late as that allows (the longest hold), and not before ``earliest`` (the reveal's scroll)."""
+    back = float(s["back_slices_per_s"] or s["slices_per_s"])
+    sp = s["speed_s"]
+
+    def change(tb):
+        w = (-back - v) * ease(t, tb, tb + sp) * (1 - ease(t, t4 - sp, t4)) - 2 * v * ease(t, t4 - sp, t4)
+        return _integral(w, t)
+
+    def end(tb):                                      # the cut's slice at t4
+        return float(np.interp(t4, t, z + change(tb)))
+
+    lo, hi = earliest, t4 - 2 * sp
+    if hi < lo or end(lo) > z_end:
+        raise ValueError("tissue_movie.segments: the reverse scroll (hide: scroll) cannot swallow the meshes before "
+                         "the zoom-out: a longer movie.hold_end_s or a faster back_slices_per_s")
+    for _ in range(60):                               # end(tb) grows with tb: the latest tb that reaches z_end
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if end(mid) <= z_end else (lo, mid)
+    return change(lo)
 
 
 def shown(z, mesh_from):
@@ -211,10 +269,50 @@ def layer_rows(plan):
             & (plan["mesh_alpha"] > 0)).to_numpy()
 
 
+def plan_layers(s, rows, out, size, focal, up, origin, overwrite=False):
+    """(the Blender frames still to render, {frame: key}) for the mesh layers of timeline ``rows`` in ``out``.
+    A layer is kept if the look (``look``, size, origin) is unchanged and its frame's camera and clip are
+    the same (its key, recorded in out/frames.json; for layers made before that file, in the last job.json).
+    A changed look removes every layer."""
+    out = Path(out)
+    stamp, record = out / "settings.json", out / "frames.json"
+    text = json.dumps(look(s) | {"size": list(size), "origin": list(origin)}, sort_keys=True)
+    keys = json.loads(record.read_text()) if record.exists() else {}
+    if not record.exists() and (out / "job.json").exists() and stamp.exists():
+        old = json.loads(stamp.read_text())               # (the settings stamp before only the look was in it)
+        if json.dumps({k: old.get(k) for k in json.loads(text)}, sort_keys=True) == text:
+            keys = {re.search(r"m(\d+)\.png$", f["path"]).group(1).lstrip("0") or "0": _key(f)
+                    for f in json.loads((out / "job.json").read_text())["frames"]}
+            stamp.write_text(text)
+    if overwrite or not stamp.exists() or stamp.read_text() != text:
+        for old in out.glob("m*.png"):
+            old.unlink()
+        keys = {}
+        cli.atomic_write(stamp, lambda p: Path(p).write_text(text))
+    frames, new = [], {}
+    for row in rows.itertuples():
+        path = out / f"m{row.frame:05d}.png"
+        cam = fly_camera(s, row.zoom, row.cx, row.cy, row.z, row.reveal, row.mesh_from, focal, up)
+        lo, hi = shown(row.z, row.mesh_from)
+        frame = {"path": str(path), "camera": blender_camera(cam, size, focal, origin),
+                 "clip": [lo - origin[2], hi - origin[2]]}
+        if path.exists() and keys.get(str(row.frame)) == _key(frame):
+            continue
+        frames.append(frame)
+        new[str(row.frame)] = _key(frame)
+    return frames, keys | new
+
+
+def _key(frame):
+    """A layer's camera and clip, as a short digest."""
+    view = json.dumps({"camera": frame["camera"], "clip": frame["clip"]}, sort_keys=True)
+    return hashlib.sha1(view.encode()).hexdigest()[:16]
+
+
 def render_layers(cfg, plan, frames_dir, volume, work, size, focal, up, overwrite=False, only=None):
     """Render the mesh layers (RGBA PNG, ``frames_dir``/meshes/m<frame>.png) of the frames that show meshes
     (``layer_rows``; of those, the frame numbers in ``only``), with Blender; layers from an earlier run
-    with the same settings are kept."""
+    with the same look, camera and clip are kept (``plan_layers``)."""
     s = cfg["tissue_movie"]["segments"]
     paths = fetch(s, volume, work)
     rows = plan[layer_rows(plan)]
@@ -223,23 +321,10 @@ def render_layers(cfg, plan, frames_dir, volume, work, size, focal, up, overwrit
     out = Path(frames_dir) / "meshes"
     out.mkdir(parents=True, exist_ok=True)
     origin = [float(v) for v in cfg["movie"]["target"]]
-    settings = {k: v for k, v in s.items() if k not in ("blender", "fade_s")} | {"size": list(size), "origin": origin}
-    stamp = out / "settings.json"
-    text = json.dumps(settings, sort_keys=True)
-    if overwrite or not stamp.exists() or stamp.read_text() != text:
-        for old in out.glob("m*.png"):
-            old.unlink()
-        cli.atomic_write(stamp, lambda p: Path(p).write_text(text))
-    frames = []
-    for row in rows.itertuples():
-        path = out / f"m{row.frame:05d}.png"
-        if path.exists():
-            continue
-        cam = fly_camera(s, row.zoom, row.cx, row.cy, row.z, row.reveal, row.mesh_from, focal, up)
-        lo, hi = shown(row.z, row.mesh_from)
-        frames.append({"path": str(path), "camera": blender_camera(cam, size, focal, origin),
-                       "clip": [lo - origin[2], hi - origin[2]]})
+    frames, keys = plan_layers(s, rows, out, size, focal, up, origin, overwrite)
+    record = out / "frames.json"
     if not frames:
+        cli.atomic_write(record, lambda p: Path(p).write_text(json.dumps(keys, sort_keys=True)))
         log.info("mesh layers: all %d done", len(rows))
         return out
     look = ("samples", "roughness", "subsurface", "subsurface_scale", "hdri", "hdri_rotation_deg", "hdri_strength",
@@ -257,4 +342,5 @@ def render_layers(cfg, plan, frames_dir, volume, work, size, focal, up, overwrit
     missing = [f["path"] for f in frames if not Path(f["path"]).exists()]
     if missing:
         raise RuntimeError(f"Blender left {len(missing)} mesh layers unwritten, e.g. {missing[0]}")
+    cli.atomic_write(record, lambda p: Path(p).write_text(json.dumps(keys, sort_keys=True)))
     return out

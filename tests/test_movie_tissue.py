@@ -1,8 +1,10 @@
 """movie_tissue: the 3D tissue mask, the slice-stack volume renderer (grey values unchanged, opacity
 only), the timeline, the fly-through ending and the CLI."""
 
+import json
 import math
 import shutil
+from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -454,7 +456,7 @@ def test_portrait_frames(tmp_path):
 
 
 SEGMENTS = {"ids": [1, 2], "start_s": 0.2, "slices_per_s": 6, "speed_s": 0.2, "reveal_s": 0.4, "rise_s": 0.3,
-            "fall_s": 0.3, "fade_s": 0.3, "yaw_deg": 20, "tilt_deg": 10, "pull": 1.5}
+            "fall_s": 0.3, "hide": "fade", "fade_s": 0.3, "yaw_deg": 20, "tilt_deg": 10, "pull": 1.5}
 
 
 def _segments_cfg(tmp_path, **seg):
@@ -630,3 +632,51 @@ def test_meshes_fade_before_the_zoom_out(tmp_path):
     frame = mt.render_frame(cfg, SimpleNamespace(**row.to_dict())).astype(float)
     a = row.mesh_alpha
     assert 0 < frame[15, 15, 0] and frame[15, 15, 2] == pytest.approx(255 * a + frame[15, 15, 0], abs=2)
+
+
+def test_reverse_scroll_swallows_the_meshes(tmp_path):
+    """hide scroll: after the hold the scroll reverses at back_slices_per_s and the cut is back past the
+    reveal's start plane as the zoom-out starts (at the zoom-out's speed, backwards: no jump), the camera
+    face-on again; the hold ends as late as that allows; too short a hold is an error."""
+    cfg = _segments_cfg(tmp_path, hide="scroll", back_slices_per_s=12)
+    cfg["movie"]["hold_end_s"] = 3.0
+    cfg["tissue_movie"]["zoom_out_s"] = 1.0                                   # (frames past the zoom-out's start)
+    fly = mt.fly_plan(cfg, (48, 64, 96))
+    t, z = fly["t"].to_numpy(), fly["z"].to_numpy()
+    t4 = 1.0 + 3.0
+    start = fly["mesh_from"].dropna().iloc[0]
+    v = np.gradient(z, t)
+    assert v[(t > 1.2) & (t < 2.2)].max() == pytest.approx(6, rel=0.05)      # the reveal, forwards
+    assert v.min() == pytest.approx(-12, rel=0.05)                            # back at back_slices_per_s
+    end = np.interp(t4, t, z)
+    assert end + 0.5 <= start - 0.5 + 1e-6 and end + 0.5 > start - 1.5        # just past the start plane
+    assert np.interp(t4 + 0.1, t, v) == pytest.approx(-2, rel=0.1)            # handing over at -(the scroll)
+    assert fly["reveal"].to_numpy()[t >= t4 - 1e-9].max() == pytest.approx(0, abs=1e-9)
+    assert (fly["mesh_alpha"] == 1).all()
+    held = (t > 2.2) & (v > 0)                                                # the hold: forwards, at the scroll
+    assert held.any() and v[held][:2] == pytest.approx(2, rel=0.05)
+    cfg["movie"]["hold_end_s"] = 1.2                                          # (no room after the reveal)
+    with pytest.raises(ValueError, match="reverse scroll"):
+        mt.fly_plan(cfg, (48, 64, 96))
+
+
+def test_mesh_layers_kept_while_camera_and_clip_are_the_same(tmp_path):
+    """plan_layers: a layer is redone only if its frame's camera or clip changed, or the look did."""
+    cfg = _segments_cfg(tmp_path, hide="scroll", back_slices_per_s=12)
+    cfg["movie"]["hold_end_s"] = 3.0
+    _, plan = mt.plan_of(cfg)
+    rows = plan[ms.layer_rows(plan)]
+    s, out = cfg["tissue_movie"]["segments"], tmp_path / "layers"
+    out.mkdir()
+    args = (out, (64, 48), 100.0, -1, [40.0, 32.0, 12.0])
+    frames, keys = ms.plan_layers(s, rows, *args)
+    assert len(frames) == len(rows)
+    for f in frames:
+        Path(f["path"]).write_bytes(b"png")
+    (out / "frames.json").write_text(json.dumps(keys))
+    assert ms.plan_layers(s, rows, *args)[0] == []                            # all kept
+    moved = rows.copy()
+    moved.loc[moved.index[-3:], "z"] += 1.0                                   # three frames' clip changed
+    assert len(ms.plan_layers(s, moved, *args)[0]) == 3
+    assert ms.plan_layers({**s, "back_slices_per_s": 20}, rows, *args)[0] == []   # timing alone: kept
+    assert len(ms.plan_layers({**s, "pull": 2.0}, rows, *args)[0]) == len(rows)    # the look: all redone
