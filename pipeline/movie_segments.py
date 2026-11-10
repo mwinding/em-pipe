@@ -29,6 +29,8 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -228,9 +230,12 @@ def write_ply(path, vertices, faces):
     cli.atomic_write(path, write)
 
 
+FETCH_THREADS = 8   # meshes fetched at once (each a few requests, ~3 s)
+
+
 def fetch(s, volume, work):
     """The segments' meshes as PLY files in s0 voxels (x, y, z) of ``volume`` in ``work``/segments/; those
-    already there are kept."""
+    already there are kept. FETCH_THREADS at a time, one CloudVolume per thread."""
     from cloudvolume import CloudVolume
 
     out = mesh_dir(work)
@@ -239,17 +244,21 @@ def fetch(s, volume, work):
     if not voxel:
         raise ValueError(f"{volume}: no voxel size in its metadata")
     scale = np.array([voxel["x"], voxel["y"], voxel["z"]], float)
-    cv = None
-    for sid in s["ids"]:
-        path = out / f"{int(sid)}.ply"
-        if path.exists():
-            continue
-        if cv is None:
-            cv = CloudVolume(s["source"], use_https=True, progress=False)
-        mesh = cv.mesh.get(int(sid))
-        mesh = mesh[int(sid)] if isinstance(mesh, dict) else mesh
-        write_ply(path, mesh.vertices / scale, mesh.faces)
-        log.info("segment %d: %d vertices, %d faces", sid, len(mesh.vertices), len(mesh.faces))
+    todo = [int(sid) for sid in s["ids"] if not (out / f"{int(sid)}.ply").exists()]
+    local = threading.local()
+
+    def one(sid):
+        if not hasattr(local, "cv"):
+            local.cv = CloudVolume(s["source"], use_https=True, progress=False)
+        mesh = local.cv.mesh.get(sid)
+        mesh = mesh[sid] if isinstance(mesh, dict) else mesh
+        write_ply(out / f"{sid}.ply", mesh.vertices / scale, mesh.faces)
+        return sid, len(mesh.vertices), len(mesh.faces)
+
+    if todo:
+        with ThreadPoolExecutor(min(FETCH_THREADS, len(todo))) as pool:
+            for sid, nv, nf in pool.map(one, todo):
+                log.info("segment %d: %d vertices, %d faces", sid, nv, nf)
     return [out / f"{int(sid)}.ply" for sid in s["ids"]]
 
 
