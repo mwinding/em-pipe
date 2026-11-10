@@ -279,10 +279,11 @@ def layer_rows(plan):
 
 
 def plan_layers(s, rows, out, size, focal, up, origin, overwrite=False):
-    """(the Blender frames still to render, {frame: key}) for the mesh layers of timeline ``rows`` in ``out``.
-    A layer is kept if the look (``look``, size, origin) is unchanged and its frame's camera and clip are
-    the same (its key, recorded in out/frames.json; for layers made before that file, in the last job.json).
-    A changed look removes every layer."""
+    """(the Blender frames still to render, {frame: key} of those) for the mesh layers of timeline ``rows``
+    in ``out``. A layer is kept if the look (``look``, size, origin) is unchanged and its frame's camera and
+    clip are the same: its key, in m<frame>.key next to it (one file per layer, so jobs rendering different
+    frames side by side don't overwrite each other's), or for older layers in out/frames.json or the last
+    job.json. A changed look removes every layer."""
     out = Path(out)
     stamp, record = out / "settings.json", out / "frames.json"
     text = json.dumps(look(s) | {"size": list(size), "origin": list(origin)}, sort_keys=True)
@@ -294,8 +295,8 @@ def plan_layers(s, rows, out, size, focal, up, origin, overwrite=False):
                     for f in json.loads((out / "job.json").read_text())["frames"]}
             stamp.write_text(text)
     if overwrite or not stamp.exists() or stamp.read_text() != text:
-        for old in out.glob("m*.png"):
-            old.unlink()
+        for old in [*out.glob("m*.png"), *out.glob("m*.key"), record]:
+            old.unlink(missing_ok=True)
         keys = {}
         cli.atomic_write(stamp, lambda p: Path(p).write_text(text))
     frames, new = [], {}
@@ -305,11 +306,19 @@ def plan_layers(s, rows, out, size, focal, up, origin, overwrite=False):
         lo, hi = shown(row.z, row.mesh_from)
         frame = {"path": str(path), "camera": blender_camera(cam, size, focal, origin),
                  "clip": [lo - origin[2], hi - origin[2]]}
-        if path.exists() and keys.get(str(row.frame)) == _key(frame):
+        side = path.with_suffix(".key")
+        had = side.read_text() if side.exists() else keys.get(str(row.frame))
+        if path.exists() and had == _key(frame):
             continue
         frames.append(frame)
-        new[str(row.frame)] = _key(frame)
-    return frames, keys | new
+        new[row.frame] = _key(frame)
+    return frames, new
+
+
+def record_keys(out, keys):
+    """Record each layer's key ({frame: key}) in m<frame>.key next to it."""
+    for frame, key in keys.items():
+        cli.atomic_write(Path(out) / f"m{int(frame):05d}.key", lambda p, key=key: Path(p).write_text(key))
 
 
 def _key(frame):
@@ -331,16 +340,14 @@ def render_layers(cfg, plan, frames_dir, volume, work, size, focal, up, overwrit
     out.mkdir(parents=True, exist_ok=True)
     origin = [float(v) for v in cfg["movie"]["target"]]
     frames, keys = plan_layers(s, rows, out, size, focal, up, origin, overwrite)
-    record = out / "frames.json"
     if not frames:
-        cli.atomic_write(record, lambda p: Path(p).write_text(json.dumps(keys, sort_keys=True)))
         log.info("mesh layers: all %d done", len(rows))
         return out
     look = ("samples", "roughness", "subsurface", "subsurface_scale", "hdri", "hdri_rotation_deg", "hdri_strength",
             "exposure")
     job = {"size": list(size), "origin": origin, "frames": frames, **{k: s[k] for k in look},
            "meshes": [{"path": str(p), "color": c} for p, c in zip(paths, colors(s))]}
-    job_path = out / "job.json"
+    job_path = out / f"job-{min(keys):05d}-{max(keys):05d}.json"     # (one per job: jobs may run side by side)
     cli.atomic_write(job_path, lambda p: Path(p).write_text(json.dumps(job)))
     exe = s["blender"] or os.environ.get("EM_PIPE_BLENDER") or "blender"
     if not shutil.which(exe):
@@ -351,5 +358,5 @@ def render_layers(cfg, plan, frames_dir, volume, work, size, focal, up, overwrit
     missing = [f["path"] for f in frames if not Path(f["path"]).exists()]
     if missing:
         raise RuntimeError(f"Blender left {len(missing)} mesh layers unwritten, e.g. {missing[0]}")
-    cli.atomic_write(record, lambda p: Path(p).write_text(json.dumps(keys, sort_keys=True)))
+    record_keys(out, keys)
     return out

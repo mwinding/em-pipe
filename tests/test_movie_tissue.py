@@ -670,13 +670,31 @@ def test_mesh_layers_kept_while_camera_and_clip_are_the_same(tmp_path):
     out.mkdir()
     args = (out, (64, 48), 100.0, -1, [40.0, 32.0, 12.0])
     frames, keys = ms.plan_layers(s, rows, *args)
-    assert len(frames) == len(rows)
+    assert len(frames) == len(rows) and sorted(keys) == sorted(rows["frame"])
     for f in frames:
         Path(f["path"]).write_bytes(b"png")
-    (out / "frames.json").write_text(json.dumps(keys))
+    ms.record_keys(out, keys)
     assert ms.plan_layers(s, rows, *args)[0] == []                            # all kept
     moved = rows.copy()
     moved.loc[moved.index[-3:], "z"] += 1.0                                   # three frames' clip changed
     assert len(ms.plan_layers(s, moved, *args)[0]) == 3
     assert ms.plan_layers({**s, "back_slices_per_s": 20}, rows, *args)[0] == []   # timing alone: kept
     assert len(ms.plan_layers({**s, "pull": 2.0}, rows, *args)[0]) == len(rows)    # the look: all redone
+
+
+def test_mesh_layers_from_jobs_side_by_side(tmp_path):
+    """Two jobs rendering different frames each record their own layers' keys: neither loses the other's."""
+    cfg = _segments_cfg(tmp_path, hide="scroll", back_slices_per_s=12)
+    cfg["movie"]["hold_end_s"] = 3.0
+    _, plan = mt.plan_of(cfg)
+    rows = plan[ms.layer_rows(plan)]
+    s, out = cfg["tissue_movie"]["segments"], tmp_path / "layers"
+    out.mkdir()
+    args = (out, (64, 48), 100.0, -1, [40.0, 32.0, 12.0])
+    half = len(rows) // 2
+    plans = [ms.plan_layers(s, part, *args) for part in (rows.iloc[:half], rows.iloc[half:])]   # both start ...
+    for frames, keys in plans:                                                # ... then both finish
+        for f in frames:
+            Path(f["path"]).write_bytes(b"png")
+        ms.record_keys(out, keys)
+    assert ms.plan_layers(s, rows, *args)[0] == []
