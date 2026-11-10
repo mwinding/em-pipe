@@ -283,7 +283,10 @@ def plan_layers(s, rows, out, size, focal, up, origin, overwrite=False):
     in ``out``. A layer is kept if the look (``look``, size, origin) is unchanged and its frame's camera and
     clip are the same: its key, in m<frame>.key next to it (one file per layer, so jobs rendering different
     frames side by side don't overwrite each other's), or for older layers in out/frames.json or the last
-    job.json. A changed look removes every layer."""
+    job.json. A layer a job rendered but did not record (cancelled before the end) counts if its PNG is
+    complete and the newest job file listing it has its key. A frame whose view a layer of another frame
+    already shows (the same key: e.g. the timeline moved) gets a copy of it. A changed look removes every
+    layer."""
     out = Path(out)
     stamp, record = out / "settings.json", out / "frames.json"
     text = json.dumps(look(s) | {"size": list(size), "origin": list(origin)}, sort_keys=True)
@@ -295,10 +298,14 @@ def plan_layers(s, rows, out, size, focal, up, origin, overwrite=False):
                     for f in json.loads((out / "job.json").read_text())["frames"]}
             stamp.write_text(text)
     if overwrite or not stamp.exists() or stamp.read_text() != text:
-        for old in [*out.glob("m*.png"), *out.glob("m*.key"), record]:
+        for old in [*out.glob("m*.png"), *out.glob("m*.key"), *out.glob("job*.json"), record]:
             old.unlink(missing_ok=True)
         keys = {}
         cli.atomic_write(stamp, lambda p: Path(p).write_text(text))
+    known = _known_layers(out, keys)                  # {layer PNG: key}
+    have = {}                                         # {key: a layer PNG with it}
+    for png, key in known.items():
+        have.setdefault(key, png)
     frames, new = [], {}
     for row in rows.itertuples():
         path = out / f"m{row.frame:05d}.png"
@@ -306,13 +313,52 @@ def plan_layers(s, rows, out, size, focal, up, origin, overwrite=False):
         lo, hi = shown(row.z, row.mesh_from)
         frame = {"path": str(path), "camera": blender_camera(cam, size, focal, origin),
                  "clip": [lo - origin[2], hi - origin[2]]}
-        side = path.with_suffix(".key")
-        had = side.read_text() if side.exists() else keys.get(str(row.frame))
-        if path.exists() and had == _key(frame):
+        key = _key(frame)
+        if known.get(path) == key:
+            if not path.with_suffix(".key").exists():
+                record_keys(out, {row.frame: key})
+            continue
+        if key in have:                               # the same view as another frame's layer: a copy (not a link:
+            cli.atomic_write(path, lambda p, src=have[key]: shutil.copyfile(src, p))   # Blender may rewrite either)
+            record_keys(out, {row.frame: key})
             continue
         frames.append(frame)
-        new[row.frame] = _key(frame)
+        new[row.frame] = key
     return frames, new
+
+
+def _known_layers(out, legacy):
+    """{layer PNG: key} of the layers in ``out``: from their m<frame>.key; for PNGs without one, from
+    ``legacy`` ({frame: key}: frames.json, the first job.json) or else the newest job file listing them
+    that is not newer than the PNG, if the PNG is complete (a job cancelled before recording its layers)."""
+    known = {}
+    for side in out.glob("m*.key"):
+        if side.with_suffix(".png").exists():
+            known[side.with_suffix(".png")] = side.read_text()
+    listed = {}
+    for job in sorted(out.glob("job*.json"), key=lambda p: p.stat().st_mtime):
+        try:
+            entries = json.loads(job.read_text())["frames"]
+        except (OSError, ValueError, KeyError):
+            continue
+        for f in entries:
+            listed[Path(f["path"]).name] = (job.stat().st_mtime, _key(f))
+    for png in out.glob("m*.png"):
+        if png in known:
+            continue
+        frame = png.stem[1:].lstrip("0") or "0"
+        if frame in legacy:
+            known[png] = legacy[frame]
+        elif png.name in listed and listed[png.name][0] <= png.stat().st_mtime + 1 and _complete(png):
+            known[png] = listed[png.name][1]
+    return known
+
+
+def _complete(png):
+    """Whether a PNG decodes (one cut short by a cancelled job does not)."""
+    import cv2
+
+    return cv2.imread(str(png), cv2.IMREAD_UNCHANGED) is not None
 
 
 def record_keys(out, keys):

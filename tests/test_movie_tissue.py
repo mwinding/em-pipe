@@ -698,3 +698,34 @@ def test_mesh_layers_from_jobs_side_by_side(tmp_path):
             Path(f["path"]).write_bytes(b"png")
         ms.record_keys(out, keys)
     assert ms.plan_layers(s, rows, *args)[0] == []
+
+
+def test_mesh_layers_kept_by_view_and_from_cancelled_jobs(tmp_path):
+    """A layer is reused for another frame with the same view (a copy), and the layers a job rendered but
+    never recorded (cancelled) count if their PNG is complete; a cut-short PNG is rendered again."""
+    cfg = _segments_cfg(tmp_path, hide="scroll", back_slices_per_s=12)
+    cfg["movie"]["hold_end_s"] = 3.0
+    _, plan = mt.plan_of(cfg)
+    rows = plan[ms.layer_rows(plan)]
+    s, out = cfg["tissue_movie"]["segments"], tmp_path / "layers"
+    out.mkdir()
+    args = (out, (64, 48), 100.0, -1, [40.0, 32.0, 12.0])
+    frames, keys = ms.plan_layers(s, rows, *args)
+    img = np.zeros((48, 64, 4), np.uint8)
+    for f in frames:
+        cv2.imwrite(f["path"], img)
+    ms.record_keys(out, keys)
+    moved = rows.assign(frame=rows["frame"] + 90)                            # the timeline moved by 3 s
+    assert ms.plan_layers(s, moved, *args)[0] == []
+    assert all((out / f"m{k + 90:05d}.png").exists() and (out / f"m{k + 90:05d}.key").exists() for k in keys)
+    out2 = tmp_path / "cancelled"
+    out2.mkdir()
+    args2 = (out2, (64, 48), 100.0, -1, [40.0, 32.0, 12.0])
+    frames, keys = ms.plan_layers(s, rows, *args2)
+    (out2 / "job-00001-00009.json").write_text(json.dumps({"frames": frames}))   # the job's list, then its renders
+    for f in frames:
+        cv2.imwrite(f["path"], img)
+    cut = Path(frames[-1]["path"])
+    cut.write_bytes(cut.read_bytes()[:20])                                    # cut short as the job was cancelled
+    again = ms.plan_layers(s, rows, *args2)[0]
+    assert [f["path"] for f in again] == [str(cut)]
