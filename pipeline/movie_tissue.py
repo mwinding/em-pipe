@@ -926,7 +926,7 @@ def _fly_rows(m, scene, fly, n0, t0, focal, up):
     the camera then turns once round the volume (spin_s, starting spin_overlap_s before that), easing to
     rest, and the frame fades to black over end_fade_s."""
     tf = fly["t"].to_numpy()
-    cols = ["zoom", "cx", "cy", "z", "rotation"] + [c for c in ("reveal", "mesh_from", "mesh_alpha") if c in fly]
+    cols = ["zoom", "cx", "cy", "z", "rotation"] + [c for c in ("reveal", "mesh_from", "mesh_alpha", "overlay") if c in fly]
     rows = fly[cols].assign(frame=fly["frame"] + n0, t=tf + t0, part="fly")
     rows["blend"] = _ease(tf, 0, m["handover_s"])
     if not m["zoom_out_s"]:
@@ -1145,12 +1145,15 @@ def render_frame(cfg, row):
     reveal = getattr(row, "reveal", 0.0)
     reveal = float(reveal) if reveal is not None and np.isfinite(reveal) else 0.0
     mesh_from = getattr(row, "mesh_from", None)
+    overlay = getattr(row, "overlay", 0.0)
+    overlay = float(overlay) if overlay is not None and np.isfinite(overlay) else 0.0
     if row.part == "fly":
-        frame = fly_picture(cfg, state, row.zoom, row.cx, row.cy, row.z, row.rotation, row.blend, reveal, mesh_from)
+        frame = fly_picture(cfg, state, row.zoom, row.cx, row.cy, row.z, row.rotation, row.blend, reveal, mesh_from,
+                            overlay)
     else:
         frame = render_row(state["scene"], m, row)
     if movie_segments.enabled(m):                     # colour frames throughout (BGR)
-        frame = np.repeat(frame[..., None], 3, -1)
+        frame = np.repeat(frame[..., None], 3, -1) if frame.ndim == 2 else frame
         alpha = float(getattr(row, "mesh_alpha", 1.0))
         if row.part == "fly" and movie_segments.shown(row.z, mesh_from) and alpha > 0:
             path = frames_dir(cfg) / "meshes" / f"m{row.frame:05d}.png"
@@ -1166,23 +1169,28 @@ def render_frame(cfg, row):
     return frame
 
 
-def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0, reveal=0.0, mesh_from=None):
+def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0, reveal=0.0, mesh_from=None, overlay=0.0):
     """A fly-through frame (float, unrotated), tissue only and in 3D: the camera face-on to slice ``z``
     at the distance that shows it at ``zoom`` s0 voxels per frame px around (cx, cy), the volume in front
     cut away there; on the cut, the slice from the level the zoom needs (pipeline.movie.render_frame),
     its tissue only (``refine_edge`` of ``tissue_in_frame``), ``fine_weight`` of it over the scene's own
     picture of the cut (the hand-over from the scene's level); through the resin, the tissue behind it,
     from the scene. With a segments ``reveal`` (0-1), the camera turned, raised and pulled back, looking at a
-    point between the cut and ``mesh_from`` (pipeline.movie_segments.fly_camera), the cut seen in perspective."""
+    point between the cut and ``mesh_from`` (pipeline.movie_segments.fly_camera), the cut seen in perspective.
+    With an ``overlay`` (0-1, x segments.overlay), the segments' profiles on the slice coloured as their meshes
+    (pipeline.movie_segments.overlay_image), the tissue only: a BGR frame."""
     m = cfg["tissue_movie"]
     size = m["size"]
     focal = focal_px(m)
     up = -1 if m["view_rotation_deg"] == 0 else 1
     cam = movie_segments.fly_camera(m["segments"], zoom, cx, cy, z, reveal, mesh_from, focal, up)
     picture = render_volume(state["scene"], cam, size, focal, 0.0, z + 0.5, m["blend_axes"])
+    ov = float(m["segments"]["overlay"]) * overlay if fine_weight > 0 else 0.0
     if fine_weight > 0:
         if reveal > 0:
-            fine, tissue = _cut_in_view(cfg, state, cam, z, fine_weight)
+            fine, tissue = _cut_in_view(cfg, state, cam, z, fine_weight, ov)
+            if fine.ndim == 3:
+                return fine + (1 - tissue)[..., None] * picture[..., None]
             return fine + (1 - tissue) * picture
         levels = _state(cfg, levels=True)["levels"]
         fine = movie.render_frame(levels, size, zoom, cx, cy, z, rotation)[0].astype(np.float32)
@@ -1192,23 +1200,38 @@ def fly_picture(cfg, state, zoom, cx, cy, z, rotation=0.0, fine_weight=1.0, reve
         tissue = refine_edge(tissue_in_frame(state["scene"], size, zoom, cx, cy, z), guide) * np.float32(fine_weight)
         if m["crop"]:
             tissue = tissue * crop_in_frame(m["crop"], size, zoom, cx, cy)
+        if ov > 0:
+            fine = _with_overlay(cfg, fine, size, zoom, cx, cy, z, ov)
+            return tissue[..., None] * fine + (1 - tissue)[..., None] * picture[..., None]
         picture = tissue * fine + (1 - tissue) * picture
     return picture
 
 
-def _cut_in_view(cfg, state, cam, z, fine_weight):
+def _with_overlay(cfg, fine, size, zoom, cx, cy, z, opacity):
+    """The slice ``fine`` (grey, face-on as pipeline.movie.render_frame) as BGR with the segments' profiles
+    over it, ``opacity`` opaque (the labels: pipeline.movie_segments.extract_labels, run by make_frames)."""
+    if "labels" not in _WORKER:
+        loaded = movie_segments.load_labels(work_dir(cfg))
+        if loaded is None:
+            raise FileNotFoundError("no overlay labels (tissue_movie.segments.overlay): run 'frames' (it makes them)")
+        _WORKER["labels"] = (*loaded, movie_segments.overlay_lut(cfg["tissue_movie"]["segments"]))
+    labels, meta, lut = _WORKER["labels"]
+    colour, alpha = movie_segments.overlay_image(labels, meta, lut, size, zoom, cx, cy, z)
+    a = (alpha * np.float32(opacity))[..., None]
+    return fine[..., None] * (1 - a) + colour * a
+
+
+def _cut_in_view(cfg, state, cam, z, fine_weight, overlay=0.0):
     """(the slice's tissue x grey, the tissue's weight) on the cut z + 0.5 seen by ``cam`` in perspective:
     the slice (and its tissue, as in fly_picture) face-on over the part of the cut the frame shows, at the
-    scale the frame shows the cut's middle at, warped onto the frame."""
+    scale the frame shows the cut's middle at, warped onto the frame; with an ``overlay`` (its opacity), the
+    slice BGR with the segments' profiles over it."""
     m = cfg["tissue_movie"]
     size, focal = m["size"], focal_px(m)
     w, h = size
     pos, forward, right, down = cam
     zc = z + 0.5
-    rays = [forward * focal + right * (u - w / 2) + down * (v - h / 2) for u, v in ((0, 0), (w, 0), (w, h), (0, h))]
-    if min(r[2] for r in rays) <= 1e-6:
-        raise ValueError("tissue_movie.segments: the turned camera sees past the cut's horizon (less yaw or tilt)")
-    hit = np.array([pos + (zc - pos[2]) / r[2] * r for r in rays])
+    hit = movie_segments.cut_footprint(cam, size, focal, zc)
     (x0, y0), (x1, y1) = hit[:, :2].min(0), hit[:, :2].max(0)
     middle = pos + (zc - pos[2]) / forward[2] * forward              # where the view's axis meets the cut
     zoom = float((middle - pos) @ forward) / focal                   # s0 voxels per frame px there
@@ -1222,13 +1245,18 @@ def _cut_in_view(cfg, state, cam, z, fine_weight):
     tissue = refine_edge(tissue_in_frame(state["scene"], (sw, sh), zoom, bx, by, z), guide) * np.float32(fine_weight)
     if m["crop"]:
         tissue = tissue * crop_in_frame(m["crop"], (sw, sh), zoom, bx, by)
+    if overlay > 0:
+        fine = _with_overlay(cfg, fine, (sw, sh), zoom, bx, by, z, overlay)
+        tissue_fine = tissue[..., None] * fine
+    else:
+        tissue_fine = tissue * fine
     hw, hh = sw / 2 * zoom, sh / 2 * zoom
     corners = [(bx - hw, by - hh, zc), (bx + hw, by - hh, zc), (bx + hw, by + hh, zc), (bx - hw, by + hh, zc)]
     dst = movie.project(corners, cam, size, focal)
     src = np.float32([[-0.5, -0.5], [sw - 0.5, -0.5], [sw - 0.5, sh - 0.5], [-0.5, sh - 0.5]])
     warp = {"M": cv2.getPerspectiveTransform(src, (dst - 0.5).astype(np.float32)), "dsize": (w, h),
             "flags": cv2.INTER_LINEAR, "borderMode": cv2.BORDER_CONSTANT}
-    return cv2.warpPerspective(tissue * fine, **warp), cv2.warpPerspective(tissue, **warp)
+    return cv2.warpPerspective(tissue_fine, **warp), cv2.warpPerspective(tissue, **warp)
 
 
 def _write_frame(row, cfg=None):
@@ -1284,7 +1312,8 @@ def make_frames(cfg, only=None, overwrite=False, workers=None, no_meshes=False):
         # themselves), so a change keeps the frames it does not touch.
         settings["segments"] = True
         look = json.dumps(movie_segments.look(m["segments"]), sort_keys=True)
-        mine = (plan["reveal"].fillna(0) > 0).to_numpy() | movie_segments.layer_rows(plan)
+        mine = ((plan["reveal"].fillna(0) > 0).to_numpy() | movie_segments.layer_rows(plan)
+                | movie_segments.overlay_rows(plan))
         plan = plan.assign(meshes=np.where(mine, hashlib.sha1(look.encode()).hexdigest()[:12], ""))
     plan_text = f"# {json.dumps(settings, sort_keys=True)}\n" + plan.to_csv(index=False, float_format="%.6f")
     if overwrite or not plan_csv.exists() or plan_csv.read_text() != plan_text:
@@ -1304,6 +1333,9 @@ def make_frames(cfg, only=None, overwrite=False, workers=None, no_meshes=False):
             log.info("%d frames kept from the earlier run", len(reuse))
         cli.atomic_write(plan_csv, lambda p: Path(p).write_text(plan_text))
     rows = plan if only is None else plan[plan["frame"].isin(only)]
+    if movie_segments.overlay_rows(rows).any():       # the overlay's labels, once (before the workers start)
+        movie_segments.extract_labels(cfg, plan, work_dir(cfg), movie.volume_path(cfg), m["size"], focal_px(m),
+                                      -1 if m["view_rotation_deg"] == 0 else 1)
     if no_meshes:
         rows = rows[~movie_segments.layer_rows(rows)]
     todo = [row for row in rows.to_dict("records") if not (out / f"f{row['frame']:05d}.png").exists()]

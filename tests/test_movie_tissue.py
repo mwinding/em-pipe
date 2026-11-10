@@ -729,3 +729,66 @@ def test_mesh_layers_kept_by_view_and_from_cancelled_jobs(tmp_path):
     cut.write_bytes(cut.read_bytes()[:20])                                    # cut short as the job was cancelled
     again = ms.plan_layers(s, rows, *args2)[0]
     assert [f["path"] for f in again] == [str(cut)]
+
+
+def test_overlay_fades_in_at_full_zoom_and_out_before_the_zoom_out(tmp_path):
+    cfg = _segments_cfg(tmp_path, hide="scroll", back_slices_per_s=12, overlay=0.5, overlay_in_s=0.2, overlay_out_s=0.2)
+    cfg["movie"]["hold_end_s"] = 3.0
+    cfg["tissue_movie"]["zoom_out_s"] = 1.0
+    fly = mt.fly_plan(cfg, (48, 64, 96))
+    t, ov = fly["t"].to_numpy(), fly["overlay"].to_numpy()
+    assert ov[t <= 1.0 + 1e-9].max() == 0 and ov[(t >= 1.2) & (t <= 3.8)].min() == pytest.approx(1)
+    assert ov[t >= 4.0 - 1e-9].max() == pytest.approx(0, abs=1e-9)          # (zoom_s 1, hold_end_s 3)
+    cfg = _segments_cfg(tmp_path, hide="scroll", back_slices_per_s=12)
+    cfg["movie"]["hold_end_s"] = 3.0
+    assert "overlay" not in mt.fly_plan(cfg, (48, 64, 96))                   # (off by default)
+
+
+def test_ids_to_label_indices():
+    block = np.array([[5, 7, 0], [9, 5, 123456789012345678]], np.uint64)
+    out = ms.map_ids(block, [9, 5, 123456789012345678])
+    assert out.dtype == np.uint8 and out.tolist() == [[2, 0, 0], [1, 2, 3]]
+    assert ms.map_ids(block, list(range(1, 300))).dtype == np.uint16
+
+
+def _with_labels(cfg, block):
+    """Labels for the test volume (one segmentation voxel per s0 voxel): index 1 in ``block`` (z, y, x)."""
+    labels = np.zeros((48, 64, 96), np.uint8)
+    labels[block] = 1
+    out = ms.mesh_dir(mt.work_dir(cfg))
+    out.mkdir(parents=True, exist_ok=True)
+    np.save(out / "labels.npy", labels)
+    s = cfg["tissue_movie"]["segments"]
+    (out / "labels.json").write_text(json.dumps({"source": s["source"], "ids": [int(v) for v in s["ids"]],
+                                                 "origin": [0, 0, 0], "shape": [48, 64, 96], "scale": [1, 1, 1]}))
+
+
+def test_overlay_colours_the_segments_profiles_on_the_slice(tmp_path):
+    """The profiles land on their own pixels, in their colour (sRGB of the linear base colour), over the
+    tissue only; drawn in perspective with no turn they match face-on."""
+    cfg = _segments_cfg(tmp_path, overlay=1.0, colors=[[1, 0, 0], [0, 1, 0]], yaw_deg=0, tilt_deg=0, pull=1.0)
+    mt.plan_of(cfg)
+    _with_labels(cfg, np.s_[:, 26:34, 30:40])
+    args = (1.0, 35.0, 31.0, 20.0)                     # frame px (u, v) <-> x = u + 3.5, y = v + 7.5
+    face = mt.fly_picture(cfg, mt._WORKER, *args, overlay=1.0)
+    assert face.shape == (48, 64, 3)
+    inside, outside = face[20:26, 28:35], face[20:26, 40:44]              # y 26-34, x 30-40: the block
+    assert (inside[..., 2] > 250).all() and (inside[..., :2] < 5).all()      # red (BGR), opaque
+    assert np.abs(outside[..., 0] - outside[..., 2]).max() < 1e-3            # grey elsewhere
+    turned = mt.fly_picture(cfg, mt._WORKER, *args, reveal=1.0, overlay=1.0)
+    assert np.abs(face - turned)[3:-3, 3:-3].max() < 3
+
+
+def test_overlay_opacity_keeps_the_mesh_layers(tmp_path):
+    cfg = _segments_cfg(tmp_path, hide="scroll", back_slices_per_s=12)
+    cfg["movie"]["hold_end_s"] = 3.0
+    _, plan = mt.plan_of(cfg)
+    rows = plan[ms.layer_rows(plan)]
+    s, out = cfg["tissue_movie"]["segments"], tmp_path / "layers"
+    out.mkdir()
+    args = (out, (64, 48), 100.0, -1, [40.0, 32.0, 12.0])
+    frames, keys = ms.plan_layers(s, rows, *args)
+    for f in frames:
+        Path(f["path"]).write_bytes(b"png")
+    ms.record_keys(out, keys)
+    assert ms.plan_layers({**s, "overlay": 0.45}, rows, *args)[0] == []

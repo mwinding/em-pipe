@@ -9,7 +9,10 @@ segments stand in front of it. The scroll slows back down and the segments hold;
 scroll reverses (``back_slices_per_s``) and the returning section swallows them slice by slice while the
 camera comes face-on again (``fall_s``), until the cut is back at the plane where the reveal started as
 the zoom-out begins, its own scroll-back carrying on from there; or they fade out (``fade_s``) before the
-zoom-out. Either way the edges of a segmentation cutout never show as the view widens.
+zoom-out. Either way the edges of a segmentation cutout never show as the view widens. With ``overlay``,
+the segments' profiles on the section are coloured as their meshes (their 2D segmentation), fading in as
+the zoom reaches full resolution, so the meshes then grow out of them; they stay on the moving section
+through the reveal and fade out before the zoom-out (the labels: ``extract_labels``, once per movie).
 
 The meshes come from a Neuroglancer precomputed segmentation (``source``, e.g. precomputed://https://...;
 read with CloudVolume, no credentials) in the volume's own frame (nm, as the volume's voxel size makes s0
@@ -55,6 +58,9 @@ DEFAULTS = {
                           # swallows them: the hold ends as late as that allows) or fade (fade_s)
     "back_slices_per_s": None,   # scroll: the scroll's speed backwards (reached over speed_s); null: slices_per_s
     "fade_s": 1.0,        # fade: the meshes fade out over this long, ending as the zoom-out starts
+    "overlay": 0.0,       # the segments' profiles on the section in their colours, this opaque (0: none) ...
+    "overlay_in_s": 0.7,  # ... fading in over this long from the zoom's end ...
+    "overlay_out_s": 0.5, # ... and out over this long, ending as the zoom-out starts
     "yaw_deg": 25,        # the camera's turn about the y axis ...
     "tilt_deg": 12,       # ... its rise towards up on screen ...
     "pull": 1.8,          # ... and its distance (x the face-on distance), turned
@@ -79,7 +85,9 @@ PALETTE = [(0.90, 0.25, 0.30), (0.20, 0.60, 0.95), (0.98, 0.75, 0.15), (0.35, 0.
 
 # The settings that only time the reveal: they change the timeline's rows, not how a row looks.
 TIMING = ("start_s", "slices_per_s", "speed_s", "reveal_s", "rise_s", "fall_s", "hide", "back_slices_per_s",
-          "fade_s", "blender")
+          "fade_s", "overlay_in_s", "overlay_out_s", "blender")
+# The look settings that only change the frames, not the mesh layers.
+FRAME_ONLY = ("overlay",)
 
 
 def enabled(m):
@@ -89,6 +97,11 @@ def enabled(m):
 def look(s):
     """The segments' settings that decide how a frame with meshes looks, given its timeline row."""
     return {k: v for k, v in s.items() if k not in TIMING}
+
+
+def layer_look(s):
+    """The segments' settings that decide how a mesh layer looks."""
+    return {k: v for k, v in look(s).items() if k not in FRAME_ONLY}
 
 
 def add_reveal(fly, mv, s):
@@ -129,6 +142,8 @@ def add_reveal(fly, mv, s):
         out["reveal"] = ease(t, r0, r0 + s["rise_s"]) * (1 - ease(t, t4 - s["fall_s"], t4))
         out["mesh_alpha"] = 1.0
     out["mesh_from"] = np.where(t >= r0, start, np.nan)
+    if s["overlay"] > 0:
+        out["overlay"] = ease(t, t1, t1 + s["overlay_in_s"]) * (1 - ease(t, t4 - s["overlay_out_s"], t4))
     return out
 
 
@@ -269,6 +284,127 @@ def colors(s):
     return [list(map(float, v)) for v in c]
 
 
+# ---------------------------------------------------------------------------------------------------
+# The 2D overlay: the segments' profiles on the section
+
+
+def cut_footprint(cam, size, focal, zc):
+    """The frame's 4 corners (s0 voxels, x, y, z; top-left, top-right, bottom-right, bottom-left) on the
+    plane z = ``zc`` as ``cam`` (pipeline.movie.camera) sees it."""
+    w, h = size
+    pos, forward, right, down = cam
+    rays = [forward * focal + right * (u - w / 2) + down * (v - h / 2) for u, v in ((0, 0), (w, 0), (w, h), (0, h))]
+    if min(r[2] for r in rays) <= 1e-6:
+        raise ValueError("tissue_movie.segments: the turned camera sees past the cut's horizon (less yaw or tilt)")
+    return np.array([pos + (zc - pos[2]) / r[2] * r for r in rays])
+
+
+def overlay_lut(s):
+    """BGR (0-255, float) of each label index: 0 none, i the segment ids[i - 1] in its colour, as Blender
+    shows it (linear base colour, sRGB on screen)."""
+    rgb = np.array([[0.0, 0.0, 0.0]] + colors(s), float)
+    srgb = np.where(rgb <= 0.0031308, 12.92 * rgb, 1.055 * np.power(np.clip(rgb, 0, 1), 1 / 2.4) - 0.055)
+    return (255 * srgb[:, ::-1]).astype(np.float32)
+
+
+def map_ids(block, ids):
+    """``block`` (segment IDs) as label indices: i + 1 where it is ids[i], else 0 (uint8 for < 256 ids)."""
+    ids = np.asarray(ids, np.uint64)
+    order = np.argsort(ids)
+    sorted_ids = ids[order]
+    pos = np.clip(np.searchsorted(sorted_ids, block), 0, len(ids) - 1)
+    out = np.where(sorted_ids[pos] == block, order[pos] + 1, 0)
+    return out.astype(np.uint8 if len(ids) < 256 else np.uint16)
+
+
+def overlay_rows(plan):
+    """The timeline rows (a boolean mask) whose frames show the overlay."""
+    if "overlay" not in plan.columns:
+        return np.zeros(len(plan), bool)
+    return ((plan["part"] == "fly") & (plan["overlay"].fillna(0) > 0)).to_numpy()
+
+
+def extract_labels(cfg, plan, work, volume, size, focal, up):
+    """The label volume of the overlay (work/segments/labels.npy, z, y, x label indices ``map_ids``; with
+    labels.json: source, ids, origin and shape in segmentation voxels, scale: s0 voxels per segmentation
+    voxel): the part of the segmentation the overlay's frames show on the cut (their footprints, padded),
+    read once with CloudVolume, in blocks of its chunk depth; kept while it covers what is needed."""
+    from cloudvolume import CloudVolume
+
+    s = cfg["tissue_movie"]["segments"]
+    rows = plan[overlay_rows(plan)]
+    if not len(rows):
+        return None
+    lo, hi = np.full(3, np.inf), np.full(3, -np.inf)
+    for row in rows.itertuples():
+        cam = fly_camera(s, row.zoom, row.cx, row.cy, row.z, row.reveal, row.mesh_from, focal, up)
+        hit = cut_footprint(cam, size, focal, row.z + 0.5)
+        lo, hi = np.minimum(lo, hit.min(0)), np.maximum(hi, hit.max(0))
+    out = mesh_dir(work)
+    out.mkdir(parents=True, exist_ok=True)
+    path, meta_path = out / "labels.npy", out / "labels.json"
+    ids = [int(v) for v in s["ids"]]
+
+    def wanted(scale, bounds=None):                   # the segmentation voxels needed, padded
+        a, b = np.floor(lo / scale).astype(int) - 4, np.ceil(hi / scale).astype(int) + 4
+        return (a, b) if bounds is None else (np.maximum(a, bounds[0]), np.minimum(b, bounds[1]))
+
+    if path.exists() and meta_path.exists():
+        meta = json.loads(meta_path.read_text())
+        a, b = wanted(np.asarray(meta["scale"]), meta.get("bounds"))
+        if (meta["source"] == s["source"] and meta["ids"] == ids and (np.array(meta["origin"]) <= a).all()
+                and (np.array(meta["origin"]) + meta["shape"][::-1] >= b).all()):
+            return path
+    voxel = serve.voxel_nm(volume)
+    cv = CloudVolume(s["source"], use_https=True, progress=False, fill_missing=True)
+    scale = np.asarray(cv.resolution, float) / [voxel["x"], voxel["y"], voxel["z"]]
+    bounds = [list(map(int, cv.bounds.minpt)), list(map(int, cv.bounds.maxpt))]
+    want_lo, want_hi = wanted(scale, bounds)
+    shape = (want_hi - want_lo)[::-1]                 # (z, y, x)
+    log.info("overlay labels: %s segmentation voxels from %s", shape.tolist(), want_lo.tolist())
+    tmp = path.with_suffix(".part.npy")
+    labels = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.uint8 if len(ids) < 256 else np.uint16,
+                                       shape=tuple(int(v) for v in shape))
+    depth = int(cv.chunk_size[2])
+    for z0 in range(int(want_lo[2]), int(want_hi[2]), depth):
+        z1 = min(z0 + depth, int(want_hi[2]))
+        block = np.asarray(cv[want_lo[0]:want_hi[0], want_lo[1]:want_hi[1], z0:z1])[..., 0]
+        labels[z0 - want_lo[2]:z1 - want_lo[2]] = map_ids(block.transpose(2, 1, 0), ids)
+    labels.flush()
+    del labels
+    os.replace(tmp, path)
+    meta = {"source": s["source"], "ids": ids, "origin": want_lo.tolist(), "shape": [int(v) for v in shape],
+            "scale": scale.tolist(), "bounds": bounds}
+    cli.atomic_write(meta_path, lambda p: Path(p).write_text(json.dumps(meta)))
+    return path
+
+
+def load_labels(work):
+    """(labels memory-mapped, labels.json) of ``extract_labels``, or None."""
+    path, meta_path = mesh_dir(work) / "labels.npy", mesh_dir(work) / "labels.json"
+    if not path.exists() or not meta_path.exists():
+        return None
+    return np.load(path, mmap_mode="r"), json.loads(meta_path.read_text())
+
+
+def overlay_image(labels, meta, lut, size, zoom, cx, cy, z):
+    """(BGR float, alpha 0/1) of the overlay on a face-on frame of slice ``z`` around (cx, cy) at ``zoom``
+    s0 voxels per frame px (frame px placed as pipeline.movie.render_frame places them): each px the
+    colour of the segment at its centre (nearest segmentation voxel), alpha 1 where one is."""
+    w, h = size
+    sx, sy, sz = meta["scale"]
+    ox, oy, oz = meta["origin"]
+    k = int(math.floor((z + 0.5) / sz)) - oz
+    lab = np.zeros((h, w), labels.dtype)
+    if 0 <= k < labels.shape[0]:
+        ix = np.floor((cx + (np.arange(w) + 0.5 - w / 2) * zoom) / sx).astype(int) - ox
+        iy = np.floor((cy + (np.arange(h) + 0.5 - h / 2) * zoom) / sy).astype(int) - oy
+        okx, oky = (ix >= 0) & (ix < labels.shape[2]), (iy >= 0) & (iy < labels.shape[1])
+        if okx.any() and oky.any():
+            lab[np.ix_(oky, okx)] = np.asarray(labels[k])[np.ix_(iy[oky], ix[okx])]
+    return lut[lab], (lab > 0).astype(np.float32)
+
+
 def layer_rows(plan):
     """The timeline rows (a boolean mask) whose frames show meshes: fly-through rows whose cut is past the
     reveal's start plane, the meshes not faded out."""
@@ -289,7 +425,7 @@ def plan_layers(s, rows, out, size, focal, up, origin, overwrite=False):
     layer."""
     out = Path(out)
     stamp, record = out / "settings.json", out / "frames.json"
-    text = json.dumps(look(s) | {"size": list(size), "origin": list(origin)}, sort_keys=True)
+    text = json.dumps(layer_look(s) | {"size": list(size), "origin": list(origin)}, sort_keys=True)
     keys = json.loads(record.read_text()) if record.exists() else {}
     if not record.exists() and (out / "job.json").exists() and stamp.exists():
         old = json.loads(stamp.read_text())               # (the settings stamp before only the look was in it)
