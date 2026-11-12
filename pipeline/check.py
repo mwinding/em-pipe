@@ -45,6 +45,9 @@ DEFAULTS = {
         "timezone": None,
         # Acknowledged problems: [{file, note, action: exclude|ignore}]; exclude drops the file's slices
         "known_issues": [],
+        # Single slices to drop, by label time (the label clock's, as written): [{time, note}], e.g. a slice
+        # where the acquisition stopped part-way and only some tiles were imaged. All its tiles are excluded.
+        "exclude_slices": [],
     }
 }
 
@@ -360,6 +363,21 @@ def _tile_name(rel, m, row, col):
     return os.path.join(os.path.dirname(rel), name)
 
 
+def exclude_slices(sl, entries, tz, add):
+    """check.exclude_slices: every tile of the slice at each label time is excluded (in place), so the slice
+    neither splits a segment nor counts as missing tiles. Times are the label clock's, converted like the
+    labels when check.timezone is set. A time that matches no slice is a WARN (a typo would pass silently)."""
+    for e in entries:
+        when = pd.Timestamp(e["time"]).to_pydatetime()
+        t = pd.Timestamp(_to_utc(when, tz, None) if tz is not None else when)
+        hit = sl["timestamp"] == t
+        if not hit.any():
+            add("WARN", "EXCLUDED_SLICE_NOT_FOUND", f"check.exclude_slices: no slice at {e['time']}")
+            continue
+        sl.loc[hit, "excluded"] = True
+        sl.loc[hit, "exclude_reason"] = e.get("note") or "excluded in check.exclude_slices"
+
+
 def missing_tiles(sl, per, found, add):
     """MISSING_TILE, named by the file that would hold the tile:
 
@@ -421,6 +439,9 @@ def analyse(cfg, overwrite=False):
     for k in known_issues:
         if not (isinstance(k, dict) and k.get("file") and k.get("action", "ignore") in ("exclude", "ignore")):
             raise ValueError(f"check.known_issues: entries need a file and action exclude|ignore, got {k!r}")
+    for e in c.get("exclude_slices") or []:
+        if not (isinstance(e, dict) and e.get("time")):
+            raise ValueError(f"check.exclude_slices: entries need a time (YYYY-MM-DD HH:MM:SS), got {e!r}")
     tz = ZoneInfo(c["timezone"]) if c.get("timezone") else None
 
     def known(rel):
@@ -512,6 +533,7 @@ def analyse(cfg, overwrite=False):
     sl["timestamp"] = pd.to_datetime(sl["timestamp"])
     per = pd.DataFrame(columns=["timestamp", *GRID, "usable", "segment", "interval_s", "median_s", "gap"])
     if len(sl):
+        exclude_slices(sl, c.get("exclude_slices") or [], tz, add)
         sl = deduplicate(sl, add)
         odd_shapes(sl, add)
         per = timeline(sl, recs, float(c["gap_factor"]), add)

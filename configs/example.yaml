@@ -33,6 +33,9 @@ check:
   # Acknowledged problems: [{file, note, action: exclude|ignore}]; exclude drops the file's slices.
   # file is the path relative to raw_dir or just the file name.
   known_issues: []
+  # Single slices to drop, by label time as written: [{time: "2026-01-31 16:50:11", note}], e.g. a slice
+  # where the acquisition stopped part-way and only some tiles were imaged. All its tiles are excluded.
+  exclude_slices: []
 
 preview:
   factor: 16                 # downsampling factor (area average) for stats and thumbnails

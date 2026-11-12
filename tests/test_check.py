@@ -236,6 +236,37 @@ def test_header_and_label_faults(tmp_path):
     assert slices.loc[slices["z"] == len(t.timestamps), "file"].tolist() == ["M09_D25_tile0-0.tif"]
 
 
+def test_exclude_slice_stopped_part_way(tmp_path):
+    # The acquisition stopped after tile 0-0 of one slice: the other tiles' labels for it are empty.
+    t = synth.make_dataset(tmp_path / "raw")
+    raw, d24 = t.raw_dir, day_z(t, "M09_D24")
+    k, z = 3, d24[3]
+    for tile in ("0-1", "1-0", "1-1"):
+        name = f"M09_D24_tile{tile}.tif"
+        with tifffile.TiffFile(raw / name) as tif:
+            d, labels = tif.asarray(), list(tif.imagej_metadata["Labels"])
+        synth.write_imagej(raw / name, d, labels[:k] + [""] + labels[k + 1:])
+    cfg = config(tmp_path, raw)
+    assert run(cfg) == 1
+    _, _, issues, _ = outputs(cfg)
+    assert ("LABEL_PARSE", "M09_D24_tile0-1.tif") in pairs(issues, "ERROR")
+    assert "MISSING_TILE" in set(issues["code"])
+
+    when = t.timestamps[z].strftime("%Y-%m-%d %H:%M:%S")
+    known = [{"file": f"M09_D24_tile{tile}.tif", "note": "stopped part-way", "action": "ignore"}
+             for tile in ("0-1", "1-0", "1-1")]
+    cfg = config(tmp_path, raw, known_issues=known,
+                 exclude_slices=[{"time": when, "note": "only tile 0-0"}, {"time": "2001-01-01 00:00:00"}])
+    assert run(cfg) == 0
+    _, slices, issues, _ = outputs(cfg)
+    assert "MISSING_TILE" not in set(issues["code"])
+    assert pairs(issues, "WARN") >= {("EXCLUDED_SLICE_NOT_FOUND", "")}
+    gone = slices[slices["excluded"]]
+    assert list(zip(gone["z"], gone["tile"], gone["exclude_reason"])) == [(z, "0-0", "only tile 0-0")]
+    assert slices["segment"].nunique() == 1   # the excluded slice doesn't split the segment
+    assert z not in set(load_slices(load_config(cfg))["z"])
+
+
 def test_time_gap_and_restart(tmp_path):
     t = synth.make_dataset(tmp_path / "raw", start=datetime(2026, 9, 24, 10, 0), gaps={8: 1200}, parts=[16])
     cfg = config(tmp_path, t.raw_dir)
