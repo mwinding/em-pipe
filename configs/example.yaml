@@ -58,6 +58,9 @@ stitch:
   max_pair_rms_px: 10.0      # non-translation models: reject a slice if a pair's rms after the joint solve exceeds this
   mode: auto                 # fixed (one transform per tile and segment) | per_slice | auto
   fixed_tolerance_px: 2.0    # auto -> fixed if no tile's sampled offset is further than this from its median
+  # Mode per segment, overriding mode, e.g. {12: fixed}: for a segment whose tile columns can't be matched in
+  # many slices (their overlap in resin), one layout from the samples that could be stitched
+  segment_modes: {}
   ratio: 0.8                 # Lowe ratio test
   ransac_px: 3.0             # RANSAC inlier distance, in pixels of the image being matched
   min_inliers: 12            # fewer RANSAC inliers -> pair rejected

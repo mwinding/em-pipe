@@ -44,6 +44,10 @@ DEFAULTS = {
                                      # joint solve exceeds this (wrong matches are off by tens of px)
         "mode": "auto",              # fixed (one transform per tile and segment) | per_slice | auto
         "fixed_tolerance_px": 2.0,   # auto -> fixed if no tile's sampled offset is further than this from its median
+        # Mode per segment, overriding mode: {segment: fixed | per_slice}. E.g. fixed for a segment whose tile
+        # columns can't be matched in many slices (their overlap in resin): its slices then take the median
+        # layout of the samples that could be stitched, instead of following the few wrong matches.
+        "segment_modes": {},
         "ratio": 0.8,                # Lowe ratio test
         "ransac_px": 3.0,            # RANSAC inlier distance, in pixels of the image being matched
         "min_inliers": 12,           # fewer RANSAC inliers -> pair rejected
@@ -68,6 +72,15 @@ _IDENTITY = {"translation": [0, 0], "rigid": [0, 0, 0], "similarity": [1, 0, 0, 
 def tile_key(tile):
     """Numeric sort key for "r-c" tile ids ("2-0" before "10-0")."""
     return tuple(int(v) for v in tile.split("-"))
+
+
+def _complete(rec):
+    """True if every pair of grid neighbours among the sample's tiles was matched and used in its solve."""
+    keys = {t: tile_key(t) for t in rec["tiles"]}
+    need = {frozenset((a, b)) for a, b in combinations(keys, 2)
+            if abs(keys[a][0] - keys[b][0]) + abs(keys[a][1] - keys[b][1]) == 1}
+    used = {frozenset((p["tile_a"], p["tile_b"])) for p in rec.get("pairs", []) if p.get("used")}
+    return bool(need) and need <= used
 
 
 def sample_z(slices, every):
@@ -577,12 +590,20 @@ def merge_segment(rows, recs, opts):
         samples[t] = (np.array([r["z"] for r in have]), np.array([np.ravel(r["tiles"][t]) for r in have]))
     dev = max(float(np.linalg.norm(p[:, [2, 5]] - np.median(p[:, [2, 5]], axis=0), axis=1).max())
               for _, p in samples.values())
-    mode = opts["mode"] if opts["mode"] != "auto" else ("fixed" if dev <= opts["fixed_tolerance_px"] else "per_slice")
+    forced = segment_modes(opts).get(seg)
+    mode = forced or (opts["mode"] if opts["mode"] != "auto"
+                      else ("fixed" if dev <= opts["fixed_tolerance_px"] else "per_slice"))
 
+    # A sample with a neighbouring pair unmatched (its overlap in resin) has no check on its layout: a
+    # tile hanging off a narrow overlap can be tens of px off (e.g. 14 px at 9000 px from a 0.09 degree
+    # rotation). A fixed layout comes from the complete samples if there are any.
+    complete = [r for r in good if _complete(r)]
+    basis = complete or good
     params = {}  # tile -> (len(zs), 6)
     for t, (sz, p) in samples.items():
         if mode == "fixed":
-            params[t] = np.repeat(np.median(p, axis=0)[None], len(zs), axis=0)
+            pb = [np.ravel(r["tiles"][t]) for r in basis if t in r["tiles"]]
+            params[t] = np.repeat(np.median(pb or p, axis=0)[None], len(zs), axis=0)
         else:
             # Without refinement a bad sample would be interpolated over the intervals on either side:
             # a window-3 median drops it. With refinement, a sample unlike its neighbours gets the
@@ -607,17 +628,24 @@ def merge_segment(rows, recs, opts):
     out["segment"] = seg
     out["timestamp"] = out["timestamp"].dt.strftime("%Y-%m-%dT%H:%M:%S")
 
-    origins = {t: np.median(p[:, [2, 5]], axis=0) - shift for t, (_, p) in samples.items()}
+    origins = {t: (params[t][0][[2, 5]] - shift if mode == "fixed" else np.median(p[:, [2, 5]], axis=0) - shift)
+               for t, (_, p) in samples.items()}
     shape = (int(rows["height"].iloc[0]), int(rows["width"].iloc[0]))
     layout = {"segment": seg, "z_first": int(zs[0]), "z_last": int(zs[-1]), "tile_shape": list(shape),
               "reference_tile": good[0]["reference"], "model": opts["model"], "mode": mode,
+              "mode_from": "stitch.segment_modes" if forced else "stitch.mode",
+              "n_complete_samples": len(complete),
+              **({"fixed_from": (f"median of the {len(complete)} complete samples (every neighbouring tile pair "
+                                 "matched)" if complete else f"median of the {len(good)} good samples")}
+                 if mode == "fixed" else {}),
               "max_deviation_px": round(dev, 2), "n_samples": len(recs), "n_good_samples": len(good),
               "failed_samples": [r["z"] for r in recs if not r["ok"]],
               **_layout(rows, origins, shape)}
     pts = pd.DataFrame([{"z": z, "tile": t, "tx": v[2] - shift[0], "ty": v[5] - shift[1]}
                         for t, (sz, p) in samples.items() for z, v in zip(sz, p)])
-    log.info("segment %d: %s mode (max deviation %.2f px), %d/%d good samples, grid %s, filename row = %s",
-             seg, mode, dev, len(good), len(recs), layout["grid_shape"], layout["row_axis"])
+    log.info("segment %d: %s mode%s (max deviation %.2f px), %d/%d good samples, grid %s, filename row = %s",
+             seg, mode, " (stitch.segment_modes)" if forced else "", dev, len(good), len(recs),
+             layout["grid_shape"], layout["row_axis"])
     return out.drop(columns=["height", "width"]), layout, pts
 
 
@@ -629,11 +657,25 @@ def _pair_rows(rec):
                    "residual_px": p["residual_px"], "solve_residual_px": p["solve_residual_px"], "used": p["used"]}
 
 
+def segment_modes(opts):
+    """stitch.segment_modes as {segment (int): mode}; YAML or JSON may give the segments as str."""
+    out = {}
+    for seg, mode in (opts.get("segment_modes") or {}).items():
+        if mode not in ("fixed", "per_slice"):
+            raise ValueError(f"stitch.segment_modes: segment {seg} must be fixed or per_slice, got {mode!r}")
+        out[int(seg)] = mode
+    return out
+
+
 def merge(cfg):
     opts = cfg["stitch"]
     if opts["mode"] not in MODES:
         raise ValueError(f"stitch.mode must be one of {MODES}")
+    forced = segment_modes(opts)
     slices, samples, gauge = _load(cfg)
+    unknown = sorted(set(forced) - set(slices["segment"].astype(int)))
+    if unknown:
+        log.warning("stitch.segment_modes: no selected slices in segment(s) %s", unknown)
     recs, missing, stale = {}, [], []
     for z in samples:
         path = _sample_path(cfg, z)

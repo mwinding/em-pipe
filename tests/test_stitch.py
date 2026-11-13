@@ -204,11 +204,14 @@ def test_layout_change_per_slice_and_fixed(tmp_path):
     out, _ = stitched(tmp_path, "fixed", parts, mode="fixed")
     tiles = read_tiles(out)
     assert json.loads((out / "work" / "stitch" / "layout.json").read_text())["segments"]["0"]["mode"] == "fixed"
+    recs = [json.loads(p.read_text()) for p in sorted((out / "work" / "stitch" / "samples").glob("z*.json"))]
+    basis = [r for r in recs if r["ok"] and stitch._complete(r)] or [r for r in recs if r["ok"]]
+    ref = tiles[tiles["tile"] == "0-0"][["tx", "ty"]].iloc[0].to_numpy()
     for t, g in tiles.groupby("tile"):
         assert g[["tx", "ty"]].nunique().max() == 1
-        # 3 samples per side -> median is the midpoint of the two layouts
-        mid = (np.array(a.tile_origin[t]) + b.tile_origin[t]) / 2
-        np.testing.assert_allclose(g[["tx", "ty"]].iloc[0], mid, atol=0.5)
+        # the median of the complete samples (reference tile 0-0 at the origin in each)
+        med = np.median([np.ravel(r["tiles"][t])[[2, 5]] for r in basis], axis=0)
+        np.testing.assert_allclose(g[["tx", "ty"]].iloc[0].to_numpy() - ref, med, atol=0.5)
 
 
 def test_refinement_locates_tile_jump(tmp_path):
@@ -401,6 +404,48 @@ def test_merge_per_slice_and_fixed_from_samples():
     out, layout, _ = stitch.merge_segment(rows, recs, {**opts, "mode": "fixed"})
     assert layout["mode"] == "fixed" and layout["overlap_px"]["x"] == 3
     np.testing.assert_allclose(out.loc[out["tile"] == "0-1", ["tx", "ty"]], [[77, 0]] * len(zs))
+
+    # stitch.segment_modes overrides mode for its segment only (keys as int or, from JSON, str).
+    for modes in ({3: "fixed"}, {"3": "fixed"}):
+        out, layout, _ = stitch.merge_segment(rows, recs, {**opts, "segment_modes": modes})
+        assert layout["mode"] == "fixed" and layout["mode_from"] == "stitch.segment_modes"
+        np.testing.assert_allclose(out.loc[out["tile"] == "0-1", ["tx", "ty"]], [[77, 0]] * len(zs))
+    out, layout, _ = stitch.merge_segment(rows, recs, {**opts, "segment_modes": {4: "fixed"}})
+    assert layout["mode"] == "per_slice" and layout["mode_from"] == "stitch.mode"
+    _, layout, _ = stitch.merge_segment(rows, recs, {**opts, "mode": "fixed", "segment_modes": {3: "per_slice"}})
+    assert layout["mode"] == "per_slice"
+    with pytest.raises(ValueError, match="segment 3 must be fixed or per_slice"):
+        stitch.merge_segment(rows, recs, {**opts, "segment_modes": {3: "auto"}})
+
+
+def test_fixed_layout_from_complete_samples():
+    """2x2 tiles; most samples lost the bottom seam (resin) and have tile 1-1 off by 14 px: fixed takes the
+    median of the samples where all four neighbouring pairs matched. Without any, of all good samples."""
+    tiles = ("0-0", "0-1", "1-0", "1-1")
+    zs = list(range(10))
+    rows = pd.DataFrame([{"z": z, "timestamp": pd.Timestamp(2026, 11, 8) + pd.Timedelta(minutes=z), "tile": t,
+                          "tile_row": int(t[0]), "tile_col": int(t[-1]), "height": 50, "width": 80, "segment": 12}
+                         for z in zs for t in tiles])
+    true = {"0-0": (0, 0), "0-1": (75, -1), "1-0": (2, 45), "1-1": (77, 44)}
+
+    def rec(z, complete):
+        pos = {**true, "1-1": true["1-1"] if complete else (91, 38)}
+        pairs = [("0-0", "0-1"), ("0-0", "1-0"), ("0-1", "1-1")] + ([("1-0", "1-1")] if complete else [])
+        return {"z": z, "ok": True, "reason": "", "reference": "0-0",
+                "tiles": {t: transforms.translation(*pos[t]).tolist() for t in tiles},
+                "pairs": [{"tile_a": a, "tile_b": b, "used": True} for a, b in pairs]
+                + ([] if complete else [{"tile_a": "1-0", "tile_b": "1-1", "used": False}])}
+
+    opts = {**stitch.DEFAULTS["stitch"], "segment_modes": {12: "fixed"}}
+    recs = [rec(z, z < 2) for z in zs]
+    out, layout, _ = stitch.merge_segment(rows, recs, opts)
+    assert layout["n_complete_samples"] == 2 and "2 complete samples" in layout["fixed_from"]
+    got = out[out["z"] == 5].set_index("tile")
+    np.testing.assert_allclose(got.loc["1-1", ["tx", "ty"]] - got.loc["0-1", ["tx", "ty"]], [2, 45])
+    out, layout, _ = stitch.merge_segment(rows, [rec(z, False) for z in zs], opts)
+    assert layout["n_complete_samples"] == 0 and "10 good samples" in layout["fixed_from"]
+    got = out[out["z"] == 5].set_index("tile")
+    np.testing.assert_allclose(got.loc["1-1", ["tx", "ty"]] - got.loc["0-1", ["tx", "ty"]], [16, 39])
 
 
 @pytest.mark.parametrize("model, tol", [("rigid", 0.3), ("affine", 0.75)])
