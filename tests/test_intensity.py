@@ -267,6 +267,21 @@ def test_solve_uses_only_the_largest_connected_set_of_tiles():
     assert intensity.connected(rels[:2] + [("0-1", "1-1", 1.0, 0.0, 400)]) == rels[:2] + [("0-1", "1-1", 1.0, 0.0, 400)]
 
 
+def test_solve_keeps_gains_of_tiles_linked_only_by_low_contrast_overlaps_at_1():
+    """Two tile columns whose overlaps are only resin (gain weight 0): nothing measures their relative
+    gain, so both stay at ~1, whatever the spread of the gains measured within each column. (Solving
+    g_a g_ab - g_b = 0 directly, the column with the noisier gains got the smaller scale: its residuals
+    shrink with it, and here the columns ended up 6x apart.)"""
+    rels = [("a0", "a1", g, 0.0, 10000, 1.0) for g in (0.92, 1.08, 0.94, 1.06, 0.95, 1.05)]
+    rels += [("b0", "b1", g, 0.0, 10000, 1.0) for g in (1.0, 1.0, 1.0)]
+    rels += [("a0", "b0", 0.7, 9000.0, 10000, 0.0), ("a1", "b1", 1.4, -9000.0, 10000, 0.0)]
+    g = {t: v[0] for t, v in intensity.solve(rels).items()}
+    assert g["a1"] / g["a0"] == pytest.approx(1.0, abs=0.01)
+    assert g["b1"] / g["b0"] == pytest.approx(1.0, abs=0.01)
+    assert g["b0"] / g["a0"] == pytest.approx(1.0, abs=0.01)
+    assert np.mean(list(g.values())) == pytest.approx(1.0)
+
+
 def test_per_slice_follows_tile_brightness_jumps(tmp_path):
     """A tile that is brighter on single slices (as real raw tiles are, by 1-2 % of the range) gets
     its window shifted on exactly those slices, so it doesn't flicker; other tiles are untouched."""

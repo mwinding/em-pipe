@@ -357,21 +357,29 @@ def solve(rels):
     (the gain equation also by gain_weight, default 1), the mean constraints by a much larger
     weight. Each gain is also pulled weakly towards 1 (GAIN_PRIOR of the strongest relation's
     weight), so gains no relation pins well (low gain_weight) stay near 1 instead of following noise.
+
+    The gains are solved as logs, log g_a + log g_ab - log g_b = 0: in g_a g_ab - g_b = 0 the
+    residuals scale with the gains, so where tiles are linked only by relations of ~0 gain weight
+    (e.g. two tile columns whose overlaps are all resin) the group with the noisier gains got a
+    smaller scale, and the groups' gains drifted apart (by 30 % and more) instead of staying at 1.
     """
     tiles = sorted({t for r in rels for t in r[:2]})
     k = {t: i for i, t in enumerate(tiles)}
     w = np.sqrt([r[4] for r in rels])
-    wg = w * np.array([r[5] if len(r) > 5 else 1.0 for r in rels])
+    g_ab = np.array([r[2] for r in rels], float)
+    usable = np.isfinite(g_ab) & (g_ab > 0)
+    wg = np.where(usable, w * np.array([r[5] if len(r) > 5 else 1.0 for r in rels]), 0.0)
     big = 100 * w.max()
     G, D = np.zeros((len(rels) + 1, len(tiles))), np.zeros((len(rels) + 1, len(tiles)))
-    prior = GAIN_PRIOR * w.max() * np.eye(len(tiles))   # g_t - 1 = 0, weakly
-    for j, (a, b, g_ab, *_) in enumerate(rels):
-        G[j, k[a]] += wg[j] * g_ab   # g_a g_ab - g_b = 0
-        G[j, k[b]] -= wg[j]
+    prior = GAIN_PRIOR * w.max() * np.eye(len(tiles))   # log g_t = 0, weakly
+    for j, (a, b, *_) in enumerate(rels):
+        G[j, k[a]], G[j, k[b]] = wg[j], -wg[j]   # log g_a - log g_b = -log g_ab
         D[j, k[a]], D[j, k[b]] = w[j], -w[j]   # o_a - o_b = -g_a o_ab
     G[-1] = D[-1] = big
-    g = np.linalg.lstsq(np.vstack([G, prior]), np.r_[np.zeros(len(rels)), big * len(tiles), prior.diagonal()],
-                        rcond=None)[0]
+    rhs_g = -wg * np.log(np.where(usable, g_ab, 1.0))
+    log_g = np.linalg.lstsq(np.vstack([G, prior]), np.r_[rhs_g, 0.0, np.zeros(len(tiles))], rcond=None)[0]
+    g = np.exp(log_g)
+    g /= g.mean()
     def at_centre(j, r):   # o_a - o_b = g_b m - g_a (g_ab m + o_ab), m = the relation's centre
         m = r[6] if len(r) > 6 else 0.0
         return w[j] * (g[k[r[1]]] * m - g[k[r[0]]] * (r[2] * m + r[3]))
