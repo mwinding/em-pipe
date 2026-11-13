@@ -65,6 +65,10 @@ DEFAULTS = {
         # Weight of a seam point relative to a match across slices. 35h, 24 windows: 4 moved seams by up
         # to 4.1 px; 64 by at most 0.7 px and kept most of the gain (mismatch p90 5.6 -> 4.7 px, vs 4.5).
         "local_seam_weight": 64.0,
+        # Smooth warp per tile on top of its affine, on a grid this many tile px apart (null: affine only),
+        # for a distortion within a tile that no affine captures (a tile scanned before the beam settled).
+        "local_warp_px": None,
+        "local_warp_smoothness": 0.1,      # penalty on neighbouring grid values, x matched points per grid cell
         # Smooth (elastic) correction at problem interfaces (see pipeline/elastic.py): a field fitted
         # to the matches across the interface, applied to every slice of one side.
         "elastic_min_px": 5.0,             # at layout changes whose frame fit leaves a median above this; null: none

@@ -50,7 +50,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from . import elastic, omezarr, patchgrid, shading, transforms
+from . import elastic, omezarr, patchgrid, shading, tilesolve, transforms
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info
 from .config import deep_merge, get, step_path
 from .slices import StackCache, load_slices, voxel_size_nm, z_values
@@ -319,6 +319,9 @@ def init(cfg, overwrite=False):
     if pg is not None:   # only when on: the same plan digest as volumes rendered before patchgrid existed
         patchgrid.load(cfg)   # missing shapes fail here, not in every run task
         meta["patchgrid"] = pg
+    warps = _warps_for(tilesolve.load_warps(cfg), zs)
+    if warps:   # likewise only when there are any
+        meta["local_warps"] = warps
     digest = hashlib.sha256(json.dumps(meta, sort_keys=True).encode())
     digest.update(plan.to_csv(index=False).encode())
     meta["digest"] = digest.hexdigest()
@@ -379,6 +382,12 @@ def _anchor(old_plan, plan, zs, extent):
     if np.abs(C[:, :2] - np.eye(2)).max() * extent <= 0.5:
         return transforms.translation(*np.median(dst - src, axis=0))
     return C
+
+
+def _warps_for(warps, zs):
+    """align's per-tile warps ({"z/tile": field}) of the slices ``zs`` only."""
+    keep = {int(z) for z in zs}
+    return {k: v for k, v in (warps or {}).items() if int(k.split("/")[0]) in keep}
 
 
 def _elastic_for(fields, kept_last, zs):
@@ -464,6 +473,10 @@ def _append(cfg, s, plan, old, root, wdir):
     if pg is not None:
         patchgrid.load(cfg)
         meta["patchgrid"] = pg
+    meta.pop("local_warps", None)
+    warps = _warps_for(tilesolve.load_warps(cfg), merged["z"])
+    if warps:
+        meta["local_warps"] = warps
     digest = hashlib.sha256(json.dumps(meta, sort_keys=True).encode())
     digest.update(merged.to_csv(index=False).encode())
     meta["digest"] = digest.hexdigest()
@@ -582,6 +595,8 @@ class _Renderer:
         self.cache = StackCache(cfg["raw_dir"])
         self.tiles = {z: g.to_dict("records") for z, g in plan.groupby("z")}
         self.elastic = meta.get("elastic")
+        # align's per-tile warps: {(z, tile): field in tile px}, applied on top of the tile's transform
+        self.warps = {(int(k.split("/")[0]), k.split("/", 1)[1]): f for k, f in (meta.get("local_warps") or {}).items()}
         self.shading = shading.load(cfg) if meta.get("shading") else {}
         # patchgrid: per (segment, tile) its shape; flat-field and shape fused into fields once per tile position
         self.shapes, self.R = patchgrid.load(cfg) if meta.get("patchgrid") else ({}, None)
@@ -739,7 +754,8 @@ class _Renderer:
         # Downsampled crop pixel (i, j) has its centre at tile (c0 + f*j + c, r0 + f*i + c).
         L, c = T[:, :2], (f - 1) / 2
         M = np.hstack([L, ((L @ (np.array([c0, r0]) + c) + T[:, 2] - self.origin - c) / f)[:, None]])
-        if is_shift and _whole(M[:, 2]):
+        tile_warp = self.warps.get((int(t["z"]), t["tile"])) if self.warps else None
+        if is_shift and _whole(M[:, 2]) and tile_warp is None:
             x, y = (int(round(m)) for m in M[:, 2])
             xa, xb, ya, yb = max(x, 0), min(x + wv, W), max(y, 0), min(y + hv, H)
             if xa >= xb or ya >= yb:
@@ -748,15 +764,22 @@ class _Renderer:
             return (slice(ya, yb), slice(xa, xb)), v[src], wt[src], cut
         # Warp only into the window of the plane the tile covers, never a full-plane temporary.
         p = transforms.apply(M, [[-0.5, -0.5], [wv - 0.5, -0.5], [-0.5, hv - 0.5], [wv - 0.5, hv - 0.5]])
-        xa, ya = (int(q) for q in np.maximum(np.floor(p.min(axis=0)), 0))
-        xb, yb = (int(q) for q in np.minimum(np.ceil(p.max(axis=0)) + 1, (W, H)))
+        pad = 0 if tile_warp is None else int(np.ceil(np.abs(np.asarray(tile_warp["g"])).max() / f)) + 2
+        xa, ya = (int(q) for q in np.maximum(np.floor(p.min(axis=0)) - pad, 0))
+        xb, yb = (int(q) for q in np.minimum(np.ceil(p.max(axis=0)) + 1 + pad, (W, H)))
         if xa >= xb or ya >= yb:
             return None
-        Mw = M - [[0, 0, xa], [0, 0, ya]]
+        if tile_warp is None:
+            Mw = M - [[0, 0, xa], [0, 0, ya]]
 
-        def warp(a):
-            return cv2.warpAffine(a, Mw, (xb - xa, yb - ya), flags=cv2.INTER_LINEAR,
-                                  borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            def warp(a):
+                return cv2.warpAffine(a, Mw, (xb - xa, yb - ya), flags=cv2.INTER_LINEAR,
+                                      borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        else:   # align's per-tile warp on top of T: remap through the inverse of both
+            mx, my = warp_maps(T, M, tile_warp, self.origin, f, (c0, r0), (xa, xb, ya, yb))
+
+            def warp(a):
+                return cv2.remap(a, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         if cut:   # values renormalised by the warped coverage, so tile edges aren't darkened
             cover = warp(np.ones_like(v))
             vals = np.divide(warp(v), cover, out=np.zeros_like(cover), where=cover > 0)
@@ -771,6 +794,37 @@ class _Renderer:
             shape = self.shapes.get(key) or patchgrid.identity(1)
             self.fields[k] = patchgrid.tile_fields(shape, self.R, field, tile_shape)
         return self.fields[k]
+
+
+def warp_maps(T, M, field, origin, f, crop0, window, step=16, iterations=4):
+    """cv2.remap maps (x, y float32, window shape) into a tile's downsampled crop for the output pixels
+    ``window`` = (xa, xb, ya, yb) of a tile placed by T (tile px -> aligned) plus its warp ``field``
+    (tile px -> displacement in aligned px): per output pixel the tile pixel q with T(q) + F(q) = P.
+
+    M: crop pixel -> output pixel without the warp (as in _tile; the crop starts at tile pixel
+    ``crop0`` = (c0, r0), downsampled by f). Exact per pixel for M; the warp's (small, smooth) share
+    is solved by fixed-point iteration every ``step`` px and interpolated.
+    """
+    xa, xb, ya, yb = window
+    c = (f - 1) / 2
+    Mi = transforms.invert(M)
+    xo, yo = np.arange(xa, xb, dtype=np.float64), np.arange(ya, yb, dtype=np.float64)
+    mx = (Mi[0, 0] * xo[None, :] + Mi[0, 1] * yo[:, None] + Mi[0, 2]).astype(np.float32)
+    my = (Mi[1, 0] * xo[None, :] + Mi[1, 1] * yo[:, None] + Mi[1, 2]).astype(np.float32)
+    xs = step * np.arange(-(-(xb - xa) // step)) + (step - 1) / 2   # resize's sample centres
+    ys = step * np.arange(-(-(yb - ya) // step)) + (step - 1) / 2
+    X, Y = np.meshgrid(xs + xa, ys + ya)
+    P = np.asarray(origin, float) + c + f * np.column_stack([X.ravel(), Y.ravel()])
+    Ti = transforms.invert(T)
+    q0 = transforms.apply(Ti, P)
+    q = q0
+    for _ in range(iterations):
+        q = transforms.apply(Ti, P - tilesolve.warp_at(field, q))
+    size = (len(xs) * step, len(ys) * step)
+    for k, m in ((0, mx), (1, my)):   # the warp's share, in crop px
+        d = ((q[:, k] - q0[:, k]) / f).reshape(X.shape).astype(np.float32)
+        m += cv2.resize(d, size, interpolation=cv2.INTER_LINEAR)[:yb - ya, :xb - xa]
+    return mx, my
 
 
 def _done(marker, digest):

@@ -642,6 +642,46 @@ def test_elastic_fit_leaves_out_skip_slices(tmp_path):
     assert without["median_after_px"] < 0.5 < with_bad["median_after_px"]
 
 
+def test_tile_warp_fits_a_distortion_no_affine_captures():
+    """Slice 1's tile 0-0 has its content displaced by a sine (12 px, zero at its seam with 0-1): the
+    affine tile solve can't follow it; with align.local_warp_px the tile's warp grid does, and the
+    seam with 0-1 stays where it is."""
+    from pipeline import tilesolve
+    rng = np.random.default_rng(3)
+    shape, W = (800, 1000), 900          # tiles 1000 px wide, 0-1 starts at x 900
+    origin = {"0-0": np.array([0.0, 0.0]), "0-1": np.array([900.0, 0.0])}
+
+    def bend(q):   # tile 0-0 of slice 1: content at tile px q sits at T(q) + bend(q)
+        d = np.zeros_like(q)
+        d[:, 0] = np.where(q[:, 0] < W, 12 * np.sin(np.pi * q[:, 0] / W), 0.0)
+        d[:, 1] = np.where(q[:, 0] < W, 6 * np.sin(2 * np.pi * q[:, 1] / 800) * np.sin(np.pi * q[:, 0] / W), 0.0)
+        return d
+    T0 = {(z, t): transforms.translation(*o) for z in (0, 1, 2) for t, o in origin.items()}
+    shapes = {k: shape for k in T0}
+    m = {k: [] for k in ("za", "ta", "qa", "zb", "tb", "qb")}
+    for z_other in (0, 2):
+        for t in origin:
+            q1 = rng.uniform([5, 5], [995, 795], (300, 2))
+            world = q1 + origin[t] + (bend(q1) if t == "0-0" else 0)
+            qo = world - origin[t]
+            ok = (qo[:, 0] > 0) & (qo[:, 0] < 1000) & (qo[:, 1] > 0) & (qo[:, 1] < 800)
+            za, zb, qa, qb = (z_other, 1, qo, q1) if z_other == 0 else (1, z_other, q1, qo)
+            for key, v in (("za", np.full(ok.sum(), za)), ("zb", np.full(ok.sum(), zb)), ("ta", np.full(ok.sum(), t)),
+                           ("tb", np.full(ok.sum(), t)), ("qa", qa[ok]), ("qb", qb[ok])):
+                m[key].append(v)
+    m = {k: np.concatenate(v) for k, v in m.items()}
+    a = {**align.DEFAULTS["align"]}
+    _, affine, _, warps = tilesolve.solve_window(T0, shapes, m, {1}, a)
+    # Half the matches are tile 0-1's (no mismatch): the 90th percentile shows tile 0-0's.
+    assert affine["p90_before_px"] > 8 and affine["p90_after_px"] > 2 and not warps
+    _, rep, _, warps = tilesolve.solve_window(T0, shapes, m, {1}, {**a, "local_warp_px": 100})
+    assert rep["p90_after_px"] < 1.0 and rep["p90_after_px"] < affine["p90_after_px"] / 3, rep
+    assert rep["seam_max_after_px"] < 1.0 and set(warps) == {(1, "0-0"), (1, "0-1")}
+    q = rng.uniform([50, 50], [850, 750], (200, 2))
+    err = tilesolve.warp_at(warps[(1, "0-0")], q) - bend(q)
+    assert np.abs(err - np.median(err, axis=0)).max() < 1.5   # the bend, up to what the affine took
+
+
 def test_tile_solve_leaves_out_matches_across_elastic_interfaces():
     from pipeline import tilesolve
     zs = np.array([10, 11, 12, 14, 15, 16])     # z 13 not selected

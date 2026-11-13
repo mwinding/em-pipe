@@ -18,9 +18,18 @@ pause with one tile scanned before the beam settled) fits that slice's tiles to 
 (``align.local_at_layout_changes``) and the z ranges in ``align.local_windows``. Writes
 ``align/local_tiles.csv`` (tile -> aligned transform for every (z, tile) in a window, used by
 render instead of align ∘ stitch) and ``align/local_windows.csv`` (mismatch before and after).
+
+With ``align.local_warp_px`` every tile in a window also gets a smooth displacement field on a grid
+of that spacing over the tile (bilinear, as pipeline/elastic.py's fields; differences between
+neighbouring grid values penalised by ``align.local_warp_smoothness`` x points per grid cell), added
+after its affine: for a distortion within one tile that no affine captures, e.g. a tile scanned
+before the beam settled after a pause. The fields go to ``align/local_warps.json`` (tile pixels ->
+displacement in aligned px), which render applies.
 """
 
+import json
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -28,7 +37,8 @@ from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
 from . import cli, transforms
-from .config import step_dir
+from .config import step_dir, step_path
+from .elastic import _bilinear, field_at
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +46,7 @@ SEAM_GRID = (25, 6)  # seam points along and across each overlap
 WINDOW_COLUMNS = ["z_first", "z_last", "reason", "tile_slices", "points", "median_before_px",
                   "median_after_px", "p90_before_px", "p90_after_px", "change_median_before_px",
                   "change_median_after_px", "change_p90_before_px", "change_p90_after_px",
-                  "seam_median_after_px", "seam_max_after_px", "rejected_points"]
+                  "seam_median_after_px", "seam_max_after_px", "rejected_points", "warp_max_px"]
 
 
 def windows(zs, run, a):
@@ -133,14 +143,32 @@ def solve_window(T0, shapes, matches, inside, a):
 
     keep = np.ones(len(ka), bool)
     n = len(keys)
+    spacing = a.get("local_warp_px")
+    if spacing:
+        grids = [_tile_grid(shapes[k], float(spacing)) for k in keys]
+        A = _design(n, grids, float(spacing), ia, ib, Ha, Hb, qa, qb)
     for it in range(int(a["robust_iterations"]) + 1):
         if it:   # the first solve uses every match: before it, a layout change is off by tens of px
             comp = r[is_match].ravel()
             sigma = 1.4826 * np.median(np.abs(comp - np.median(comp))) if len(comp) else 0.0
             keep = ~is_match | (np.linalg.norm(r, axis=1) <= max(float(a["reject_px"]), 3 * sigma))
-        D = _solve(n, ia, ib, Ha, Hb, r0, w * keep, float(a["local_regularization"]))
-        r = r0 + _apply(D, ia, Ha) - _apply(D, ib, Hb)
+        if spacing:
+            U = _solve_warp(A, grids, ia, ib, is_match, r0, w * keep, float(a["local_regularization"]),
+                            float(a["local_warp_smoothness"]))
+            D = U[:3 * n].reshape(n, 3, 2).transpose(0, 2, 1)
+            r = r0 + A @ U
+        else:
+            D = _solve(n, ia, ib, Ha, Hb, r0, w * keep, float(a["local_regularization"]))
+            r = r0 + _apply(D, ia, Ha) - _apply(D, ib, Hb)
         log.debug("local solve iteration %d: %d of %d points kept", it, int(keep.sum()), len(keep))
+
+    warps = {}
+    if spacing:
+        off = 3 * n
+        for k, (nx, ny) in zip(keys, grids):
+            g = U[off:off + nx * ny].reshape(ny, nx, 2)
+            off += nx * ny
+            warps[k] = {"x0": 0.0, "y0": 0.0, "spacing": float(spacing), "g": g.tolist()}
 
     out = {}
     for k, i in idx.items():
@@ -159,7 +187,63 @@ def solve_window(T0, shapes, matches, inside, a):
     rep["median_after_px"], rep["p90_after_px"] = stats(after[is_match])
     rep["seam_median_after_px"] = float(np.median(after[~is_match])) if (~is_match).any() else np.nan
     rep["seam_max_after_px"] = float(after[~is_match].max()) if (~is_match).any() else np.nan
-    return out, rep, (before[:n_match], after[:n_match], keep[:n_match], ok)
+    rep["warp_max_px"] = (max(float(np.linalg.norm(np.asarray(f["g"]), axis=2).max()) for f in warps.values())
+                          if warps else np.nan)
+    return out, rep, (before[:n_match], after[:n_match], keep[:n_match], ok), warps
+
+
+def _tile_grid(shape, spacing):
+    """(nx, ny) of a warp grid over a tile of ``shape`` (height, width): nodes 0, spacing, ... past each edge."""
+    h, w = shape
+    return int(np.ceil(w / spacing)) + 1, int(np.ceil(h / spacing)) + 1
+
+
+def _design(n, grids, spacing, ia, ib, Ha, Hb, qa, qb):
+    """Sparse (points, unknowns) matrix of the corrections' effect on each point pair's mismatch:
+    + side a's tile, - side b's (fixed tiles, index -1, contribute nothing). Unknowns: per tile its
+    affine correction (basis u, v, 1), then per tile its warp grid (bilinear weights in tile px)."""
+    off = np.r_[0, np.cumsum([nx * ny for nx, ny in grids])] + 3 * n
+    rows, cols, vals = [np.zeros(0, int)], [np.zeros(0, int)], [np.zeros(0)]
+    for sign, idx, H, q in ((1.0, ia, Ha, qa), (-1.0, ib, Hb, qb)):
+        for i in np.unique(idx[idx >= 0]):
+            pts = np.flatnonzero(idx == i)
+            rows.append(np.repeat(pts, 3))
+            cols.append(np.tile(3 * i + np.arange(3), len(pts)))
+            vals.append(sign * H[pts].ravel())
+            nx, ny = grids[i]
+            W = _bilinear(q[pts], 0.0, 0.0, spacing, nx, ny).tocoo()
+            rows.append(pts[W.row])
+            cols.append(off[i] + W.col)
+            vals.append(sign * W.data)
+    return sparse.csr_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+                             shape=(len(ia), int(off[-1])))
+
+
+def _solve_warp(A, grids, ia, ib, is_match, r0, w, reg, smoothness):
+    """Least squares over the unknowns of ``_design`` (n tiles' affine corrections, then their warp
+    grids), both axes: r0 + A U = 0 at the points (weights w), a membrane penalty smoothness x
+    (matched points per grid cell) on each tile's neighbouring grid values, and a pull reg x (point
+    weight of the tile) toward 0, as the affine solve. Returns U (unknowns, 2)."""
+    n = len(grids)
+    off = np.r_[0, np.cumsum([nx * ny for nx, ny in grids])] + 3 * n
+    weight = (np.bincount(ia[ia >= 0], w[ia >= 0], minlength=n) + np.bincount(ib[ib >= 0], w[ib >= 0], minlength=n))
+    matched = (np.bincount(ia[(ia >= 0) & is_match], minlength=n) + np.bincount(ib[(ib >= 0) & is_match], minlength=n))
+    # A grid value sees only the points around it: its pull scales with their weight, not the tile's.
+    diag = reg * np.maximum(np.asarray(abs(A).T @ w).ravel(), 1.0)
+    pen = []
+    for i, (nx, ny) in enumerate(grids):
+        diag[3 * i:3 * i + 3] = reg * max(weight[i], 1.0)
+        idx = off[i] + np.arange(nx * ny).reshape(ny, nx)
+        pairs = np.r_[np.column_stack([idx[:, :-1].ravel(), idx[:, 1:].ravel()]),
+                      np.column_stack([idx[:-1, :].ravel(), idx[1:, :].ravel()])]
+        lam = smoothness * max(matched[i] / ((nx - 1) * (ny - 1)), 1.0)
+        m = len(pairs)
+        pen.append(sparse.csr_matrix((np.sqrt(lam) * np.r_[np.ones(m), -np.ones(m)],
+                                      (np.r_[np.arange(m), np.arange(m)], pairs.T.ravel())), shape=(m, A.shape[1])))
+    P = sparse.vstack(pen) if pen else sparse.csr_matrix((0, A.shape[1]))
+    Aw = A.multiply(w[:, None]).tocsr()
+    M = (A.T @ Aw + P.T @ P + sparse.diags(diag)).tocsc()
+    return np.asarray(spsolve(M, -(Aw.T @ r0))).reshape(-1, 2)
 
 
 def _basis_and_start(keys, q, T0, centre, scale):
@@ -236,7 +320,7 @@ def solve(cfg, df, zs, mats, run, stitch, load_tile_matches, cuts=()):
     """
     a = cfg["align"]
     wins = windows(zs, run, a)
-    rows, reports = [], []
+    rows, reports, all_warps = [], [], {}
     shapes = {(z, t): (int(h), int(w)) for z, t, h, w in zip(df["z"], df["tile"], df["height"], df["width"])}
     nb = int(a["neighbors"])
     for i0, i1, reason in wins:
@@ -252,7 +336,8 @@ def solve(cfg, df, zs, mats, run, stitch, load_tile_matches, cuts=()):
             log.info("local tile solve z %d-%d: %d matches across elastic interfaces left out", int(zs[i0]),
                      int(zs[i1]), int(cut.sum()))
         m = {k: v[sel & ~cut] for k, v in m.items()}
-        out, rep, (before, after, keep, ok) = solve_window(T0, shapes, m, inside, a)
+        out, rep, (before, after, keep, ok), warps = solve_window(T0, shapes, m, inside, a)
+        all_warps.update(warps)
         rep.update(z_first=int(zs[i0]), z_last=int(zs[i1]), reason=reason)
         rep["change_median_before_px"] = rep["change_median_after_px"] = np.nan
         rep["change_p90_before_px"] = rep["change_p90_after_px"] = np.nan
@@ -271,10 +356,30 @@ def solve(cfg, df, zs, mats, run, stitch, load_tile_matches, cuts=()):
                  rep["median_before_px"], rep["median_after_px"], rep["p90_before_px"], rep["p90_after_px"],
                  rep["change_median_before_px"], rep["change_median_after_px"],
                  rep["seam_median_after_px"], rep["seam_max_after_px"])
+        if warps:
+            log.info("local tile solve z %d-%d: warp grids %g px, largest displacement %.1f px", rep["z_first"],
+                     rep["z_last"], float(a["local_warp_px"]), rep["warp_max_px"])
         reports.append(rep)
         rows += [({"z": int(z), "tile": t}, A) for (z, t), A in sorted(out.items())]
     tiles = transforms.to_frame(rows) if rows else pd.DataFrame(columns=["z", "tile", *transforms.COLUMNS])
     cli.atomic_write(step_dir(cfg, "align", "local_tiles.csv"), lambda tmp: tiles.to_csv(tmp, index=False))
     rep = pd.DataFrame(reports, columns=WINDOW_COLUMNS)
     cli.atomic_write(step_dir(cfg, "align", "local_windows.csv"), lambda tmp: rep.to_csv(tmp, index=False))
+    data = {f"{z}/{t}": f for (z, t), f in sorted(all_warps.items())}
+    cli.atomic_write(step_dir(cfg, "align", "local_warps.json"), lambda tmp: Path(tmp).write_text(json.dumps(data)))
     return tiles, rep
+
+
+def load_warps(cfg):
+    """align/local_warps.json as {"z/tile": field} (tile px -> displacement in aligned px), or None if
+    there is none or it is empty."""
+    path = step_path(cfg, "align", "local_warps.json")
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text())
+    return data or None
+
+
+def warp_at(field, q):
+    """Displacement (n, 2) in aligned px of a tile's warp at tile pixels q (n, 2)."""
+    return field_at(field, q)

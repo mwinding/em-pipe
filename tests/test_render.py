@@ -644,6 +644,64 @@ def test_elastic_field_moves_slice_content(truth, tmp_path):
     assert elastic.displacement(json.loads((out / "work" / "align" / "elastic.json").read_text()), 1, [0], [0]) is None
 
 
+def test_warp_maps_invert_the_tile_transform_and_warp():
+    """warp_maps gives, for every output pixel, the crop pixel whose tile pixel q lands there under
+    T(q) + F(q): checked by mapping back, at downsample 1 and 2."""
+    from pipeline import tilesolve
+    T = np.array([[1.002, 0.001, 523.4], [-0.0015, 0.999, -211.7]])
+    g = np.zeros((9, 12, 2))
+    yy, xx = np.mgrid[0:9, 0:12]
+    g[..., 0] = 7 * np.sin(xx / 3.0)
+    g[..., 1] = -5 * np.cos(yy / 2.5)
+    field = {"x0": 0.0, "y0": 0.0, "spacing": 100.0, "g": g.tolist()}
+    origin = np.array([400.0, -300.0])
+    rng = np.random.default_rng(0)
+    for f in (1, 2):
+        c = (f - 1) / 2
+        c0, r0 = 40, 20
+        L = T[:, :2]
+        M = np.hstack([L, ((L @ (np.array([c0, r0]) + c) + T[:, 2] - origin - c) / f)[:, None]])
+        window = (60 // f, 1000 // f, 260 // f, 700 // f)
+        mx, my = render.warp_maps(T, M, field, origin, f, (c0, r0), window)
+        assert mx.shape == my.shape == (window[3] - window[2], window[1] - window[0])
+        iy, ix = rng.integers(0, mx.shape[0], 300), rng.integers(0, mx.shape[1], 300)
+        q = np.column_stack([c0 + c + f * mx[iy, ix], r0 + c + f * my[iy, ix]])
+        landed = transforms.apply(T, q) + tilesolve.warp_at(field, q)
+        want = origin + c + f * np.column_stack([window[0] + ix, window[2] + iy])
+        assert np.abs(landed - want).max() < 0.1 * f   # 0.1 output px: interpolation across the grid's kinks
+        zero = {**field, "g": np.zeros_like(g).tolist()}
+        mx0, my0 = render.warp_maps(T, M, zero, origin, f, (c0, r0), window)
+        Mi = transforms.invert(M)
+        np.testing.assert_allclose(mx0[5, 7], Mi[0, 0] * (window[0] + 7) + Mi[0, 1] * (window[2] + 5) + Mi[0, 2], atol=1e-3)
+
+
+def test_local_warps_move_tile_content(truth, tmp_path):
+    """Tiles with a warp in align/local_warps.json are placed by their transform plus the warp: a
+    constant warp (6, -4) px on every tile of slice 2 moves its content by (6, -4) px; the other
+    slices, and the plan digest of volumes without warps, are unchanged."""
+    from pipeline.config import load_config
+    zs = list(range(4))
+    cfg, out = _setup(tmp_path, truth, selection={"z_end": zs[-1]}, render={"blend": "cut"})
+    plan = render._tile_plan(load_config(cfg, step_defaults=render.DEFAULTS))
+    rows = plan[plan["z"] == 2]
+    transforms.to_frame([({"z": 2, "tile": r["tile"]}, transforms.from_row(r)) for r in rows.to_dict("records")]
+                        ).to_csv(out / "work" / "align" / "local_tiles.csv", index=False)
+    _render(cfg)
+    plain, digest = _read(out), _meta(out)["digest"]
+    (out / "work" / "align" / "local_warps.json").write_text(json.dumps({}))
+    assert render.main(["init", "--config", str(cfg)]) == 0     # no warps: the same plan, volume kept
+    assert _meta(out)["digest"] == digest and "local_warps" not in _meta(out)
+    field = {"x0": 0.0, "y0": 0.0, "spacing": 1000.0, "g": [[[6.0, -4.0]] * 3] * 3}
+    (out / "work" / "align" / "local_warps.json").write_text(json.dumps({f"2/{t}": field for t in rows["tile"]}))
+    assert render.main(["init", "--config", str(cfg), "--overwrite"]) == 0
+    _render(cfg)
+    warped = _read(out)
+    assert list(_meta(out)["local_warps"]) == [f"2/{t}" for t in rows["tile"]]
+    np.testing.assert_array_equal(warped[[0, 1, 3]], plain[[0, 1, 3]])
+    a, b = plain[2].astype(float), warped[2].astype(float)
+    np.testing.assert_allclose(b[10:-10, 10:-10], np.roll(a, (-4, 6), axis=(0, 1))[10:-10, 10:-10], atol=1)
+
+
 def _append(path, truth, z_end, **kw):
     """_setup for the slices up to z_end with render.append on."""
     return _setup(path, truth, selection={"z_end": z_end}, render={"append": True, **kw.pop("render", {})}, **kw)
