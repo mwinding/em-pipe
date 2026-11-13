@@ -17,7 +17,9 @@ placing and blending its tiles, so seams within a slice stay intact.
 
 Interfaces: every tile layout change whose frame fit (align/segment_changes.csv) leaves a median
 mismatch above ``align.elastic_min_px``, and the first z after each mismatch listed in
-``align.elastic_interfaces``. Writes align/elastic.json (fields and per-slice weights, read by
+``align.elastic_interfaces``. Slices in ``align.interface_skip_slices`` (their own montage is off)
+are left out of the fit; the tile solve (pipeline/tilesolve.py) leaves out the matches across
+every interface, which its field corrects. Writes align/elastic.json (fields and per-slice weights, read by
 render) and align/elastic_interfaces.csv (mismatch over all matched points before and after).
 """
 
@@ -115,12 +117,19 @@ def solve(cfg, df, zs, mats, run, changes, stitch, load_tile_matches):
     nb = int(a["neighbors"])
     fields, per_z, reports = [], {}, []
     pos = {int(z): i for i, z in enumerate(zs)}
+    skip_z = list(a.get("interface_skip_slices") or [])
     found = interfaces(zs, run, changes, a)
     ks = [k for k, _ in found]
     for k, reason in found:
         z_old, z_new = int(zs[k - 1]), int(zs[k])
         m = load_tile_matches(int(zs[max(0, k - nb)]), int(zs[min(len(zs) - 1, k + nb - 1)]))
         x = (m["za"] <= z_old) & (m["zb"] >= z_new)
+        # The fit has no outlier rejection: a slice whose own montage is off would bend the whole field.
+        skip = x & (np.isin(m["za"], skip_z) | np.isin(m["zb"], skip_z))
+        if skip.any():
+            log.info("interface z %d->%d: %d points of align.interface_skip_slices left out of the field fit",
+                     z_old, z_new, int(skip.sum()))
+        x &= ~skip
         rep = {"z_before": z_old, "z_after": z_new, "reason": reason, "points": int(x.sum())}
         if x.sum() < 50:
             log.warning("interface z %d->%d: only %d points matched across it; no elastic correction",

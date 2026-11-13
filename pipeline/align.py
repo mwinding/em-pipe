@@ -73,6 +73,11 @@ DEFAULTS = {
                                            # previous / next corrected interface, across other layout changes)
         "elastic_grid_px": 1000,           # spacing of the field's grid, full-res px
         "elastic_smoothness": 0.3,         # penalty on differences between neighbouring grid values
+        # Slices left out of the fits across interfaces (the frame fit at a layout change and the elastic
+        # field), [z, ...]: one whose own montage is off, e.g. the first slice after a long pause with a
+        # tile scanned before the beam settled. Their matches would bend the fits, which have to hold for
+        # every slice either side. Correct their tiles with a local window (local_windows) instead.
+        "interface_skip_slices": [],
         "anchor": "first",             # first (first selected slice = identity) | mean (mean translation 0)
         "remove_trend": "none",        # none | linear | lowpass: remove slow drift (steps at seams are kept)
         "trend_window_slices": 2000,   # lowpass: Gaussian FWHM in slices
@@ -104,6 +109,15 @@ def _check_options(a):
     for key, allowed in OPTIONS.items():
         if a[key] not in allowed:
             raise ValueError(f"align.{key} must be one of {allowed}, not {a[key]!r}")
+    skip = a.get("interface_skip_slices") or []
+    if not isinstance(skip, list) or not all(isinstance(z, int) and not isinstance(z, bool) for z in skip):
+        raise ValueError(f"align.interface_skip_slices must be a list of slice numbers (z), not {skip!r}")
+
+
+def skipped(za, zb, a):
+    """True for matches with a slice of align.interface_skip_slices on either side."""
+    skip = list(a.get("interface_skip_slices") or [])
+    return np.isin(za, skip) | np.isin(zb, skip)
 
 
 # ----- run: point matches -------------------------------------------------------------
@@ -327,7 +341,9 @@ def solve(cfg):
 
     def tile_matches(z_lo, z_hi):
         return _tile_matches(cfg, df, zs, a, z_lo, z_hi)
-    tilesolve.solve(cfg, df, zs, mats, run, stitch, tile_matches)
+    # The elastic fields correct their interfaces: the tile solve leaves the matches across them out.
+    cuts = [k for k, _ in elastic.interfaces(zs, run, changes, a)]
+    tilesolve.solve(cfg, df, zs, mats, run, stitch, tile_matches, cuts)
     elastic.solve(cfg, df, zs, mats, run, changes, stitch, tile_matches)
 
 
@@ -409,9 +425,15 @@ def segment_frames(m, run, run_seg, zs, a):
     """
     model = a["segment_change_model"]
     ra, rb = run[m["pairs"][m["pid"], 0]], run[m["pairs"][m["pid"], 1]]
+    za, zb = zs[m["pairs"][m["pid"], 0]], zs[m["pairs"][m["pid"], 1]]
+    skip = skipped(za, zb, a)
     steps, rows = [transforms.identity()], []   # steps[k]: run k's frame -> run k-1's
     for k in range(1, int(run.max()) + 1):
         sel = (ra == k - 1) & (rb == k)
+        if (sel & skip).any():
+            log.info("layout change at z %d -> %d: %d points of align.interface_skip_slices left out of the "
+                     "frame fit", int(zs[run == k - 1][-1]), int(zs[run == k][0]), int((sel & skip).sum()))
+        sel &= ~skip
         row = {"z_before": int(zs[run == k - 1][-1]), "z_after": int(zs[run == k][0]),
                "segment_before": int(run_seg[k - 1]), "segment_after": int(run_seg[k]),
                "model": model, "points": int(sel.sum())}

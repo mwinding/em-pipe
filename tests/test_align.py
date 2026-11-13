@@ -471,6 +471,10 @@ def test_local_tile_solve_at_layout_change(tmp_path):
     assert sorted(tiles["z"].unique()) == list(range(3, 9))
     assert rep["change_median_after_px"][0] < 0.5 * rep["change_median_before_px"][0]
 
+    # With an elastic field at the change, the field corrects it: the tile solve leaves the matches across out.
+    rep, _ = solve(local_half_width=n, local_seam_weight=4.0, elastic_min_px=1.0, elastic_grid_px=60)
+    assert np.isnan(rep["change_median_before_px"][0]) and rep["points"][0] > 0
+
     rep, tiles = solve(local_at_layout_changes=False, local_windows=[[1, 2]])
     assert rep["reason"].tolist() == ["configured z 1-2"] and sorted(tiles["z"].unique()) == [1, 2]
     rep, tiles = solve(local_at_layout_changes=False)
@@ -576,6 +580,77 @@ def test_segment_frames_chain_to_reference():
     frames, _ = align.segment_frames(m, run, np.array([4, 5, 7]), zs, {**a, "segment_reference": "first"})
     np.testing.assert_allclose(frames[0], transforms.identity(), atol=1e-9)
     np.testing.assert_allclose(transforms.compose(transforms.invert(true[0]), true[2]), frames[2], atol=1e-6)
+
+
+def test_interface_skip_slices_leave_the_frame_fit():
+    """A slice whose own montage is off (here z 4: stretched 3 %), matched across the change at z 3,
+    bends the frame fit; listed in align.interface_skip_slices its points are left out and the fit is exact."""
+    rng = np.random.default_rng(1)
+    zs = np.arange(8)
+    run = np.array([0, 0, 0, 1, 1, 1, 1, 1])
+    true = np.array([[1.002, 0.001, -40.0], [-0.001, 0.999, 15.0]])   # run 1 frame -> run 0 frame
+    stretch = np.array([[1.03, 0.0, -300.0], [0.0, 1.0, 0.0]])
+    pa, pb, pid = [], [], []
+    pairs = [(1, 3), (1, 4), (2, 3), (2, 4)]
+    for i, (za, zb) in enumerate(pairs):
+        world = rng.uniform(0, 20000, (300, 2))
+        q = transforms.apply(transforms.invert(true), world)
+        pa.append(world)
+        pb.append(transforms.apply(stretch, q) if zb == 4 else q)
+        pid.append(np.full(300, i))
+    m = {"pa": np.concatenate(pa), "pb": np.concatenate(pb), "pid": np.concatenate(pid), "pairs": np.array(pairs)}
+    a = {**align.DEFAULTS["align"]}
+    frames, ch = align.segment_frames(m, run, np.array([3, 4]), zs, {**a, "segment_reference": "first"})
+    assert ch["points"][0] == 1200 and ch["median_px"][0] > 1
+    frames, ch = align.segment_frames(m, run, np.array([3, 4]), zs,
+                                      {**a, "segment_reference": "first", "interface_skip_slices": [4]})
+    assert ch["points"][0] == 600 and ch["median_px"][0] < 1e-6
+    np.testing.assert_allclose(frames[1], true, atol=1e-6)
+    with pytest.raises(ValueError, match="interface_skip_slices"):
+        align._check_options({**a, "interface_skip_slices": "4"})
+
+
+def test_elastic_fit_leaves_out_skip_slices(tmp_path):
+    """The field is fitted to the matches across the interface without the listed slices: one slice
+    with a distorted montage (z 5, its points shifted 30 px) no longer bends it."""
+    from pipeline import elastic
+    rng = np.random.default_rng(2)
+    zs, run = np.arange(10), np.r_[np.zeros(5, int), np.ones(5, int)]
+    changes = pd.DataFrame({"z_before": [4], "z_after": [5], "median_px": [9.0]})
+
+    def true(q):   # where the after side's content must move to land on the before side's
+        return np.column_stack([6 * np.sin(q[:, 0] / 3000), 4 * np.cos(q[:, 1] / 2500)])
+    za, zb, qa, qb = [], [], [], []
+    for a_, b_ in [(2, 5), (3, 5), (4, 5), (3, 6), (4, 6), (4, 7)]:
+        q = rng.uniform(0, 10000, (400, 2))
+        za += [a_] * len(q)
+        zb += [b_] * len(q)
+        qb.append(q)
+        qa.append(q + true(q) + (30.0 if b_ == 5 else 0.0))   # z 5: its own montage is off
+    m = {"za": np.array(za), "zb": np.array(zb), "ta": np.full(len(za), "0-0"), "tb": np.full(len(za), "0-0"),
+         "qa": np.vstack(qa), "qb": np.vstack(qb)}
+    mats = np.repeat(transforms.identity()[None], len(zs), axis=0)
+    stitch = {(int(z), "0-0"): transforms.identity() for z in zs}
+    a = {**align.DEFAULTS["align"], "elastic_grid_px": 1000}
+
+    def fit(**opts):
+        cfg = {"output_dir": str(tmp_path), "align": {**a, **opts}}
+        _, rep = elastic.solve(cfg, None, zs, mats, run, changes, stitch, lambda lo, hi: m)
+        return rep.iloc[0]
+    with_bad, without = fit(), fit(interface_skip_slices=[5])
+    assert with_bad["points"] == 2400 and without["points"] == 1200
+    assert without["median_after_px"] < 0.5 < with_bad["median_after_px"]
+
+
+def test_tile_solve_leaves_out_matches_across_elastic_interfaces():
+    from pipeline import tilesolve
+    zs = np.array([10, 11, 12, 14, 15, 16])     # z 13 not selected
+    za, zb = np.array([10, 11, 12, 12, 14, 11]), np.array([11, 12, 14, 15, 16, 16])
+    assert tilesolve.crosses(za, zb, zs, []).tolist() == [False] * 6
+    # interface before z 14 (position 3) and before z 16 (position 5)
+    assert tilesolve.crosses(za, zb, zs, [3]).tolist() == [False, False, True, True, False, True]
+    assert tilesolve.crosses(za, zb, zs, [3, 5]).tolist() == [False, False, True, True, True, True]
+    assert tilesolve.crosses(zb, za, zs, [3]).tolist() == [False, False, True, True, False, True]   # either order
 
 
 def test_anchor_mean(drift_data, tmp_path):

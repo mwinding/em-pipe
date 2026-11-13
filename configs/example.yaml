@@ -96,6 +96,11 @@ align:
                              # next corrected interface, across other layout changes)
   elastic_grid_px: 1000      # spacing of the field's grid, full-res px
   elastic_smoothness: 0.3    # penalty on differences between neighbouring grid values
+  # Slices left out of the fits across interfaces (frame fit, elastic field), [z, ...]: one whose own
+  # montage is off, e.g. the first slice after a long pause with a tile scanned before the beam
+  # settled. Fit its tiles with a one-slice local window instead, e.g. local_windows: [[z, z]] (the
+  # tile solve leaves out matches across elastic interfaces, so it uses the slices after it).
+  interface_skip_slices: []
   anchor: first              # first (first selected slice = identity) | mean (mean translation 0)
   remove_trend: none         # none | linear | lowpass: remove slow drift (steps at seams are kept)
   trend_window_slices: 2000  # lowpass: Gaussian FWHM in slices

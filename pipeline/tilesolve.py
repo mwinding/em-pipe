@@ -12,7 +12,9 @@ its own affine, solved jointly from
   both tiles put them now).
 
 Slices just outside a window keep their transforms, so a correction fades in and out over the
-window. Windows: ``align.local_half_width`` slices either side of every tile layout change
+window. Matches across an elastic interface (pipeline/elastic.py) are left out: its field corrects
+that mismatch. So a window of one slice right after such an interface (e.g. the first slice after a
+pause with one tile scanned before the beam settled) fits that slice's tiles to the slices after it. Windows: ``align.local_half_width`` slices either side of every tile layout change
 (``align.local_at_layout_changes``) and the z ranges in ``align.local_windows``. Writes
 ``align/local_tiles.csv`` (tile -> aligned transform for every (z, tile) in a window, used by
 render instead of align ∘ stitch) and ``align/local_windows.csv`` (mismatch before and after).
@@ -214,8 +216,24 @@ def _solve(n, ia, ib, Ha, Hb, r0, w, reg):
     return U.transpose(0, 2, 1)   # (n, axis, k)
 
 
-def solve(cfg, df, zs, mats, run, stitch, load_tile_matches):
-    """Run every window; write align/local_tiles.csv and align/local_windows.csv."""
+def crosses(za, zb, zs, cuts):
+    """True for matches between slices on different sides of an interface; ``cuts``: positions in
+    ``zs`` of the first slice after each."""
+    if not len(cuts):
+        return np.zeros(len(za), bool)
+    lo = np.searchsorted(zs, np.minimum(za, zb))[:, None]
+    hi = np.searchsorted(zs, np.maximum(za, zb))[:, None]
+    c = np.asarray(cuts)[None, :]
+    return ((lo < c) & (hi >= c)).any(axis=1)
+
+
+def solve(cfg, df, zs, mats, run, stitch, load_tile_matches, cuts=()):
+    """Run every window; write align/local_tiles.csv and align/local_windows.csv.
+
+    ``cuts``: the elastic interfaces (positions in zs of the first slice after each). Matches across
+    them are left out: the field corrects that mismatch, fitted to the transforms before this solve,
+    and render applies it on top of these tiles, so tiles moved here as well would be corrected twice.
+    """
     a = cfg["align"]
     wins = windows(zs, run, a)
     rows, reports = [], []
@@ -229,7 +247,11 @@ def solve(cfg, df, zs, mats, run, stitch, load_tile_matches):
         T0 = {k: transforms.compose(mats[pos[k[0]]], stitch[k]) for k in shapes if k[0] in pos}
         m = load_tile_matches(int(around[0]), int(around[-1]))
         sel = np.isin(m["za"], list(inside)) | np.isin(m["zb"], list(inside))
-        m = {k: v[sel] for k, v in m.items()}
+        cut = sel & crosses(m["za"], m["zb"], zs, cuts)
+        if cut.any():
+            log.info("local tile solve z %d-%d: %d matches across elastic interfaces left out", int(zs[i0]),
+                     int(zs[i1]), int(cut.sum()))
+        m = {k: v[sel & ~cut] for k, v in m.items()}
         out, rep, (before, after, keep, ok) = solve_window(T0, shapes, m, inside, a)
         rep.update(z_first=int(zs[i0]), z_last=int(zs[i1]), reason=reason)
         rep["change_median_before_px"] = rep["change_median_after_px"] = np.nan
