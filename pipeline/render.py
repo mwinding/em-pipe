@@ -290,6 +290,31 @@ def _destreak_settings(cfg):
     return deep_merge(getattr(destreak, "DEFAULTS", {}), {"destreak": cfg["destreak"]})["destreak"]
 
 
+def _check_references(cfg, plan, settings):
+    """With a destreak reference: every planned file's reference file exists, with its slices and size."""
+    if not settings or not settings.get("reference_from"):
+        return
+    from . import destreak
+    destreak.settings({"destreak": settings})
+    dcfg = {"destreak": settings}
+    cache = StackCache(cfg["raw_dir"])
+    bad = []
+    for file, rows in plan.groupby("file"):
+        ref = destreak.reference_file(file, dcfg)
+        try:
+            n, h, w = cache.get(ref).shape
+        except (OSError, ValueError) as e:
+            bad.append(f"{ref} ({type(e).__name__}: {e})")
+            continue
+        _, h0, w0 = cache.get(file).shape
+        if (h, w) != (h0, w0) or n <= int(rows["index"].max()):
+            bad.append(f"{ref}: {n} slices of {h} x {w} px, {file} needs {int(rows['index'].max()) + 1} of {h0} x {w0}")
+    if bad:
+        raise ValueError(f"destreak reference files missing or not matching for {len(bad)} raw files, e.g. "
+                         + "; ".join(bad[:3]))
+    log.info("destreak: stripe parts swapped from reference files (%d checked)", plan["file"].nunique())
+
+
 def init(cfg, overwrite=False):
     """Freeze the render plan and create the empty volume. Returns an exit code."""
     s = _settings(cfg)
@@ -315,6 +340,7 @@ def init(cfg, overwrite=False):
         "elastic": elastic.load(cfg),
         "planes": planes,
     }
+    _check_references(cfg, plan, meta["destreak"])
     pg = patchgrid.digest(cfg)
     if pg is not None:   # only when on: the same plan digest as volumes rendered before patchgrid existed
         patchgrid.load(cfg)   # missing shapes fail here, not in every run task
@@ -469,6 +495,7 @@ def _append(cfg, s, plan, old, root, wdir):
     meta = {k: v for k, v in old.items() if k not in ("digest", "created", "patchgrid")}
     meta.update(shape=[len(planes), *old["shape"][1:]], settings=s, destreak=_destreak_settings(cfg),
                 shading=shading.digest(cfg), elastic=fields, planes=planes)
+    _check_references(cfg, plan, meta["destreak"])
     pg = patchgrid.digest(cfg)
     if pg is not None:
         patchgrid.load(cfg)
@@ -605,11 +632,15 @@ class _Renderer:
         self.fields = {}
         self.segment = dict(zip(plan["z"], plan["segment"])) if "segment" in plan else {}
         self.kept = {}
-        self.destreak = None
+        self.destreak = self.reference = None
         if meta.get("destreak"):
             from . import destreak
             dcfg = {**cfg, "destreak": meta["destreak"]}
-            self.destreak = lambda img: destreak.destreak_from_cfg(img, dcfg)
+            if meta["destreak"].get("reference_from"):   # swap from a second detector's same slice
+                self.reference = lambda file: destreak.reference_file(file, dcfg)
+                self.destreak = lambda img, ref: destreak.destreak_from_cfg(img, dcfg, ref)
+            else:
+                self.destreak = lambda img, ref=None: destreak.destreak_from_cfg(img, dcfg)
 
     def plane(self, sources, keep=()):
         """uint8 plane = weighted mean of its source slices (0 = no data), then CLAHE.
@@ -724,7 +755,11 @@ class _Renderer:
             return None
         img = self.cache.read(t, slice(r0, r1), slice(c0, c1))
         if self.destreak is not None:
-            img = self.destreak(img)
+            ref = None
+            if self.reference is not None:
+                ref = self.cache.read({"file": self.reference(t["file"]), "index": t["index"]},
+                                      slice(r0, r1), slice(c0, c1))
+            img = self.destreak(img, ref)
         key = (self.segment.get(t["z"]), t["tile"])
         field = self.shading.get(key)
         rows, cols = slice(r0, r1), slice(c0, c1)

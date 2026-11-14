@@ -20,7 +20,7 @@ from scipy import ndimage
 
 import pipeline
 import synth
-from pipeline import omezarr, render, transforms
+from pipeline import destreak, omezarr, render, transforms
 
 LO, HI = 26000, 41000
 GAIN = {"0-1": 1.2, "1-0": 0.85}
@@ -406,6 +406,50 @@ def test_destreak_applied_per_tile(truth, tmp_path, monkeypatch):
     ok = cov & (img > 0.2)                          # where the offset doesn't clip at 0
     # 1500 counts = 0.1 of the (gain-scaled) range: about -25 levels.
     assert -31 < np.median(vol[ok] - 255.0 * img[ok]) < -20
+
+
+def _striped_with_reference(path, n=3):
+    """A dataset with curtains and, under raw/Backscatter/, the same scans from a detector without them
+    (other contrast and offset, 3x the noise), named as EsB files: (dataset with curtains, destreak section)."""
+    shape = dict(n_slices=n, tile_shape=(256, 288), overlap=(48, 56), tile_gain=GAIN, seed=3)
+    t = synth.make_dataset(path / "raw", streaks=0.04, **shape)
+    ref = synth.make_dataset(path / "ref", lo=12000, hi=20000, noise=0.03, **shape)
+    (t.raw_dir / "Backscatter").mkdir()
+    for name in ref.files:
+        (ref.raw_dir / name).rename(t.raw_dir / "Backscatter" / re.sub(r"^(M\d\d_D\d\d)", r"\1_EsB", name))
+    section = {"enabled": True, "reference_from": r"^(.*/)?(M\d\d_D\d\d)(.*)$",
+               "reference_to": r"\1Backscatter/\2_EsB\3", "levels": 5, "stripe_px": 64}
+    return t, section
+
+
+def test_destreak_swaps_stripes_from_a_reference_detector(tmp_path):
+    t, section = _striped_with_reference(tmp_path)
+    zs = list(range(3))
+    cfg0, out0 = _setup(tmp_path / "plain", t, selection={"z_end": zs[-1]})
+    _render(cfg0)
+    cfg1, out1 = _setup(tmp_path / "swap", t, selection={"z_end": zs[-1]}, destreak=section)
+    _render(cfg1)
+    assert _meta(out1)["destreak"]["reference_to"] == section["reference_to"]
+    img, cov = _aligned(t, zs)
+    v0, v1 = _read(out0).astype(float), _read(out1).astype(float)
+    full = cov.all(axis=0)
+    ys, xs = np.where(full)
+    box = np.s_[ys.min() + 8:ys.max() - 8, xs.min() + 8:xs.max() - 8]
+    for k in range(len(zs)):
+        exp = 255.0 * img[k][box]
+        before = destreak.stripe_amplitude(v0[k][box] - exp)
+        after = destreak.stripe_amplitude(v1[k][box] - exp)
+        assert after < 0.4 * before, f"plane {k}: stripe amplitude {after:.2f} vs {before:.2f} without"
+        assert _corr(v1[k][box], exp) > _corr(v0[k][box], exp)
+
+
+def test_render_init_refuses_missing_reference_files(tmp_path):
+    t, section = _striped_with_reference(tmp_path, n=2)
+    missing = sorted((t.raw_dir / "Backscatter").glob("*tile0-1*"))[0]
+    missing.unlink()
+    cfg, _ = _setup(tmp_path / "swap", t, selection={"z_end": 1}, destreak=section)
+    with pytest.raises(ValueError, match="reference files missing"):
+        render.main(["init", "--config", str(cfg)])
 
 
 def test_missing_levels_fall_back_to_percentiles(truth, tmp_path, caplog):

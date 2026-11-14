@@ -1,14 +1,32 @@
-"""Curtaining (stripe) removal with the combined wavelet-FFT filter of Münch et al. 2009.
+"""Curtaining (stripe) removal: the combined wavelet-FFT filter of Münch et al. 2009, or, given a
+second detector's image of the same scan that has no curtains, a swap of the stripe part from it.
 
-FIB milling leaves stripes along the milling direction. In a wavelet decomposition they
-sit in one detail band per level (vertical stripes, constant along y, in pywt's cV);
-damping the low frequencies of that band along the stripe direction removes them while
-leaving other structure largely intact. ``destreak`` is applied per tile slice inside
-render; ``python -m pipeline.destreak test`` writes before/after images for tuning.
+FIB milling leaves stripes along the milling direction. In a wavelet decomposition they sit in
+one detail band per level (vertical stripes, constant along y, in pywt's cV). The filter takes out
+the low frequencies of that band along the stripe direction (its "stripe part"). That removes the
+stripes, but also the image's own structure that runs along them, which it cannot tell apart.
+
+With ``reference_from`` / ``reference_to`` (how to get from a raw file's path to the same scan from
+another detector, e.g. a backscatter detector, which sees composition rather than the surface
+relief that makes curtains) the stripe part is not removed but replaced by the reference's stripe
+part, scaled by a local gain fitted on the rest of the band, where both detectors see the same
+structure. The image's own structure along the stripes comes back from the reference; everything
+else stays the image's own. No curtain mask is needed: where there are no curtains the two stripe
+parts agree and the swap changes little. With ``core_threshold``, the cores of strong curtains (a
+few px wide, where the swap took out the most) then take the reference matched to the image
+locally: a curtain that wanders sideways from row to row is not a stripe at any scale, so the
+swap leaves a faint jagged trace of it.
+
+``stripe_px`` sets what counts as a stripe by length (structure varying more slowly than that along
+the stripes), the same at every image size; ``sigma`` (notch width in FFT bins over the band's
+length) is the original setting. Bands are reflected at their ends before filtering, so the top and
+bottom rows of a tile don't mix. ``destreak`` / ``swap`` run per tile slice inside render;
+``python -m pipeline.destreak test`` writes before/after images for tuning.
 """
 
 import logging
 import os
+import re
 import sys
 
 import cv2
@@ -29,8 +47,21 @@ DEFAULTS = {
         "enabled": False,       # apply inside render
         "direction": "vertical",  # stripes run along y (vertical) or along x (horizontal)
         "wavelet": "db4",       # pywt wavelet name
-        "levels": 6,            # wavelet decomposition levels (capped by the image size)
+        "levels": 6,            # wavelet decomposition levels (capped by the image size); level L holds
+                                # structure ~2^L px across, so 8 reaches bands ~500 px wide
         "sigma": 4.0,           # width of the Gaussian notch in FFT bins; larger removes more
+        "stripe_px": None,      # instead of sigma: what varies more slowly than this along the stripes
+                                # (full-resolution px) is stripe, at any image size (e.g. 256)
+        "reference_from": None,  # regex on a raw file's path (relative to raw_dir) and its replacement
+        "reference_to": None,    # (re.sub): the same scan from a detector without the stripes. Then the
+                                 # stripe part is swapped from it (scaled by a local gain), not removed
+        "gain_sigma": 8.0,      # swap: local gain window, Gaussian sigma in coefficients of each level
+        "core_threshold": None,  # swap: where the fine structure it took out (persisting along the
+                                 # stripes) exceeds this many times the image's pixel noise (strong
+                                 # curtain cores), the reference matched to the image locally fills in
+        "core_dilate_px": 2,    # cores widened by this many px across the stripes (curtains wander)
+        "core_window_px": 31,   # window of the local linear match reference -> image
+        "core_denoise_px": 1.0,  # Gaussian sigma smoothing the reference before it fills cores
     },
 }
 
@@ -41,40 +72,204 @@ _BANDS = {"vertical": (1, 0), "horizontal": (0, 1)}
 _WORKERS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
 
 
-def destreak(img, direction="vertical", wavelet="db4", levels=6, sigma=4.0):
-    """Remove stripes from a 2D image; returns float32 of the same shape and mean."""
+def _sigma(n, level, sigma, stripe_px):
+    """Notch width in FFT bins for a band of n coefficients along the stripes at this level."""
+    if stripe_px is None:
+        return float(sigma)
+    return n / (float(stripe_px) / 2 ** level)
+
+
+def _keep(m, sigma):
+    """Gains of the stripe low-pass over the m rfft bins of a band reflected to twice its length."""
+    k = np.arange(m, dtype=np.float32)
+    return np.exp(-k ** 2 / (2 * (2 * sigma) ** 2))   # twice the length: twice the bins for the same cutoff
+
+
+def _stripe_part(c, axis, sigma):
+    """What a detail band holds that varies slowly along the stripes: a Gaussian low-pass of width
+    ``sigma`` bins (over the band's length) along ``axis``, after reflecting the band at its end so
+    that its first and last rows (columns) don't mix."""
+    n = c.shape[axis]
+    f = scipy.fft.rfft(np.concatenate([c, np.flip(c, axis=axis)], axis=axis), axis=axis, workers=_WORKERS)
+    keep = _keep(f.shape[axis], sigma)
+    f *= keep[:, None] if axis == 0 else keep[None, :]
+    out = scipy.fft.irfft(f, n=2 * n, axis=axis, workers=_WORKERS)
+    return np.ascontiguousarray(out[:n] if axis == 0 else out[:, :n], np.float32)
+
+
+def _rest_noise_share(n, sigma):
+    """Share of white noise power left in a band of n coefficients after its stripe part is taken out."""
+    return float(np.mean((1 - _keep(n + 1, sigma)) ** 2))
+
+
+def _check(direction, wavelet, levels, h, w):
     if direction not in _BANDS:
         raise ValueError(f"direction must be one of {sorted(_BANDS)}, got {direction!r}")
-    band, axis = _BANDS[direction]
-    h, w = np.shape(img)
-    mean = float(np.mean(img, dtype=np.float64))
-    levels = min(int(levels), pywt.dwt_max_level(min(h, w), wavelet))
-    if levels < 1:  # smaller than the wavelet filter: nothing to separate
-        return np.array(img, np.float32)
-    # No float32 copy of the input is kept alive: peak memory is about 3.3x a float32 tile.
-    coeffs = pywt.wavedec2(np.asarray(img, np.float32), wavelet, level=levels)
-    for i in range(1, len(coeffs)):
-        details = list(coeffs[i])
-        c = details[band]
-        f = scipy.fft.rfft(c, axis=axis, workers=_WORKERS)
-        k = np.arange(f.shape[axis], dtype=np.float32)
-        damp = 1 - np.exp(-k ** 2 / (2 * sigma ** 2))
-        f *= damp[:, None] if axis == 0 else damp[None, :]
-        details[band] = scipy.fft.irfft(f, n=c.shape[axis], axis=axis, workers=_WORKERS).astype(np.float32, copy=False)
-        del f, c
-        coeffs[i] = tuple(details)
+    return min(int(levels), pywt.dwt_max_level(min(h, w), wavelet))
+
+
+def _finish(coeffs, wavelet, h, w, mean):
     out = pywt.waverec2(coeffs, wavelet)
-    del coeffs
     out = np.ascontiguousarray(out[:h, :w], np.float32)
-    # Damping touches only detail bands, so the mean shifts only through boundary effects.
+    # Only detail bands change, so the mean shifts only through boundary effects.
     out += np.float32(mean - float(out.mean(dtype=np.float64)))
     return out
 
 
-def destreak_from_cfg(img, cfg):
-    """``destreak`` with the parameters in ``cfg['destreak']`` (the caller checks ``enabled``)."""
+def destreak(img, direction="vertical", wavelet="db4", levels=6, sigma=4.0, stripe_px=None):
+    """Remove stripes from a 2D image; returns float32 of the same shape and mean."""
+    h, w = np.shape(img)
+    levels = _check(direction, wavelet, levels, h, w)
+    if levels < 1:  # smaller than the wavelet filter: nothing to separate
+        return np.array(img, np.float32)
+    band, axis = _BANDS[direction]
+    mean = float(np.mean(img, dtype=np.float64))
+    # No float32 copy of the input is kept alive: peak memory is about 3.3x a float32 tile.
+    coeffs = pywt.wavedec2(np.asarray(img, np.float32), wavelet, level=levels)
+    n = len(coeffs) - 1
+    for i in range(1, n + 1):
+        details = list(coeffs[i])
+        c = details[band]
+        details[band] = c - _stripe_part(c, axis, _sigma(c.shape[axis], n - i + 1, sigma, stripe_px))
+        coeffs[i] = tuple(details)
+    return _finish(coeffs, wavelet, h, w, mean)
+
+
+def noise_sd(img, wavelet="db4"):
+    """Robust SD of an image's pixel noise: the MAD of its finest diagonal wavelet band (Donoho)."""
+    cd = pywt.dwt2(np.asarray(img, np.float32), wavelet)[1][2]
+    return float(np.median(np.abs(cd)) / 0.6745)
+
+
+def _blur(a, s):
+    return cv2.GaussianBlur(a, (0, 0), float(s))
+
+
+def swap(img, ref, direction="vertical", wavelet="db4", levels=6, sigma=4.0, stripe_px=None, gain_sigma=8.0):
+    """Stripes of ``img`` replaced from ``ref`` (the same scan, another detector, without them).
+
+    In each level's stripe band, img's stripe part (``_stripe_part``) is swapped for ref's times a
+    local gain g = <r_i r_e> / (<r_e r_e> - noise) fitted on the rest of the band (r_i, r_e: band
+    minus stripe part; Gaussian window ``gain_sigma`` coefficients). The noise term (ref's pixel noise,
+    which orthonormal wavelets carry into every band unchanged, times the share the rest of the band
+    keeps) stops a noisy reference from biasing the gain low. Returns float32 of img's shape and mean.
+    """
+    h, w = np.shape(img)
+    if np.shape(ref) != (h, w):
+        raise ValueError(f"reference shape {np.shape(ref)} differs from the image's {(h, w)}")
+    levels = _check(direction, wavelet, levels, h, w)
+    if levels < 1:
+        return np.array(img, np.float32)
+    band, axis = _BANDS[direction]
+    mean = float(np.mean(img, dtype=np.float64))
+    ref = np.asarray(ref, np.float32)
+    noise = noise_sd(ref, wavelet) ** 2 if pywt.Wavelet(wavelet).orthogonal else 0.0
+    ci = pywt.wavedec2(np.asarray(img, np.float32), wavelet, level=levels)
+    ce = pywt.wavedec2(ref, wavelet, level=levels)
+    n = len(ci) - 1
+    for i in range(1, n + 1):
+        details = list(ci[i])
+        c, e = details[band], ce[i][band]
+        s = _sigma(c.shape[axis], n - i + 1, sigma, stripe_px)
+        sc, se = _stripe_part(c, axis, s), _stripe_part(e, axis, s)
+        rc, re_ = c - sc, e - se
+        num, den = _blur(rc * re_, gain_sigma), _blur(re_ * re_, gain_sigma)
+        # Keep at least a tenth of the local power so pure-noise areas (resin) don't blow the gain up.
+        g = num / np.maximum(den - noise * _rest_noise_share(c.shape[axis], s), 0.1 * den + 1e-12)
+        details[band] = rc + g * se
+        ci[i] = tuple(details)
+        ce[i] = None
+    return _finish(ci, wavelet, h, w, mean)
+
+
+def fill_cores(img, out, ref, threshold, direction="vertical", dilate_px=2, window_px=31, denoise_px=1.0,
+               wavelet="db4"):
+    """Curtain cores of ``out`` (= swap(img, ref)) filled from ``ref`` matched to ``out`` locally.
+
+    Cores: where what the swap took out (img - out), high-passed across the stripes (minus its
+    4 px Gaussian across them, so broad bands don't count) and averaged along them (16 px Gaussian:
+    a curtain persists, texture doesn't), exceeds ``threshold`` times img's pixel noise; widened
+    ``dilate_px`` across the stripes and softened by 1 px. There ``ref`` (smoothed by ``denoise_px``)
+    goes through a local linear map a * ref + b fitted to ``out`` around the cores (box ``window_px``,
+    core pixels left out; the slope corrected for ref's noise as in ``swap``).
+    """
+    _, axis = _BANDS[direction]
+    across = 1 - axis
+    removed = np.asarray(img, np.float32) - out
+    fine = removed - ndimage.gaussian_filter1d(removed, 4.0, axis=across)
+    strength = ndimage.gaussian_filter1d(np.abs(fine), 16.0, axis=axis)
+    core = (strength > threshold * noise_sd(img, wavelet)).astype(np.uint8)
+    if not core.any():
+        return out
+    if dilate_px:
+        size = 2 * int(dilate_px) + 1
+        core = cv2.dilate(core, np.ones((1, size) if across == 1 else (size, 1), np.uint8))
+    m = np.clip(_blur(core.astype(np.float32), 1.0), 0, 1)
+    m[core > 0] = 1.0
+    ref = np.asarray(ref, np.float32)
+    e = _blur(ref, denoise_px) if denoise_px else ref
+    # Noise left in e: ref's pixel noise times the smoothing kernel's sum of squares.
+    if denoise_px:
+        g = cv2.getGaussianKernel(int(8 * denoise_px) | 1, denoise_px)
+        kk = float((g ** 2).sum()) ** 2
+    else:
+        kk = 1.0
+    noise = noise_sd(ref, wavelet) ** 2 * kk
+    wgt = (core == 0).astype(np.float32)
+    box = lambda a: cv2.boxFilter(a, -1, (window_px, window_px), normalize=False)
+    sw = box(wgt)
+    # Fill only where at least a quarter of the window is outside the cores to fit the match on.
+    m *= sw >= 0.25 * window_px ** 2
+    sw += 1e-6
+    me, mo = box(wgt * e) / sw, box(wgt * out) / sw
+    cov = box(wgt * e * out) / sw - me * mo
+    var = box(wgt * e * e) / sw - me * me
+    a = cov / np.maximum(var - noise, 0.1 * var + 1e-12)
+    matched = a * e + (mo - a * me)
+    return ((1 - m) * out + m * matched).astype(np.float32)
+
+
+def reference_file(file, cfg):
+    """The reference detector's file for raw ``file`` (relative path) per destreak.reference_from/_to."""
     p = {**DEFAULTS["destreak"], **(cfg.get("destreak") or {})}
-    return destreak(img, p["direction"], p["wavelet"], p["levels"], p["sigma"])
+    new, n = re.subn(p["reference_from"], p["reference_to"], str(file))
+    if not n or new == str(file):
+        raise ValueError(f"destreak.reference_from {p['reference_from']!r} does not map {file!r} to another file")
+    return new
+
+
+def settings(cfg):
+    """destreak's section with defaults, checked."""
+    p = {**DEFAULTS["destreak"], **(cfg.get("destreak") or {})}
+    if (p["reference_from"] is None) != (p["reference_to"] is None):
+        raise ValueError("destreak.reference_from and destreak.reference_to go together")
+    if p["stripe_px"] is not None and not float(p["stripe_px"]) > 0:
+        raise ValueError(f"destreak.stripe_px must be > 0 or null, got {p['stripe_px']!r}")
+    if p["core_threshold"] is not None:
+        if p["reference_from"] is None:
+            raise ValueError("destreak.core_threshold needs a reference (destreak.reference_from / _to)")
+        if not float(p["core_threshold"]) > 0:
+            raise ValueError(f"destreak.core_threshold must be > 0 or null, got {p['core_threshold']!r}")
+    return p
+
+
+def uses_reference(cfg):
+    return settings(cfg)["reference_from"] is not None
+
+
+def destreak_from_cfg(img, cfg, ref=None):
+    """destreak (or, with a reference configured, swap + fill_cores) per ``cfg['destreak']``; the caller
+    checks ``enabled`` and reads ``ref`` (the reference detector's same slice and window)."""
+    p = settings(cfg)
+    if p["reference_from"] is None:
+        return destreak(img, p["direction"], p["wavelet"], p["levels"], p["sigma"], p["stripe_px"])
+    if ref is None:
+        raise ValueError("destreak has a reference configured but none was given")
+    out = swap(img, ref, p["direction"], p["wavelet"], p["levels"], p["sigma"], p["stripe_px"], p["gain_sigma"])
+    if p["core_threshold"] is not None:
+        out = fill_cores(img, out, ref, float(p["core_threshold"]), p["direction"], p["core_dilate_px"],
+                         p["core_window_px"], p["core_denoise_px"], p["wavelet"])
+    return out
 
 
 def stripe_amplitude(img, direction="vertical", width=15):
@@ -110,11 +305,16 @@ def make_test_images(cfg, args):
         y0, x0 = max(0, h // 2 - 512), max(0, w // 2 - 512)
         y1, x1 = min(h, y0 + 1024), min(w, x0 + 1024)
     params = dict(cfg["destreak"])
-    for key in ("direction", "wavelet", "levels", "sigma"):
+    for key in ("direction", "wavelet", "levels", "sigma", "stripe_px"):
         if getattr(args, key) is not None:
             params[key] = getattr(args, key)
-    before = StackCache(cfg["raw_dir"]).read(row).astype(np.float32)
-    after = destreak(before, params["direction"], params["wavelet"], params["levels"], params["sigma"])
+    cache = StackCache(cfg["raw_dir"])
+    before = cache.read(row).astype(np.float32)
+    dcfg = {"destreak": params}
+    ref = None
+    if uses_reference(dcfg):   # the whole tile, as render does: the swap needs the reference's same slice
+        ref = cache.read({"file": reference_file(row["file"], dcfg), "index": row["index"]})
+    after = destreak_from_cfg(before, dcfg, ref)
     log.info("z=%d tile %s %s: stripe amplitude %.2f -> %.2f", args.z, args.tile, params,
              stripe_amplitude(before, params["direction"]), stripe_amplitude(after, params["direction"]))
 
@@ -146,6 +346,7 @@ def main(argv=None):
     p.add_argument("--wavelet", help="override destreak.wavelet")
     p.add_argument("--levels", type=int, help="override destreak.levels")
     p.add_argument("--sigma", type=float, help="override destreak.sigma")
+    p.add_argument("--stripe-px", dest="stripe_px", type=float, help="override destreak.stripe_px")
     args = p.parse_args(argv)
     cfg = setup(args, DEFAULTS)
     make_test_images(cfg, args)

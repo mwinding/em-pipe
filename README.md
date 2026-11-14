@@ -20,7 +20,7 @@ check → preview → stitch → align → [shading] → [overlaps] → [patchgr
 | patchgrid | Optional: smooth brightness maps within each tile for what the flat-field leaves near tile edges and corners (after Janelia's tile intensity correction, saalfeldlab/render): a gain and offset per patch, solved from the patch relations; their within-tile shape, the median over every 20th slice, per tile position and segment (`qc/patchgrid.png`). Intensity then balances the tiles on the patch relations with the shapes applied, and render applies flat-field and shape before each tile's window. |
 | intensity | Per-tile contrast levels, balanced across tile overlaps and smoothed over time. The balance comes from the preview thumbnails every few slices (`balance_source: thumbnails`) or from the overlaps step, slice by slice (`balance_source: overlaps`; with patchgrid, from the patch relations). |
 | zcorrect | Optional slice-thickness correction (off by default). |
-| render | Applies everything in one pass and writes OME-Zarr (Zarr v3, sharded), optionally downsampled; CLAHE; optional destreaking. |
+| render | Applies everything in one pass and writes OME-Zarr (Zarr v3, sharded), optionally downsampled; CLAHE; optional destreaking (filter, or swap from a second detector). |
 | pyramid | Lower-resolution scales of the volume. |
 | export | Quick-look TIFF of the volume for Fiji (finest scale under `export.max_gb`). |
 | precomputed | Optional: the volume as Neuroglancer precomputed (all scales, sharded), e.g. for segmentation with CloudVolume-based tools. |
@@ -133,7 +133,11 @@ The export serves like any volume: `python3 -m pipeline.serve FOLDER` lists `*.p
 - **Several volumes** (e.g. a 32 nm overview and a full-resolution `render.bbox` region) can share
   one `output_dir` if they have different `render.name`s.
 - **destreak and zcorrect** are off by default; tune destreak with
-  `python -m pipeline.destreak test --config C --z Z --tile 0-0` first.
+  `python -m pipeline.destreak test --config C --z Z --tile 0-0` first. If the microscope recorded a
+  second detector that doesn't see the curtains (e.g. backscatter next to in-lens SE, the same scan),
+  `destreak.reference_from` / `reference_to` swap the stripe part from it instead of removing it, so
+  structure that runs along the curtains is kept; `stripe_px` sets what counts as a stripe by length
+  and `core_threshold` fills the cores of strong curtains from the matched reference.
 - **patchgrid** needs `overlaps.patch_grid` > 0 (e.g. 8) and `intensity.balance_source: overlaps`.
   Setting or changing `overlaps.patch_grid` re-measures every overlap chunk; new shapes change the
   levels and the render plan (render init then asks for `--overwrite`, and render run refuses to go on). With patchgrid off and

@@ -170,12 +170,32 @@ patchgrid:                   # within-tile brightness shapes per tile position a
   reference: null            # R, the raw intensity at which the shapes' change c is defined; null: the median bin centre
 
 # Curtaining removal inside render. Tune first: python -m pipeline.destreak test --config C --z Z --tile r-c
+# Alone it is the wavelet-FFT filter (Münch et al. 2009): it takes the stripe part out of each level's
+# stripe band, and with it the image's own structure along the stripes. With a reference (the same
+# scan from a second detector that has no curtains, e.g. backscatter next to an in-lens SE detector)
+# the stripe part is swapped from the reference instead, scaled by a local gain: the structure along
+# the stripes comes back from it. Such a reference e.g. (InLens M10_D21_tile0-0.tif -> its EsB copy):
+#   reference_from: '^(.*/)?(M\d\d_D\d\d)(.*)$'
+#   reference_to: '\1Backscatter/\2_EsB\3'
 destreak:
   enabled: false             # apply inside render
   direction: vertical        # stripes run along y (vertical) or along x (horizontal)
   wavelet: db4               # pywt wavelet name
-  levels: 6                  # wavelet decomposition levels (capped by the image size)
+  levels: 6                  # wavelet decomposition levels (capped by the image size); level L holds
+                             # structure ~2^L px across, so 8 reaches bands ~500 px wide
   sigma: 4.0                 # width of the Gaussian notch in FFT bins; larger removes more
+  stripe_px: null            # instead of sigma: what varies more slowly than this along the stripes
+                             # (full-resolution px) is stripe, at any image size (e.g. 256)
+  reference_from: null       # regex on a raw file's path (relative to raw_dir) and its replacement
+  reference_to: null         # (re.sub): the reference detector's file of the same scan; render init
+                             # checks that every one exists with the same slices and size
+  gain_sigma: 8.0            # swap: local gain window, Gaussian sigma in coefficients of each level
+  core_threshold: null       # swap: where the fine structure it took out (persisting along the stripes)
+                             # exceeds this many times the image's pixel noise (strong curtain cores),
+                             # the reference matched to the image locally fills in; null: off
+  core_dilate_px: 2          # cores widened by this many px across the stripes (curtains wander)
+  core_window_px: 31         # window of the local linear match reference -> image
+  core_denoise_px: 1.0       # Gaussian sigma smoothing the reference before it fills cores
 
 zcorrect:
   enabled: false             # run zcorrect and let render use positions.csv
