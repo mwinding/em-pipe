@@ -93,6 +93,11 @@ align:
                              # (null: affine only): a distortion within one tile, e.g. scanned before the
                              # beam settled after a pause; written to align/local_warps.json, render applies it
   local_warp_smoothness: 0.1 # penalty on differences between neighbouring warp grid values (x matched points per cell)
+  local_rematch: false       # match the window's slices again, keeping per block of the tile the matches that agree
+                             # on one shift (align's matching keeps one rigid fit per tile pair: for a tile
+                             # distorted within itself only a band of it)
+  local_rematch_block_px: 1500  # local_rematch: block size in the tile
+  local_rematch_search_px: 200  # local_rematch: how far apart the current transforms may place a match
   local_seams: current       # seams the tile solve holds: current (where the tiles meet now) | matched (features
                              # matched in each overlap of the window's slices, from the raw tiles: right also
                              # where the stitch could only compromise, e.g. a rigid tile against a stretched one)

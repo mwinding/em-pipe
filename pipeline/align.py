@@ -72,6 +72,12 @@ DEFAULTS = {
         # each overlap of the window's slices, read from the raw tiles; right also where the stitch could
         # only compromise, e.g. a rigid tile against a stretched one). matched: RANSAC per this many px
         # along an overlap, so the matches can follow a distortion along the seam.
+        # Match the window's slices again with their neighbours, keeping per block of the tile the matches
+        # that agree on one translation (align's matching keeps one rigid RANSAC per tile pair: for a tile
+        # distorted within itself only a band of it). search: how far the current transforms may be off.
+        "local_rematch": False,
+        "local_rematch_block_px": 1500,
+        "local_rematch_search_px": 200,
         "local_seams": "current",
         "local_seam_chunk_px": 1000,
         "local_warp_smoothness": 0.1,      # penalty on neighbouring grid values, x matched points per grid cell

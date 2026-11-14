@@ -26,6 +26,13 @@ after its affine: for a distortion within one tile that no affine captures, e.g.
 before the beam settled after a pause. The fields go to ``align/local_warps.json`` (tile pixels ->
 displacement in aligned px), which render applies.
 
+Matches (``align.local_rematch``): align's matches keep, per tile pair, the inliers of one RANSAC
+(``align.ransac_model``, rigid): for a tile distorted within itself only a band of it. With
+local_rematch the window's slices are matched again with their neighbours, keeping per block of
+``align.local_rematch_block_px`` (in the tile) the matches that agree on one translation, so a warp
+gets matches over the whole tile; the current transforms only say where to look
+(``align.local_rematch_search_px``).
+
 Seams (``align.local_seams``): ``current`` holds each overlap where the tiles meet now (stitch and
 align). ``matched`` matches features in each overlap of the window's slices instead (read from the
 raw tiles, as the stitch's fine step) and holds those correspondences: right also where the stitch
@@ -160,6 +167,85 @@ def matched_seams(read, T, shapes, opts):
             pick = np.unique(np.linspace(0, len(qa) - 1, min(len(qa), int(opts["max_points_per_pair"]))).round().astype(int))
             out.append((ta, qa[pick], tb, qb[pick]))
     return out
+
+
+def _features(img, scale, max_features):
+    """SIFT at ``scale`` (as align's matching): keypoints in full-res tile pixels, descriptors."""
+    small = features.downsample(img, 1.0 / float(scale))
+    xy, desc = features.detect(features.to_uint8(small), nfeatures=int(max_features))
+    f = np.array([img.shape[1] / small.shape[1], img.shape[0] / small.shape[0]])
+    return (xy + 0.5) * f - 0.5, desc
+
+
+def rematch(feats, Ta, Tb, a):
+    """Point matches (q_a, q_b, full-res tile pixels) between two tiles of different slices, kept by a
+    translation RANSAC per block of ``align.local_rematch_block_px`` of tile a, among the candidates
+    the current transforms Ta, Tb place within ``align.local_rematch_search_px`` of each other.
+
+    feats: ((xy_a, desc_a), (xy_b, desc_b)) from _features. Unlike one RANSAC for the whole tile
+    pair, this follows a distortion within the tile (blocks are small enough for a shift).
+    """
+    (xa, da), (xb, db) = feats
+    ia, ib = features.match(da, db, float(a["ratio"]))
+    qa, qb = xa[ia].astype(float), xb[ib].astype(float)
+    pa, pb = transforms.apply(Ta, qa), transforms.apply(Tb, qb)
+    near = np.linalg.norm(pa - pb, axis=1) < float(a["local_rematch_search_px"])
+    qa, qb, pa, pb = qa[near], qb[near], pa[near], pb[near]
+    block = float(a["local_rematch_block_px"])
+    key = np.floor(qa[:, 1] / block).astype(int) * 1000 + np.floor(qa[:, 0] / block).astype(int)
+    threshold = float(a["ransac_px"]) / float(a["scale"])   # align's threshold, in full-res px
+    keep = np.zeros(len(qa), bool)
+    for k in np.unique(key):
+        sel = np.flatnonzero(key == k)
+        A, inl = features.fit_model(pb[sel], pa[sel], "translation", threshold=threshold, min_inliers=6)
+        if A is not None:
+            keep[sel[inl]] = True
+    qa, qb = qa[keep], qb[keep]
+    n = int(a["max_points_per_pair"]) * 4   # the whole tile, not one band: room for more points
+    if len(qa) > n:   # spread over the tile: the strongest few per block, round robin
+        order = np.argsort(np.floor(qa[:, 1] / block) * 1000 + np.floor(qa[:, 0] / block), kind="stable")
+        pick = order[np.unique(np.linspace(0, len(order) - 1, n).round().astype(int))]
+        qa, qb = qa[pick], qb[pick]
+    return qa, qb
+
+
+def rematch_window(cfg, df, zs, inside, T0, cuts):
+    """align.local_rematch: matches of every window slice with its next and previous
+    ``align.neighbors`` selected slices (same tile within a segment, every pair across), not across
+    elastic interfaces, as arrays za, ta, qa, zb, tb, qb (tile names, full-res tile pixels)."""
+    a = cfg["align"]
+    nb = int(a["neighbors"])
+    cache = StackCache(cfg["raw_dir"])
+    rows = {(r["z"], r["tile"]): r for r in df[df["z"].isin(list({z for z, _ in T0}))].to_dict("records")}
+    seg = dict(zip(df["z"], df["segment"]))
+    feats = {}
+
+    def get(k):
+        if k not in feats:
+            feats[k] = _features(cache.read(rows[k]), a["scale"], a["max_features"])
+        return feats[k]
+    out = {k: [] for k in ("za", "ta", "qa", "zb", "tb", "qb")}
+    pos = {int(z): i for i, z in enumerate(zs)}
+    for z in sorted(inside):
+        i = pos[z]
+        for j in range(max(0, i - nb), min(len(zs), i + nb + 1)):
+            zn = int(zs[j])
+            if zn == z or (zn in inside and zn < z) or crosses(np.array([z]), np.array([zn]), zs, cuts)[0]:
+                continue   # pairs of two window slices once; none across an elastic interface
+            tiles_z = [t for (zz, t) in T0 if zz == z]
+            tiles_n = [t for (zz, t) in T0 if zz == zn]
+            pairs = ([(t, t) for t in tiles_z if t in tiles_n] if seg.get(z) == seg.get(zn)
+                     else [(t, u) for t in tiles_z for u in tiles_n])
+            for t, u in pairs:
+                za, ta, zb, tb = (z, t, zn, u) if z < zn else (zn, u, z, t)
+                qa, qb = rematch((get((za, ta)), get((zb, tb))), T0[(za, ta)], T0[(zb, tb)], a)
+                for key, v in (("za", np.full(len(qa), za)), ("ta", np.full(len(qa), ta)), ("qa", qa),
+                               ("zb", np.full(len(qa), zb)), ("tb", np.full(len(qa), tb)), ("qb", qb)):
+                    out[key].append(v)
+    if not out["za"]:
+        return {"za": np.zeros(0, int), "ta": np.zeros(0, str), "qa": np.zeros((0, 2)),
+                "zb": np.zeros(0, int), "tb": np.zeros(0, str), "qb": np.zeros((0, 2))}
+    return {k: np.concatenate(v) for k, v in out.items()}
 
 
 def seam_options(cfg):
@@ -412,6 +498,11 @@ def solve(cfg, df, zs, mats, run, stitch, load_tile_matches, cuts=()):
             log.info("local tile solve z %d-%d: %d matches across elastic interfaces left out", int(zs[i0]),
                      int(zs[i1]), int(cut.sum()))
         m = {k: v[sel & ~cut] for k, v in m.items()}
+        if a["local_rematch"]:
+            n_before = len(m["za"])
+            m = rematch_window(cfg, df, zs, inside, T0, cuts)
+            log.info("local tile solve z %d-%d: matched again with block-wise RANSAC: %d matches (align's: %d)",
+                     int(zs[i0]), int(zs[i1]), len(m["za"]), n_before)
         matched = None
         if a["local_seams"] == "matched":
             opts, cache, matched = seam_options(cfg), StackCache(cfg["raw_dir"]), {}

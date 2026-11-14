@@ -471,6 +471,10 @@ def test_local_tile_solve_at_layout_change(tmp_path):
     assert sorted(tiles["z"].unique()) == list(range(3, 9))
     assert rep["change_median_after_px"][0] < 0.5 * rep["change_median_before_px"][0]
 
+    # Matched again with block-wise RANSAC (reads the raw tiles): the change is fitted as well.
+    rem, _ = solve(local_half_width=n, local_seam_weight=4.0, local_rematch=True, local_rematch_block_px=40)
+    assert rem["points"][0] > 0 and rem["change_median_after_px"][0] < min(1.0, before / 3)
+
     # Seams matched in the raw tiles (here they agree with the current ones): the same result.
     matched, _ = solve(local_half_width=n, local_seam_weight=4.0, local_seams="matched")
     assert matched["change_median_after_px"][0] < min(1.0, before / 3)
@@ -713,6 +717,37 @@ def test_matched_seams_follow_a_distortion_along_the_seam():
     assert qa[:, 1].min() < 600 and qa[:, 1].max() > 2400       # along the whole seam
     current = transforms.apply(T["0-0"], qa) - transforms.apply(T["0-1"], qb)
     assert np.abs(current[:, 0]).max() > 12
+
+
+def test_rematch_covers_a_tile_distorted_within_itself():
+    """One tile pair, slice 1's tile displaced by a smooth bump of up to 25 px within itself: one rigid
+    RANSAC for the pair (align's matching) keeps only part of the tile; the block-wise rematch keeps
+    true matches over nearly all of it."""
+    from scipy import ndimage
+    from pipeline import tilesolve
+    rng = np.random.default_rng(6)
+    world = ndimage.gaussian_filter(rng.normal(size=(2400, 2400)), 2.0)
+    world = (world - world.min()) / np.ptp(world) * 60000
+
+    def bump(q):
+        s = np.sin(np.pi * q[..., 0] / 2000) * np.sin(np.pi * q[..., 1] / 2000)
+        return np.stack([25 * s, -12 * s], axis=-1)
+    yy, xx = np.mgrid[0:2000, 0:2000].astype(float)
+    b = bump(np.stack([xx, yy], axis=-1))
+    img1 = ndimage.map_coordinates(world, [yy + 200 + b[..., 1], xx + 200 + b[..., 0]], order=1)
+    img2 = world[200:2200, 200:2200]
+    a = {**align.DEFAULTS["align"], "scale": 0.5, "local_rematch_block_px": 500}
+    f1, f2 = (tilesolve._features(im, a["scale"], a["max_features"]) for im in (img1, img2))
+    I = transforms.identity()
+    q1, q2 = tilesolve.rematch((f1, f2), I, I, a)
+    err = q1 + bump(q1) - q2
+    assert len(q1) > 200 and np.median(np.linalg.norm(err, axis=1)) < 1.0 and np.abs(err).max() < 4
+    blocks = {(int(x // 500), int(y // 500)) for x, y in q1}
+    assert len(blocks) >= 15                                   # of 16 blocks
+    fa = {"xy": (f1[0] + 0.5) * a["scale"] - 0.5, "full": f1[0], "desc": f1[1], "shape": img1.shape}
+    fb = {"xy": (f2[0] + 0.5) * a["scale"] - 0.5, "full": f2[0], "desc": f2[1], "shape": img2.shape}
+    pa, _ = align._match_tiles(fa, fb, {**a, "max_points_per_pair": 10 ** 6})
+    assert len({(int(x // 500), int(y // 500)) for x, y in pa}) < len(blocks)   # one rigid fit: part of it
 
 
 def test_tile_solve_holds_matched_seams():
