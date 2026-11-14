@@ -25,6 +25,12 @@ neighbouring grid values penalised by ``align.local_warp_smoothness`` x points p
 after its affine: for a distortion within one tile that no affine captures, e.g. a tile scanned
 before the beam settled after a pause. The fields go to ``align/local_warps.json`` (tile pixels ->
 displacement in aligned px), which render applies.
+
+Seams (``align.local_seams``): ``current`` holds each overlap where the tiles meet now (stitch and
+align). ``matched`` matches features in each overlap of the window's slices instead (read from the
+raw tiles, as the stitch's fine step) and holds those correspondences: right also where the stitch
+could only compromise, e.g. a rigid tile placed against a stretched one. Overlaps with too few
+matches (resin) keep the current seam.
 """
 
 import json
@@ -36,8 +42,9 @@ import pandas as pd
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
-from . import cli, transforms
-from .config import step_dir, step_path
+from . import cli, features, transforms
+from .config import deep_merge, step_dir, step_path
+from .slices import StackCache
 from .elastic import _bilinear, field_at
 
 log = logging.getLogger(__name__)
@@ -96,12 +103,78 @@ def seam_points(T, shapes):
     return out
 
 
+def matched_seams(read, T, shapes, opts):
+    """Seam correspondences of one slice's tiles from their image content: [(tile_a, q_a, tile_b, q_b)].
+
+    read(tile, rows, cols): the raw tile region; T: {tile: tile -> aligned}, the current transforms
+    (they say where the overlaps are); shapes: {tile: (height, width)}; opts: the stitch's matching
+    settings (fine_factor, fine_margin_px, ratio, ransac_px, min_inliers, max_features,
+    max_points_per_pair) plus chunk_px. In each overlap features are matched as in the stitch's fine
+    step, then kept by a translation RANSAC per chunk_px along the overlap: the matches follow a
+    distortion along the seam (a stretched tile) that one rigid fit of the whole overlap would cut
+    down to a band. Overlaps with fewer than min_inliers matches are left out.
+    """
+    from .stitch import _detect   # stitch's detector: same downsampling and keypoint convention
+    out = []
+    tiles = sorted(T)
+    box = {t: transforms.bbox(T[t], shapes[t][1], shapes[t][0]) for t in tiles}
+    ff, margin = int(opts["fine_factor"]), float(opts["fine_margin_px"])
+    threshold, min_in = float(opts["ransac_px"]) * ff, int(opts["min_inliers"])
+    for i, ta in enumerate(tiles):
+        for tb in tiles[i + 1:]:
+            x0, y0 = np.maximum(box[ta][:2], box[tb][:2])
+            x1, y1 = np.minimum(box[ta][2:], box[tb][2:])
+            if x1 - x0 < 4 or y1 - y0 < 4:
+                continue
+            corners = np.array([[x0, y0], [x1, y0], [x0, y1], [x1, y1]], float)
+            kp = {}
+            for t in (ta, tb):
+                q = transforms.apply(transforms.invert(T[t]), corners)
+                h, w = shapes[t]
+                r0, r1 = (int(np.clip(v, 0, h)) for v in (np.floor(q[:, 1].min() - margin), np.ceil(q[:, 1].max() + margin)))
+                c0, c1 = (int(np.clip(v, 0, w)) for v in (np.floor(q[:, 0].min() - margin), np.ceil(q[:, 0].max() + margin)))
+                if r1 - r0 < 8 * ff or c1 - c0 < 8 * ff:
+                    break
+                kp[t] = _detect(np.asarray(read(t, slice(r0, r1), slice(c0, c1))), ff, opts, (c0, r0))
+            if len(kp) < 2:
+                continue
+            ia, ib = features.match(kp[ta][1], kp[tb][1], opts["ratio"])
+            qa, qb = kp[ta][0][ia].astype(float), kp[tb][0][ib].astype(float)
+            pa, pb = transforms.apply(T[ta], qa), transforms.apply(T[tb], qb)
+            near = np.linalg.norm(pa - pb, axis=1) < margin   # where the current transforms expect them
+            qa, qb, pa, pb = qa[near], qb[near], pa[near], pb[near]
+            if len(qa) < min_in:
+                continue
+            along = 0 if x1 - x0 >= y1 - y0 else 1
+            chunk = np.floor((pa[:, along] - pa[:, along].min()) / float(opts["chunk_px"])).astype(int)
+            keep = np.zeros(len(qa), bool)
+            for c in np.unique(chunk):
+                sel = np.flatnonzero(chunk == c)
+                A, inl = features.fit_model(pb[sel], pa[sel], "translation", threshold=threshold,
+                                            min_inliers=max(4, min_in // 3))
+                if A is not None:
+                    keep[sel[inl]] = True
+            if keep.sum() < min_in:
+                continue
+            qa, qb = qa[keep], qb[keep]
+            pick = np.unique(np.linspace(0, len(qa) - 1, min(len(qa), int(opts["max_points_per_pair"]))).round().astype(int))
+            out.append((ta, qa[pick], tb, qb[pick]))
+    return out
+
+
+def seam_options(cfg):
+    """The stitch's matching settings (config over its defaults) plus align.local_seam_chunk_px."""
+    from .stitch import DEFAULTS as STITCH
+    st = deep_merge(STITCH, {"stitch": cfg.get("stitch") or {}})["stitch"]
+    return {**st, "chunk_px": float(cfg["align"]["local_seam_chunk_px"])}
+
+
 def _inside(q, shape, margin=2.0):
     h, w = shape
     return (q[:, 0] >= margin) & (q[:, 0] <= w - margin) & (q[:, 1] >= margin) & (q[:, 1] <= h - margin)
 
 
-def solve_window(T0, shapes, matches, inside, a):
+def solve_window(T0, shapes, matches, inside, a, matched=None):
     """Affine per (z, tile) in ``inside``, from matches and seams; the rest of T0 stays fixed.
 
     T0: {(z, tile): tile -> aligned}, for the window and the slices around it; shapes: {(z, tile):
@@ -124,8 +197,11 @@ def solve_window(T0, shapes, matches, inside, a):
     seams = []
     for z in sorted(inside):
         tz = {k[1]: T0[k] for k in keys if k[0] == z}
+        found = {(ta, tb): (pa, pb) for ta, pa, tb, pb in (matched or {}).get(z, [])}
         for ta, pa, tb, pb in seam_points(tz, {t: shapes[(z, t)] for t in tz}):
+            pa, pb = found.pop((ta, tb), (pa, pb))   # matched in the image where it could be
             seams.append(((z, ta), pa, (z, tb), pb))
+        seams += [((z, ta), pa, (z, tb), pb) for (ta, tb), (pa, pb) in found.items()]
     for key_a, pa, key_b, pb in seams:
         ka += [key_a] * len(pa)
         kb += [key_b] * len(pb)
@@ -336,7 +412,17 @@ def solve(cfg, df, zs, mats, run, stitch, load_tile_matches, cuts=()):
             log.info("local tile solve z %d-%d: %d matches across elastic interfaces left out", int(zs[i0]),
                      int(zs[i1]), int(cut.sum()))
         m = {k: v[sel & ~cut] for k, v in m.items()}
-        out, rep, (before, after, keep, ok), warps = solve_window(T0, shapes, m, inside, a)
+        matched = None
+        if a["local_seams"] == "matched":
+            opts, cache, matched = seam_options(cfg), StackCache(cfg["raw_dir"]), {}
+            for z in sorted(inside):
+                rz = {r["tile"]: r for r in df[df["z"] == z].to_dict("records")}
+                tz = {t: T0[(z, t)] for t in rz if (z, t) in T0}
+                matched[z] = matched_seams(lambda t, rr, cc, rz=rz: cache.read(rz[t], rr, cc), tz,
+                                           {t: shapes[(z, t)] for t in tz}, opts)
+                log.info("local tile solve z %d: seams matched in the image: %s", z,
+                         ", ".join(f"{ta}|{tb} {len(qa)}" for ta, qa, tb, _ in matched[z]) or "none")
+        out, rep, (before, after, keep, ok), warps = solve_window(T0, shapes, m, inside, a, matched)
         all_warps.update(warps)
         rep.update(z_first=int(zs[i0]), z_last=int(zs[i1]), reason=reason)
         rep["change_median_before_px"] = rep["change_median_after_px"] = np.nan

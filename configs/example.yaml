@@ -93,6 +93,10 @@ align:
                              # (null: affine only): a distortion within one tile, e.g. scanned before the
                              # beam settled after a pause; written to align/local_warps.json, render applies it
   local_warp_smoothness: 0.1 # penalty on differences between neighbouring warp grid values (x matched points per cell)
+  local_seams: current       # seams the tile solve holds: current (where the tiles meet now) | matched (features
+                             # matched in each overlap of the window's slices, from the raw tiles: right also
+                             # where the stitch could only compromise, e.g. a rigid tile against a stretched one)
+  local_seam_chunk_px: 1000  # matched: one translation RANSAC per this many px along an overlap
   elastic_min_px: 5.0        # smooth (elastic) correction at layout changes whose frame fit leaves a median
                              # mismatch above this (null: none); see pipeline/elastic.py
   elastic_interfaces: []     # more interfaces to correct: the first z after each

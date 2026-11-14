@@ -471,6 +471,11 @@ def test_local_tile_solve_at_layout_change(tmp_path):
     assert sorted(tiles["z"].unique()) == list(range(3, 9))
     assert rep["change_median_after_px"][0] < 0.5 * rep["change_median_before_px"][0]
 
+    # Seams matched in the raw tiles (here they agree with the current ones): the same result.
+    matched, _ = solve(local_half_width=n, local_seam_weight=4.0, local_seams="matched")
+    assert matched["change_median_after_px"][0] < min(1.0, before / 3)
+    assert matched["seam_max_after_px"][0] < 3.0
+
     # With an elastic field at the change, the field corrects it: the tile solve leaves the matches across out.
     rep, _ = solve(local_half_width=n, local_seam_weight=4.0, elastic_min_px=1.0, elastic_grid_px=60)
     assert np.isnan(rep["change_median_before_px"][0]) and rep["points"][0] > 0
@@ -680,6 +685,62 @@ def test_tile_warp_fits_a_distortion_no_affine_captures():
     q = rng.uniform([50, 50], [850, 750], (200, 2))
     err = tilesolve.warp_at(warps[(1, "0-0")], q) - bend(q)
     assert np.abs(err - np.median(err, axis=0)).max() < 1.5   # the bend, up to what the affine took
+
+
+def test_matched_seams_follow_a_distortion_along_the_seam():
+    """Tile 0-0's rows are shifted by up to 10 px (a sine down the tile, as a scan settling), and
+    tile 0-1 is placed 5 px off: the seam matched in the image (translation RANSAC per 500 px along
+    it) gives true correspondences all along the seam, where the current seam is off by up to 15 px."""
+    from scipy import ndimage
+    from pipeline import stitch, tilesolve
+    rng = np.random.default_rng(4)
+    world = ndimage.gaussian_filter(rng.normal(size=(3000, 1900)), 2.5)
+    world = (world - world.min()) / np.ptp(world) * 60000
+
+    def bend(y):
+        return 10 * np.sin(2 * np.pi * y / 3000)
+    yy, xx = np.mgrid[0:3000, 0:1000].astype(float)
+    img = {"0-0": ndimage.map_coordinates(world, [yy, xx + bend(yy)], order=1),
+           "0-1": ndimage.map_coordinates(world, [yy, xx + 800], order=1)}
+    T = {"0-0": transforms.identity(), "0-1": transforms.translation(805, 0)}
+    shapes = {t: (3000, 1000) for t in T}
+    opts = {**stitch.DEFAULTS["stitch"], "chunk_px": 500}
+    found = tilesolve.matched_seams(lambda t, r, c: img[t][r, c], T, shapes, opts)
+    assert [(ta, tb) for ta, _, tb, _ in found] == [("0-0", "0-1")]
+    _, qa, _, qb = found[0]
+    err = np.column_stack([qa[:, 0] + bend(qa[:, 1]), qa[:, 1]]) - (qb + [800, 0])
+    assert len(qa) >= 50 and np.median(np.linalg.norm(err, axis=1)) < 0.7 and np.abs(err).max() < 2.5
+    assert qa[:, 1].min() < 600 and qa[:, 1].max() > 2400       # along the whole seam
+    current = transforms.apply(T["0-0"], qa) - transforms.apply(T["0-1"], qb)
+    assert np.abs(current[:, 0]).max() > 12
+
+
+def test_tile_solve_holds_matched_seams():
+    """Slice 1's tile 0-1 is stitched 5 px off: held at its current seam (weight 64) the tile solve
+    keeps most of that error; holding the seam matched in the image it puts both tiles right."""
+    from pipeline import tilesolve
+    rng = np.random.default_rng(5)
+    shape = (800, 1000)
+    origin = {"0-0": np.array([0.0, 0.0]), "0-1": np.array([900.0, 0.0])}
+    T0 = {(z, t): transforms.translation(*o) for z in (0, 1, 2) for t, o in origin.items()}
+    T0[(1, "0-1")] = transforms.translation(905.0, 0.0)            # the stitch's error
+    shapes = {k: shape for k in T0}
+    m = {k: [] for k in ("za", "ta", "qa", "zb", "tb", "qb")}
+    for z_other in (0, 2):
+        for t in origin:
+            q1 = rng.uniform([5, 5], [995, 795], (300, 2))
+            za, zb, qa, qb = (z_other, 1, q1, q1) if z_other == 0 else (1, z_other, q1, q1)
+            for key, v in (("za", np.full(300, za)), ("zb", np.full(300, zb)), ("ta", np.full(300, t)),
+                           ("tb", np.full(300, t)), ("qa", qa), ("qb", qb)):
+                m[key].append(v)
+    m = {k: np.concatenate(v) for k, v in m.items()}
+    qa = rng.uniform([905, 5], [995, 795], (150, 2))                # in 0-0's overlap with 0-1
+    matched = {1: [("0-0", qa, "0-1", qa - [900, 0])]}
+    a = {**align.DEFAULTS["align"]}
+    _, held, _, _ = tilesolve.solve_window(T0, shapes, m, {1}, a)
+    out, rep, _, _ = tilesolve.solve_window(T0, shapes, m, {1}, a, matched)
+    assert held["p90_after_px"] > 2 and rep["p90_after_px"] < 0.5, (held, rep)
+    np.testing.assert_allclose(out[(1, "0-1")][:, 2], [900, 0], atol=0.3)
 
 
 def test_tile_solve_leaves_out_matches_across_elastic_interfaces():

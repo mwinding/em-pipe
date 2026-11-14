@@ -68,6 +68,12 @@ DEFAULTS = {
         # Smooth warp per tile on top of its affine, on a grid this many tile px apart (null: affine only),
         # for a distortion within a tile that no affine captures (a tile scanned before the beam settled).
         "local_warp_px": None,
+        # Seams the tile solve holds: current (where the tiles meet now) | matched (features matched in
+        # each overlap of the window's slices, read from the raw tiles; right also where the stitch could
+        # only compromise, e.g. a rigid tile against a stretched one). matched: RANSAC per this many px
+        # along an overlap, so the matches can follow a distortion along the seam.
+        "local_seams": "current",
+        "local_seam_chunk_px": 1000,
         "local_warp_smoothness": 0.1,      # penalty on neighbouring grid values, x matched points per grid cell
         # Smooth (elastic) correction at problem interfaces (see pipeline/elastic.py): a field fitted
         # to the matches across the interface, applied to every slice of one side.
@@ -103,7 +109,8 @@ CHANGE_COLUMNS = ["z_before", "z_after", "segment_before", "segment_after", "mod
 OPTIONS = {"model": ("translation", "affine"), "anchor": ("first", "mean"),
            "remove_trend": ("none", "linear", "lowpass"), "ransac_model": features.MODELS,
            "segment_change_model": ("none", "translation", "similarity", "affine"),
-           "segment_reference": ("largest", "first"), "elastic_side": ("before", "after")}
+           "segment_reference": ("largest", "first"), "elastic_side": ("before", "after"),
+           "local_seams": ("current", "matched")}
 # Settings that change a chunk's matches: run redoes chunks made with other values, solve refuses them.
 _RUN_KEYS = ("scale", "neighbors", "max_features", "ratio", "ransac_model", "ransac_px", "min_inliers",
              "max_points_per_pair")
