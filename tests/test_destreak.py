@@ -241,3 +241,30 @@ def test_settings_are_checked_and_dispatch():
                                   destreak.swap(img, ref, stripe_px=64))
     np.testing.assert_array_equal(destreak.destreak_from_cfg(img, {"destreak": {"stripe_px": 64}}),
                                   destreak.destreak(img, stripe_px=64))
+
+
+def test_stripe_aspect_takes_broad_bands_but_leaves_coarse_structure_to_the_image():
+    shape = (4096, 4096)
+    rng = np.random.default_rng(15)
+    yy, xx = np.mgrid[:shape[0], :shape[1]].astype(np.float32)
+    base = _texture(shape, 16)
+    blobs = np.zeros(shape, np.float32)               # cell-sized structure, ~600 px across
+    for cy, cx in rng.uniform(300, 3800, (12, 2)):
+        blobs += 0.2 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 250.0 ** 2))
+    band = -0.1 * np.exp(-((xx - 2000) / 100.0) ** 2)  # a broad curtain band, ~200 px wide, full height
+    img = base + blobs + band
+    # The reference renders the coarse structure with half the contrast (another detector), and has no band.
+    ref = 0.6 * (base + 0.5 * blobs) + rng.normal(0, 0.03, shape).astype(np.float32)
+    lp = lambda a: cv2.GaussianBlur(a, (0, 0), 50)
+    away = np.abs(xx[0] - 2000) > 500
+
+    def judge(out):
+        left = lp(out - base - blobs).mean(axis=0)
+        band_left = (left[1900:2100].mean() - left[away].mean()) / band[0, 1900:2100].mean()
+        p, q = lp(out - base)[:, away].ravel(), lp(blobs)[:, away].ravel()
+        return band_left, float(np.dot(p - p.mean(), q - q.mean()) / np.dot(q - q.mean(), q - q.mean()))
+
+    band_left, blobs_kept = judge(destreak.swap(img, ref, levels=9, stripe_px=256, aspect=8))
+    assert band_left < 0.2 and blobs_kept > 0.9
+    _, blobs_plain = judge(destreak.swap(img, ref, levels=9, stripe_px=256))
+    assert blobs_plain < blobs_kept - 0.1     # without it the coarse levels take the reference's contrast

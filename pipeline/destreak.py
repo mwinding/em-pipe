@@ -52,6 +52,8 @@ DEFAULTS = {
         "sigma": 4.0,           # width of the Gaussian notch in FFT bins; larger removes more
         "stripe_px": None,      # instead of sigma: what varies more slowly than this along the stripes
                                 # (full-resolution px) is stripe, at any image size (e.g. 256)
+        "stripe_aspect": None,  # and at least this many times longer than wide (level L: ~2^L px wide), so
+                                # at coarse levels only long bands count, not cell-sized structure (e.g. 8)
         "reference_from": None,  # regex on a raw file's path (relative to raw_dir) and its replacement
         "reference_to": None,    # (re.sub): the same scan from a detector without the stripes. Then the
                                  # stripe part is swapped from it (scaled by a local gain), not removed
@@ -72,11 +74,13 @@ _BANDS = {"vertical": (1, 0), "horizontal": (0, 1)}
 _WORKERS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
 
 
-def _sigma(n, level, sigma, stripe_px):
-    """Notch width in FFT bins for a band of n coefficients along the stripes at this level."""
-    if stripe_px is None:
+def _sigma(n, level, sigma, stripe_px, aspect=None):
+    """Notch width in FFT bins for a band of n coefficients along the stripes at this level: from the
+    shortest stripe, max(stripe_px, aspect * 2^level) px, else ``sigma`` as given."""
+    if stripe_px is None and aspect is None:
         return float(sigma)
-    return n / (float(stripe_px) / 2 ** level)
+    length = max(float(stripe_px or 0), float(aspect or 0) * 2 ** level)
+    return n / (length / 2 ** level)
 
 
 def _keep(m, sigma):
@@ -116,7 +120,7 @@ def _finish(coeffs, wavelet, h, w, mean):
     return out
 
 
-def destreak(img, direction="vertical", wavelet="db4", levels=6, sigma=4.0, stripe_px=None):
+def destreak(img, direction="vertical", wavelet="db4", levels=6, sigma=4.0, stripe_px=None, aspect=None):
     """Remove stripes from a 2D image; returns float32 of the same shape and mean."""
     h, w = np.shape(img)
     levels = _check(direction, wavelet, levels, h, w)
@@ -130,7 +134,7 @@ def destreak(img, direction="vertical", wavelet="db4", levels=6, sigma=4.0, stri
     for i in range(1, n + 1):
         details = list(coeffs[i])
         c = details[band]
-        details[band] = c - _stripe_part(c, axis, _sigma(c.shape[axis], n - i + 1, sigma, stripe_px))
+        details[band] = c - _stripe_part(c, axis, _sigma(c.shape[axis], n - i + 1, sigma, stripe_px, aspect))
         coeffs[i] = tuple(details)
     return _finish(coeffs, wavelet, h, w, mean)
 
@@ -145,7 +149,8 @@ def _blur(a, s):
     return cv2.GaussianBlur(a, (0, 0), float(s))
 
 
-def swap(img, ref, direction="vertical", wavelet="db4", levels=6, sigma=4.0, stripe_px=None, gain_sigma=8.0):
+def swap(img, ref, direction="vertical", wavelet="db4", levels=6, sigma=4.0, stripe_px=None, gain_sigma=8.0,
+         aspect=None):
     """Stripes of ``img`` replaced from ``ref`` (the same scan, another detector, without them).
 
     In each level's stripe band, img's stripe part (``_stripe_part``) is swapped for ref's times a
@@ -170,7 +175,7 @@ def swap(img, ref, direction="vertical", wavelet="db4", levels=6, sigma=4.0, str
     for i in range(1, n + 1):
         details = list(ci[i])
         c, e = details[band], ce[i][band]
-        s = _sigma(c.shape[axis], n - i + 1, sigma, stripe_px)
+        s = _sigma(c.shape[axis], n - i + 1, sigma, stripe_px, aspect)
         sc, se = _stripe_part(c, axis, s), _stripe_part(e, axis, s)
         rc, re_ = c - sc, e - se
         num, den = _blur(rc * re_, gain_sigma), _blur(re_ * re_, gain_sigma)
@@ -243,8 +248,9 @@ def settings(cfg):
     p = {**DEFAULTS["destreak"], **(cfg.get("destreak") or {})}
     if (p["reference_from"] is None) != (p["reference_to"] is None):
         raise ValueError("destreak.reference_from and destreak.reference_to go together")
-    if p["stripe_px"] is not None and not float(p["stripe_px"]) > 0:
-        raise ValueError(f"destreak.stripe_px must be > 0 or null, got {p['stripe_px']!r}")
+    for key in ("stripe_px", "stripe_aspect"):
+        if p[key] is not None and not float(p[key]) > 0:
+            raise ValueError(f"destreak.{key} must be > 0 or null, got {p[key]!r}")
     if p["core_threshold"] is not None:
         if p["reference_from"] is None:
             raise ValueError("destreak.core_threshold needs a reference (destreak.reference_from / _to)")
@@ -262,10 +268,11 @@ def destreak_from_cfg(img, cfg, ref=None):
     checks ``enabled`` and reads ``ref`` (the reference detector's same slice and window)."""
     p = settings(cfg)
     if p["reference_from"] is None:
-        return destreak(img, p["direction"], p["wavelet"], p["levels"], p["sigma"], p["stripe_px"])
+        return destreak(img, p["direction"], p["wavelet"], p["levels"], p["sigma"], p["stripe_px"], p["stripe_aspect"])
     if ref is None:
         raise ValueError("destreak has a reference configured but none was given")
-    out = swap(img, ref, p["direction"], p["wavelet"], p["levels"], p["sigma"], p["stripe_px"], p["gain_sigma"])
+    out = swap(img, ref, p["direction"], p["wavelet"], p["levels"], p["sigma"], p["stripe_px"], p["gain_sigma"],
+               p["stripe_aspect"])
     if p["core_threshold"] is not None:
         out = fill_cores(img, out, ref, float(p["core_threshold"]), p["direction"], p["core_dilate_px"],
                          p["core_window_px"], p["core_denoise_px"], p["wavelet"])
@@ -305,7 +312,7 @@ def make_test_images(cfg, args):
         y0, x0 = max(0, h // 2 - 512), max(0, w // 2 - 512)
         y1, x1 = min(h, y0 + 1024), min(w, x0 + 1024)
     params = dict(cfg["destreak"])
-    for key in ("direction", "wavelet", "levels", "sigma", "stripe_px"):
+    for key in ("direction", "wavelet", "levels", "sigma", "stripe_px", "stripe_aspect"):
         if getattr(args, key) is not None:
             params[key] = getattr(args, key)
     cache = StackCache(cfg["raw_dir"])
@@ -347,6 +354,7 @@ def main(argv=None):
     p.add_argument("--levels", type=int, help="override destreak.levels")
     p.add_argument("--sigma", type=float, help="override destreak.sigma")
     p.add_argument("--stripe-px", dest="stripe_px", type=float, help="override destreak.stripe_px")
+    p.add_argument("--stripe-aspect", dest="stripe_aspect", type=float, help="override destreak.stripe_aspect")
     args = p.parse_args(argv)
     cfg = setup(args, DEFAULTS)
     make_test_images(cfg, args)

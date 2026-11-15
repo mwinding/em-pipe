@@ -186,6 +186,8 @@ destreak:
   sigma: 4.0                 # width of the Gaussian notch in FFT bins; larger removes more
   stripe_px: null            # instead of sigma: what varies more slowly than this along the stripes
                              # (full-resolution px) is stripe, at any image size (e.g. 256)
+  stripe_aspect: null        # and at least this many times longer than wide (level L: ~2^L px wide), so
+                             # at coarse levels only long bands count, not cell-sized structure (e.g. 8)
   reference_from: null       # regex on a raw file's path (relative to raw_dir) and its replacement
   reference_to: null         # (re.sub): the reference detector's file of the same scan; render init
                              # checks that every one exists with the same slices and size
