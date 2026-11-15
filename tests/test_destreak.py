@@ -272,7 +272,7 @@ def test_deeper_levels_take_broad_bands_and_leave_coarse_structure():
     assert kept9 > 0.95
 
 
-def test_correct_bands_fixes_broad_bands_only_where_curtains_are():
+def test_band_levels_take_broad_bands_only_in_curtain_zones_seamlessly():
     shape = (4096, 4096)
     rng = np.random.default_rng(15)
     yy, xx = np.mgrid[:shape[0], :shape[1]].astype(np.float32)
@@ -282,21 +282,29 @@ def test_correct_bands_fixes_broad_bands_only_where_curtains_are():
         blobs += 0.2 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 250.0 ** 2))
     zone = np.abs(xx - 2000) < 220
     fine = _curtains(shape, 0.06, 3) * zone             # dense fine curtains...
-    band = -0.1 * np.exp(-((xx - 2000) / 100.0) ** 2)   # ...and their broad darkening, wider than the levels reach
+    band = -0.1 * np.exp(-((xx - 2000) / 100.0) ** 2)   # ...and their broad darkening, wider than 7 levels reach
     clean = base + blobs
     img = clean + band + fine + rng.normal(0, 0.01, shape).astype(np.float32)
     ref = 0.6 * (base + 0.5 * blobs) + rng.normal(0, 0.03, shape).astype(np.float32)
     lp = lambda a: cv2.GaussianBlur(a, (0, 0), 50)
-    away = np.abs(xx[0] - 2000) > 600
+    away = np.abs(xx[0] - 2000) > 900
 
     def band_left(out):
         left = lp(out - clean).mean(axis=0)
         return (left[1900:2100].mean() - left[away].mean()) / band[0, 1900:2100].mean()
 
-    sw = destreak.swap(img, ref, levels=8, stripe_px=256)
-    out = destreak.correct_bands(img, sw, ref, (0.5, 1.5))
-    assert band_left(out) < 0.5 * band_left(sw) and band_left(out) < 0.25
-    np.testing.assert_allclose(out[:, :1000], sw[:, :1000], atol=1e-4)     # far from the curtains: untouched
-    # Going deeper instead changes the good data too (the reference's coarse contrast comes in everywhere).
-    deeper = destreak.swap(img, ref, levels=9, stripe_px=256)
-    assert np.std(lp(deeper - img)[:, away]) > 2 * np.std(lp(out - img)[:, away])
+    # One decomposition gives the 7-level swap and what levels 8-9 add to it.
+    sw7 = destreak.swap(img, ref, levels=7, stripe_px=256)
+    sw9 = destreak.swap(img, ref, levels=9, stripe_px=256)
+    part, coarse = destreak.swap(img, ref, levels=9, stripe_px=256, split=7)
+    np.testing.assert_allclose(part, sw7, atol=1e-4)
+    np.testing.assert_allclose(part + coarse, sw9, atol=2e-3)
+    out = destreak.blend_zones(img, part, coarse, threshold=1.0, zone_px=128)
+    assert band_left(out) < 0.6 * band_left(sw7) and band_left(out) < 0.4
+    np.testing.assert_array_equal(out[:, :1000], part[:, :1000])     # outside the curtain zone: the 7-level swap
+    # The deeper swap everywhere changes the good data far more.
+    assert np.std(lp(sw9 - img)[:, away]) > 2 * np.std(lp(out - img)[:, away])
+    cfg = {"destreak": {**REF, "levels": 7, "band_levels": 9, "stripe_px": 256}}
+    np.testing.assert_array_equal(destreak.destreak_from_cfg(img, cfg, ref), out)
+    with pytest.raises(ValueError, match="more than"):
+        destreak.settings({"destreak": {**REF, "levels": 9, "band_levels": 9}})
