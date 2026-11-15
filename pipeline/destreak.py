@@ -64,6 +64,12 @@ DEFAULTS = {
         "core_dilate_px": 2,    # cores widened by this many px across the stripes (curtains wander)
         "core_window_px": 31,   # window of the local linear match reference -> image
         "core_denoise_px": 1.0,  # Gaussian sigma smoothing the reference before it fills cores
+        "band_density": None,   # swap: broad curtain bands (wider than the levels reach) corrected against the
+                                # reference where curtains are dense: [start, full] of what the swap took
+                                # out (smoothed, in units of the image's pixel noise), e.g. [0.5, 1.5]; null: off
+        "band_scale_px": [64, 1024],  # band correction: the scales it works on (Gaussian sigmas, full res px)
+        "band_length_px": 512,  # band correction: only the part of the difference that persists this far
+                                # along the stripes (Gaussian sigma along them)
     },
 }
 
@@ -234,6 +240,56 @@ def fill_cores(img, out, ref, threshold, direction="vertical", dilate_px=2, wind
     return ((1 - m) * out + m * matched).astype(np.float32)
 
 
+def correct_bands(img, out, ref, density, direction="vertical", scale_px=(64, 1024), length_px=512,
+                  wavelet="db4", factor=8):
+    """Broad curtain bands left in ``out`` (= swap(img, ref)): a patch-wise match of out's large-scale
+    brightness to the reference's, only where curtains are dense.
+
+    Curtain density: what the swap took out, |img - out|, smoothed (Gaussian 64 px across the stripes,
+    256 px along) over img's pixel noise; it weights the correction from 0 at ``density[0]`` to 1 at
+    ``density[1]`` (smoothed again, 128 px). The correction: out's and ref's large-scale detail (difference
+    of Gaussians at ``scale_px``: no fine detail, no tile-wide shading), ref scaled to out by a local gain
+    fitted on curtain-free pixels only (Gaussian 2048 px), the difference smoothed ``length_px`` along the
+    stripes so that only bands remain, times the weight. Where there are no curtains, out is unchanged.
+    The smoothing runs on a ``factor``-times smaller grid.
+    """
+    _, axis = _BANDS[direction]
+    h, w = np.shape(img)
+    small = (max(1, w // factor), max(1, h // factor))
+    down = lambda a: cv2.resize(np.asarray(a, np.float32), small, interpolation=cv2.INTER_AREA)
+    f = float(factor)
+    across, along = (1, 0) if axis == 0 else (0, 1)
+
+    def gauss(a, s_across, s_along):
+        sig = [0.0, 0.0]
+        sig[across], sig[along] = s_across / f, s_along / f
+        k = int(max(1, min(v for v in sig if v > 0) // 16)) if any(v > 0 for v in sig) else 1
+        if k == 1:
+            return ndimage.gaussian_filter(a, sig, mode="reflect")
+        # Wide and smooth: blur on a k-times smaller grid and interpolate back.
+        hh, ww = a.shape
+        sm = cv2.resize(a, (max(1, ww // k), max(1, hh // k)), interpolation=cv2.INTER_AREA)
+        sm = ndimage.gaussian_filter(sm, [v / k for v in sig], mode="reflect")
+        return cv2.resize(sm, (ww, hh), interpolation=cv2.INTER_LINEAR)
+
+    o, e = down(out), down(ref)
+    dens = gauss(down(np.abs(np.asarray(img, np.float32) - out)), 64, 256) / (noise_sd(img, wavelet) + 1e-12)
+    lo, hi = float(density[0]), float(density[1])
+    wgt = gauss(np.clip((dens - lo) / max(hi - lo, 1e-6), 0, 1), 128, 128)
+    wgt[wgt < 1e-3] = 0          # the smoothing's far tail: leave those pixels exactly as they are
+    if wgt.max() <= 0:
+        return out
+    s1, s2 = scale_px
+    bo = gauss(o, s1, s1) - gauss(o, s2, s2)
+    be = gauss(e, s1, s1) - gauss(e, s2, s2)
+    clean = (dens < lo).astype(np.float32)
+    num, den = gauss(clean * bo * be, 2048, 2048), gauss(clean * be * be, 2048, 2048)
+    gain = num / (den + 1e-12 * float(np.mean(be * be) + 1e-12))
+    corr = gauss(bo - gain * be, 0, length_px) * wgt
+    big = cv2.resize(corr.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+    return (out - big).astype(np.float32)
+
+
 def reference_file(file, cfg):
     """The reference detector's file for raw ``file`` (relative path) per destreak.reference_from/_to."""
     p = {**DEFAULTS["destreak"], **(cfg.get("destreak") or {})}
@@ -251,6 +307,12 @@ def settings(cfg):
     for key in ("stripe_px", "stripe_aspect"):
         if p[key] is not None and not float(p[key]) > 0:
             raise ValueError(f"destreak.{key} must be > 0 or null, got {p[key]!r}")
+    if p["band_density"] is not None:
+        if p["reference_from"] is None:
+            raise ValueError("destreak.band_density needs a reference (destreak.reference_from / _to)")
+        lo, hi = (float(v) for v in p["band_density"])
+        if not 0 <= lo < hi:
+            raise ValueError(f"destreak.band_density must be [start, full] with 0 <= start < full, got {p['band_density']!r}")
     if p["core_threshold"] is not None:
         if p["reference_from"] is None:
             raise ValueError("destreak.core_threshold needs a reference (destreak.reference_from / _to)")
@@ -273,6 +335,9 @@ def destreak_from_cfg(img, cfg, ref=None):
         raise ValueError("destreak has a reference configured but none was given")
     out = swap(img, ref, p["direction"], p["wavelet"], p["levels"], p["sigma"], p["stripe_px"], p["gain_sigma"],
                p["stripe_aspect"])
+    if p["band_density"] is not None:
+        out = correct_bands(img, out, ref, p["band_density"], p["direction"], p["band_scale_px"],
+                            p["band_length_px"], p["wavelet"])
     if p["core_threshold"] is not None:
         out = fill_cores(img, out, ref, float(p["core_threshold"]), p["direction"], p["core_dilate_px"],
                          p["core_window_px"], p["core_denoise_px"], p["wavelet"])

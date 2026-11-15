@@ -270,3 +270,33 @@ def test_deeper_levels_take_broad_bands_and_leave_coarse_structure():
     # each level deeper takes more of it, and the coarse structure stays the image's own.
     assert left9 < 0.5 * left7 and left9 < 0.4
     assert kept9 > 0.95
+
+
+def test_correct_bands_fixes_broad_bands_only_where_curtains_are():
+    shape = (4096, 4096)
+    rng = np.random.default_rng(15)
+    yy, xx = np.mgrid[:shape[0], :shape[1]].astype(np.float32)
+    base = _texture(shape, 16)
+    blobs = np.zeros(shape, np.float32)               # cell-sized structure the reference shows with other contrast
+    for cy, cx in rng.uniform(300, 3800, (12, 2)):
+        blobs += 0.2 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 250.0 ** 2))
+    zone = np.abs(xx - 2000) < 220
+    fine = _curtains(shape, 0.06, 3) * zone             # dense fine curtains...
+    band = -0.1 * np.exp(-((xx - 2000) / 100.0) ** 2)   # ...and their broad darkening, wider than the levels reach
+    clean = base + blobs
+    img = clean + band + fine + rng.normal(0, 0.01, shape).astype(np.float32)
+    ref = 0.6 * (base + 0.5 * blobs) + rng.normal(0, 0.03, shape).astype(np.float32)
+    lp = lambda a: cv2.GaussianBlur(a, (0, 0), 50)
+    away = np.abs(xx[0] - 2000) > 600
+
+    def band_left(out):
+        left = lp(out - clean).mean(axis=0)
+        return (left[1900:2100].mean() - left[away].mean()) / band[0, 1900:2100].mean()
+
+    sw = destreak.swap(img, ref, levels=8, stripe_px=256)
+    out = destreak.correct_bands(img, sw, ref, (0.5, 1.5))
+    assert band_left(out) < 0.5 * band_left(sw) and band_left(out) < 0.25
+    np.testing.assert_allclose(out[:, :1000], sw[:, :1000], atol=1e-4)     # far from the curtains: untouched
+    # Going deeper instead changes the good data too (the reference's coarse contrast comes in everywhere).
+    deeper = destreak.swap(img, ref, levels=9, stripe_px=256)
+    assert np.std(lp(deeper - img)[:, away]) > 2 * np.std(lp(out - img)[:, away])
