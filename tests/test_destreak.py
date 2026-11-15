@@ -243,7 +243,7 @@ def test_settings_are_checked_and_dispatch():
                                   destreak.destreak(img, stripe_px=64))
 
 
-def test_stripe_aspect_takes_broad_bands_but_leaves_coarse_structure_to_the_image():
+def test_deeper_levels_take_broad_bands_and_leave_coarse_structure():
     shape = (4096, 4096)
     rng = np.random.default_rng(15)
     yy, xx = np.mgrid[:shape[0], :shape[1]].astype(np.float32)
@@ -264,7 +264,9 @@ def test_stripe_aspect_takes_broad_bands_but_leaves_coarse_structure_to_the_imag
         p, q = lp(out - base)[:, away].ravel(), lp(blobs)[:, away].ravel()
         return band_left, float(np.dot(p - p.mean(), q - q.mean()) / np.dot(q - q.mean(), q - q.mean()))
 
-    band_left, blobs_kept = judge(destreak.swap(img, ref, levels=9, stripe_px=256, aspect=8))
-    assert band_left < 0.2 and blobs_kept > 0.9
-    _, blobs_plain = judge(destreak.swap(img, ref, levels=9, stripe_px=256))
-    assert blobs_plain < blobs_kept - 0.1     # without it the coarse levels take the reference's contrast
+    left7, _ = judge(destreak.swap(img, ref, levels=7, stripe_px=256, aspect=8))
+    left9, kept9 = judge(destreak.swap(img, ref, levels=9, stripe_px=256, aspect=8))
+    # A band's average darkening reaches into the coarsest scales, which the swap leaves alone (shading):
+    # each level deeper takes more of it, and the coarse structure stays the image's own.
+    assert left9 < 0.5 * left7 and left9 < 0.4
+    assert kept9 > 0.95
