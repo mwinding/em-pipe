@@ -136,8 +136,9 @@ The export serves like any volume: `python3 -m pipeline.serve FOLDER` lists `*.p
   `python -m pipeline.destreak test --config C --z Z --tile 0-0` first. If the microscope recorded a
   second detector that doesn't see the curtains (e.g. backscatter next to in-lens SE, the same scan),
   `destreak.reference_from` / `reference_to` swap the stripe part from it instead of removing it, so
-  structure that runs along the curtains is kept; `stripe_px` sets what counts as a stripe by length
-  and `core_threshold` fills the cores of strong curtains from the matched reference.
+  structure that runs along the curtains is kept; `stripe_px` sets what counts as a stripe by length,
+  `core_threshold` fills the cores of strong curtains from the matched reference, and `band_match`
+  matches the broad bands that clusters of curtains darken to the reference, only around the curtains.
 - **patchgrid** needs `overlaps.patch_grid` > 0 (e.g. 8) and `intensity.balance_source: overlaps`.
   Setting or changing `overlaps.patch_grid` re-measures every overlap chunk; new shapes change the
   levels and the render plan (render init then asks for `--overwrite`, and render run refuses to go on). With patchgrid off and

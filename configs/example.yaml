@@ -198,12 +198,15 @@ destreak:
   core_dilate_px: 2          # cores widened by this many px across the stripes (curtains wander)
   core_window_px: 31         # window of the local linear match reference -> image
   core_denoise_px: 1.0       # Gaussian sigma smoothing the reference before it fills cores
-  band_levels: null          # swap: broad curtain bands (wider than ``levels`` reach): the swap of the extra
-                             # levels up to this many is applied only in curtain zones, blended to 0 at their
-                             # edges (seamless), so good tissue keeps the ``levels`` result (e.g. 10); null: off
+  band_match: false          # swap: the broad bands curtain clusters darken (wider than ``levels`` reach)
+                             # matched to the reference in curtain zones, fading to 0 at their edges
+                             # (seamless); good tissue keeps the swap's result
   band_zone: 1.0             # curtain zone: what the swap took out (smoothed 64 px across / 256 px along the
                              # stripes) above this many times the image's pixel noise...
-  band_zone_px: 128          # ...widened by this many px
+  band_zone_px: 256          # ...widened by this many px (to take in the band's flanks)
+  band_along_px: 512         # band = image - matched reference, smoothed this much along the stripes (a band
+                             # persists; the detectors' differing tissue contrast averages out)...
+  band_across_px: 32         # ...and this much across them
 
 zcorrect:
   enabled: false             # run zcorrect and let render use positions.csv

@@ -15,7 +15,9 @@ else stays the image's own. No curtain mask is needed: where there are no curtai
 parts agree and the swap changes little. With ``core_threshold``, the cores of strong curtains (a
 few px wide, where the swap took out the most) then take the reference matched to the image
 locally: a curtain that wanders sideways from row to row is not a stripe at any scale, so the
-swap leaves a faint jagged trace of it.
+swap leaves a faint jagged trace of it. With ``band_match``, the broad darkening a cluster of
+curtains leaves around them (a band wider than the swap's levels reach) is matched to the reference
+in curtain zones, fading to nothing at their edges.
 
 ``stripe_px`` sets what counts as a stripe by length (structure varying more slowly than that along
 the stripes), the same at every image size; ``sigma`` (notch width in FFT bins over the band's
@@ -64,12 +66,14 @@ DEFAULTS = {
         "core_dilate_px": 2,    # cores widened by this many px across the stripes (curtains wander)
         "core_window_px": 31,   # window of the local linear match reference -> image
         "core_denoise_px": 1.0,  # Gaussian sigma smoothing the reference before it fills cores
-        "band_levels": None,    # swap: broad curtain bands (wider than ``levels`` reach): the swap of the
-                                # extra levels up to this many is applied only in curtain zones, blended to 0
-                                # at their edges (seamless), so good tissue keeps the ``levels`` result; null: off
+        "band_match": False,    # swap: the broad bands curtain clusters darken (wider than ``levels`` reach)
+                                # matched to the reference in curtain zones, fading to 0 at their edges
         "band_zone": 1.0,       # curtain zone: what the swap took out (smoothed 64 px across / 256 px along
                                 # the stripes) above this many times the image's pixel noise...
-        "band_zone_px": 128,    # ...widened by this many px
+        "band_zone_px": 256,    # ...widened by this many px (to take in the band's flanks)
+        "band_along_px": 512,   # band = image - matched reference, smoothed this much along the stripes
+                                # (a band persists; the detectors' differing tissue contrast averages out)...
+        "band_across_px": 32,   # ...and this much across them
     },
 }
 
@@ -156,7 +160,7 @@ def _blur(a, s):
 
 
 def swap(img, ref, direction="vertical", wavelet="db4", levels=6, sigma=4.0, stripe_px=None, gain_sigma=8.0,
-         aspect=None, split=None):
+         aspect=None):
     """Stripes of ``img`` replaced from ``ref`` (the same scan, another detector, without them).
 
     In each level's stripe band, img's stripe part (``_stripe_part``) is swapped for ref's times a
@@ -164,18 +168,13 @@ def swap(img, ref, direction="vertical", wavelet="db4", levels=6, sigma=4.0, str
     minus stripe part; Gaussian window ``gain_sigma`` coefficients). The noise term (ref's pixel noise,
     which orthonormal wavelets carry into every band unchanged, times the share the rest of the band
     keeps) stops a noisy reference from biasing the gain low. Returns float32 of img's shape and mean.
-
-    With ``split`` < levels: returns (the swap of levels 1..split only, what swapping levels split+1..levels
-    adds to it). The levels are the same either way, so one decomposition gives both.
     """
     h, w = np.shape(img)
     if np.shape(ref) != (h, w):
         raise ValueError(f"reference shape {np.shape(ref)} differs from the image's {(h, w)}")
     levels = _check(direction, wavelet, levels, h, w)
-    split = None if split is None or int(split) >= levels else max(0, int(split))
     if levels < 1:
-        out = np.array(img, np.float32)
-        return out if split is None else (out, np.zeros_like(out))
+        return np.array(img, np.float32)
     band, axis = _BANDS[direction]
     mean = float(np.mean(img, dtype=np.float64))
     ref = np.asarray(ref, np.float32)
@@ -183,7 +182,6 @@ def swap(img, ref, direction="vertical", wavelet="db4", levels=6, sigma=4.0, str
     ci = pywt.wavedec2(np.asarray(img, np.float32), wavelet, level=levels)
     ce = pywt.wavedec2(ref, wavelet, level=levels)
     n = len(ci) - 1
-    coarse = [np.zeros_like(ci[0])] + [(None, None, None)] * n   # levels beyond split: what the swap adds
     for i in range(1, n + 1):
         details = list(ci[i])
         c, e = details[band], ce[i][band]
@@ -193,18 +191,10 @@ def swap(img, ref, direction="vertical", wavelet="db4", levels=6, sigma=4.0, str
         num, den = _blur(rc * re_, gain_sigma), _blur(re_ * re_, gain_sigma)
         # Keep at least a tenth of the local power so pure-noise areas (resin) don't blow the gain up.
         g = num / np.maximum(den - noise * _rest_noise_share(c.shape[axis], s), 0.1 * den + 1e-12)
-        if split is not None and n - i + 1 > split:
-            add = [None, None, None]
-            add[band] = (rc + g * se - c).astype(np.float32)
-            coarse[i] = tuple(add)
-        else:
-            details[band] = rc + g * se
-            ci[i] = tuple(details)
+        details[band] = rc + g * se
+        ci[i] = tuple(details)
         ce[i] = None
-    out = _finish(ci, wavelet, h, w, mean)
-    if split is None:
-        return out
-    return out, np.ascontiguousarray(pywt.waverec2(coarse, wavelet)[:h, :w], np.float32)
+    return _finish(ci, wavelet, h, w, mean)
 
 
 def fill_cores(img, out, ref, threshold, direction="vertical", dilate_px=2, window_px=31, denoise_px=1.0,
@@ -256,13 +246,20 @@ def fill_cores(img, out, ref, threshold, direction="vertical", dilate_px=2, wind
 
 def _harmonic_fill(v, zone):
     """v with its values inside ``zone`` (bool) replaced by the harmonic interpolation of its values on the
-    zone's edge (Laplace equation, values outside the zone fixed)."""
+    zone's edge (Laplace equation, values outside the zone fixed; at the image's border the gradient across it
+    is 0). A zone covering the whole image has no edge: its fill is v's least-squares plane (like the harmonic
+    fill, it keeps offsets and gradients)."""
     hh, ww = v.shape
-    idx = -np.ones((hh, ww), np.int64)
     ys, xs = np.nonzero(zone)
     n = len(ys)
     if not n:
-        return v
+        return np.array(v, np.float64)
+    if n == v.size:
+        yy, xx = np.mgrid[:hh, :ww].astype(np.float64)
+        basis = np.stack([np.ones(v.size), yy.ravel(), xx.ravel()], axis=1)
+        coef = np.linalg.lstsq(basis, np.asarray(v, np.float64).ravel(), rcond=None)[0]
+        return (basis @ coef).reshape(hh, ww)
+    idx = -np.ones((hh, ww), np.int64)
     idx[ys, xs] = np.arange(n)
     rows, cols, vals, rhs, diag = [np.arange(n)], [np.arange(n)], [], np.zeros(n), np.zeros(n)
     for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
@@ -285,34 +282,50 @@ def _harmonic_fill(v, zone):
     return out
 
 
-def blend_zones(img, out, coarse, threshold=1.0, zone_px=128, direction="vertical", wavelet="db4", factor=32):
-    """``out`` plus ``coarse`` (what swapping the coarse levels adds) only in curtain zones, seamlessly.
+def _sigmas(axis, along, across, factor):
+    s = [0.0, 0.0]
+    s[axis], s[1 - axis] = along / factor, across / factor
+    return s
 
-    Curtain zones: what the swap took out, |img - out|, smoothed (Gaussian 64 px across the stripes, 256 px
-    along) above ``threshold`` times img's pixel noise, widened ``zone_px``. Inside a zone ``coarse`` is
-    replaced by coarse - h, h the harmonic interpolation of ``coarse`` from the zone's edge (Poisson /
-    seamless blending), so the change fades to 0 there; outside, out is unchanged. ``coarse`` is smooth (only
-    levels beyond those swapped everywhere), so the zones and h live on a ``factor``-times smaller grid.
+
+def match_bands(img, out, ref, threshold=1.0, zone_px=256, along_px=512.0, across_px=32.0, direction="vertical",
+                wavelet="db4", factor=32):
+    """The broad bands curtain clusters darken, left in ``out`` (= swap(img, ref)), matched to ``ref`` in
+    curtain zones, seamlessly.
+
+    Besides its curtains, a cluster of them darkens the tissue around them as a whole, over a band wider than
+    the swap's levels reach. Curtain zones: what the swap took out, |img - out|, smoothed (Gaussian 64 px
+    across the stripes, 256 px along) above ``threshold`` times img's pixel noise, widened ``zone_px``. The
+    band: out - (a ref + b), a and b fitted outside the zones (on all of the image if they leave less than a
+    tenth), smoothed ``along_px`` along the stripes (a band persists; tissue the two detectors show with
+    different contrast averages out) and ``across_px`` across. Inside a zone out loses the band minus its
+    harmonic interpolation from the zone's edge (Poisson / seamless blending): the correction is 0 at the
+    edge, and smooth differences between the detectors (offsets, gradients) cancel. Outside, out is unchanged.
+    All but the last step runs on a ``factor``-times smaller grid.
+
+    Swapping deeper wavelet levels in the zones instead brings their side lobes: wavelets average to 0, so a
+    dark band's coarse levels are flanked by lighter ones, and the blend, pinned to them at the zone's edge,
+    lifted whole zones lighter than the reference. The band here is a weighted average, without lobes.
     """
     _, axis = _BANDS[direction]
     h, w = np.shape(img)
     small = (max(1, w // factor), max(1, h // factor))
     down = lambda a: cv2.resize(np.asarray(a, np.float32), small, interpolation=cv2.INTER_AREA)
-    sig = [0.0, 0.0]
-    sig[1 - axis], sig[axis] = 64.0 / factor, 256.0 / factor
-    dens = ndimage.gaussian_filter(down(np.abs(np.asarray(img, np.float32) - out)), sig) / (noise_sd(img, wavelet) + 1e-12)
-    zone = dens > float(threshold)
+    dens = ndimage.gaussian_filter(down(np.abs(np.asarray(img, np.float32) - out)), _sigmas(axis, 256, 64, factor))
+    zone = dens > float(threshold) * noise_sd(img, wavelet)
     r = int(round(zone_px / factor))
     if r > 0:
         zone = ndimage.binary_dilation(zone, np.ones((2 * r + 1, 2 * r + 1), bool))
     if not zone.any():
         return out
-    cs = down(coarse).astype(np.float64)
-    hfield = _harmonic_fill(cs, zone)
-    hfield[~zone] = cs[~zone]
-    hbig = cv2.resize(hfield.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
-    m = cv2.resize(zone.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
-    return (out + (coarse - hbig) * m).astype(np.float32)
+    o, e = down(out).astype(np.float64), down(ref).astype(np.float64)
+    fit = ~zone if (~zone).mean() >= 0.1 else np.ones_like(zone)
+    ef, of = e[fit], o[fit]
+    a = float(np.mean((ef - ef.mean()) * (of - of.mean())) / (ef.var() + 1e-12))
+    b = float(of.mean() - a * ef.mean())
+    band = ndimage.gaussian_filter(o - (a * e + b), _sigmas(axis, along_px, across_px, factor))
+    corr = np.where(zone, band - _harmonic_fill(band, zone), 0.0).astype(np.float32)
+    return (out - cv2.resize(corr, (w, h), interpolation=cv2.INTER_LINEAR)).astype(np.float32)
 
 
 def reference_file(file, cfg):
@@ -326,17 +339,24 @@ def reference_file(file, cfg):
 
 def settings(cfg):
     """destreak's section with defaults, checked."""
-    p = {**DEFAULTS["destreak"], **(cfg.get("destreak") or {})}
+    given = cfg.get("destreak") or {}
+    unknown = set(given) - set(DEFAULTS["destreak"])
+    if unknown:
+        raise ValueError(f"destreak: unknown keys {sorted(unknown)}")
+    p = {**DEFAULTS["destreak"], **given}
     if (p["reference_from"] is None) != (p["reference_to"] is None):
         raise ValueError("destreak.reference_from and destreak.reference_to go together")
     for key in ("stripe_px", "stripe_aspect"):
         if p[key] is not None and not float(p[key]) > 0:
             raise ValueError(f"destreak.{key} must be > 0 or null, got {p[key]!r}")
-    if p["band_levels"] is not None:
+    if p["band_match"]:
         if p["reference_from"] is None:
-            raise ValueError("destreak.band_levels needs a reference (destreak.reference_from / _to)")
-        if not int(p["band_levels"]) > int(p["levels"]):
-            raise ValueError(f"destreak.band_levels ({p['band_levels']}) must be more than destreak.levels ({p['levels']})")
+            raise ValueError("destreak.band_match needs a reference (destreak.reference_from / _to)")
+        for key in ("band_zone", "band_along_px", "band_across_px"):
+            if not float(p[key]) > 0:
+                raise ValueError(f"destreak.{key} must be > 0, got {p[key]!r}")
+        if not float(p["band_zone_px"]) >= 0:
+            raise ValueError(f"destreak.band_zone_px must be >= 0, got {p['band_zone_px']!r}")
     if p["core_threshold"] is not None:
         if p["reference_from"] is None:
             raise ValueError("destreak.core_threshold needs a reference (destreak.reference_from / _to)")
@@ -357,13 +377,11 @@ def destreak_from_cfg(img, cfg, ref=None):
         return destreak(img, p["direction"], p["wavelet"], p["levels"], p["sigma"], p["stripe_px"], p["stripe_aspect"])
     if ref is None:
         raise ValueError("destreak has a reference configured but none was given")
-    if p["band_levels"] is not None:
-        out, coarse = swap(img, ref, p["direction"], p["wavelet"], int(p["band_levels"]), p["sigma"], p["stripe_px"],
-                           p["gain_sigma"], p["stripe_aspect"], split=int(p["levels"]))
-        out = blend_zones(img, out, coarse, p["band_zone"], p["band_zone_px"], p["direction"], p["wavelet"])
-    else:
-        out = swap(img, ref, p["direction"], p["wavelet"], p["levels"], p["sigma"], p["stripe_px"], p["gain_sigma"],
-                   p["stripe_aspect"])
+    out = swap(img, ref, p["direction"], p["wavelet"], p["levels"], p["sigma"], p["stripe_px"], p["gain_sigma"],
+               p["stripe_aspect"])
+    if p["band_match"]:
+        out = match_bands(img, out, ref, p["band_zone"], p["band_zone_px"], p["band_along_px"], p["band_across_px"],
+                          p["direction"], p["wavelet"])
     if p["core_threshold"] is not None:
         out = fill_cores(img, out, ref, float(p["core_threshold"]), p["direction"], p["core_dilate_px"],
                          p["core_window_px"], p["core_denoise_px"], p["wavelet"])

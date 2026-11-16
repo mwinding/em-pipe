@@ -272,39 +272,67 @@ def test_deeper_levels_take_broad_bands_and_leave_coarse_structure():
     assert kept9 > 0.95
 
 
-def test_band_levels_take_broad_bands_only_in_curtain_zones_seamlessly():
-    shape = (4096, 4096)
-    rng = np.random.default_rng(15)
+def _band_scene(shape, seed=15):
+    """Texture + cell-sized blobs (clean), dense fine curtains at x 1780-2220 and their broad darkening (a
+    band ~200 px wide, wider than 7 levels reach); the reference shows the blobs with other contrast and has
+    its own shading (a gradient across x), no curtains."""
+    rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[:shape[0], :shape[1]].astype(np.float32)
     base = _texture(shape, 16)
-    blobs = np.zeros(shape, np.float32)               # cell-sized structure the reference shows with other contrast
-    for cy, cx in rng.uniform(300, 3800, (12, 2)):
+    blobs = np.zeros(shape, np.float32)
+    for cy, cx in rng.uniform(300, min(shape) - 300, (12, 2)):
         blobs += 0.2 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 250.0 ** 2))
-    zone = np.abs(xx - 2000) < 220
-    fine = _curtains(shape, 0.06, 3) * zone             # dense fine curtains...
-    band = -0.1 * np.exp(-((xx - 2000) / 100.0) ** 2)   # ...and their broad darkening, wider than 7 levels reach
+    fine = _curtains(shape, 0.06, 3) * (np.abs(xx - 2000) < 220)
+    band = -0.1 * np.exp(-((xx - 2000) / 100.0) ** 2)
     clean = base + blobs
     img = clean + band + fine + rng.normal(0, 0.01, shape).astype(np.float32)
-    ref = 0.6 * (base + 0.5 * blobs) + rng.normal(0, 0.03, shape).astype(np.float32)
+    ref = 0.6 * (base + 0.5 * blobs) + 0.05 * xx / shape[1] + rng.normal(0, 0.03, shape).astype(np.float32)
+    return clean, band, img, ref, xx[0]
+
+
+def test_band_match_takes_broad_bands_in_curtain_zones_without_lightening():
+    clean, band, img, ref, x = _band_scene((4096, 4096))
     lp = lambda a: cv2.GaussianBlur(a, (0, 0), 50)
-    away = np.abs(xx[0] - 2000) > 900
+    away = np.abs(x - 2000) > 900
 
-    def band_left(out):
-        left = lp(out - clean).mean(axis=0)
-        return (left[1900:2100].mean() - left[away].mean()) / band[0, 1900:2100].mean()
+    def left(out):                                   # column profile of what's left, 0 far from the band
+        p = lp(out - clean).mean(axis=0)
+        return p - p[away].mean()
 
-    # One decomposition gives the 7-level swap and what levels 8-9 add to it.
     sw7 = destreak.swap(img, ref, levels=7, stripe_px=256)
-    sw9 = destreak.swap(img, ref, levels=9, stripe_px=256)
-    part, coarse = destreak.swap(img, ref, levels=9, stripe_px=256, split=7)
-    np.testing.assert_allclose(part, sw7, atol=1e-4)
-    np.testing.assert_allclose(part + coarse, sw9, atol=2e-3)
-    out = destreak.blend_zones(img, part, coarse, threshold=1.0, zone_px=128)
-    assert band_left(out) < 0.6 * band_left(sw7) and band_left(out) < 0.4
-    np.testing.assert_array_equal(out[:, :1000], part[:, :1000])     # outside the curtain zone: the 7-level swap
-    # The deeper swap everywhere changes the good data far more.
-    assert np.std(lp(sw9 - img)[:, away]) > 2 * np.std(lp(out - img)[:, away])
-    cfg = {"destreak": {**REF, "levels": 7, "band_levels": 9, "stripe_px": 256}}
+    out = destreak.match_bands(img, sw7, ref, threshold=1.0, zone_px=256)
+    depth = band[0, 1900:2100].mean()
+    assert left(out)[1900:2100].mean() / depth < 0.25 < left(sw7)[1900:2100].mean() / depth
+    # Nowhere across the band lighter than the clean image (deeper wavelet levels' side lobes, pinned at the
+    # zone's edge, lifted whole zones), though the reference has other contrast and its own shading.
+    assert left(out)[1300:2700].max() < 0.1 * abs(depth)
+    np.testing.assert_array_equal(out[:, :1000], sw7[:, :1000])     # outside the curtain zones: unchanged
+    cfg = {"destreak": {**REF, "levels": 7, "stripe_px": 256, "band_match": True}}
     np.testing.assert_array_equal(destreak.destreak_from_cfg(img, cfg, ref), out)
-    with pytest.raises(ValueError, match="more than"):
-        destreak.settings({"destreak": {**REF, "levels": 9, "band_levels": 9}})
+    with pytest.raises(ValueError, match="needs a reference"):
+        destreak.settings({"destreak": {"band_match": True}})
+    with pytest.raises(ValueError, match="unknown keys"):          # the zone swap of deeper levels it replaced
+        destreak.settings({"destreak": {**REF, "levels": 8, "band_levels": 10}})
+
+
+def test_band_match_on_a_tile_all_in_one_curtain_zone():
+    clean, band, img, ref, x = _band_scene((1024, 4096))
+    img = img + _curtains(img.shape, 0.06, 4)                        # curtains everywhere: the zone has no edge
+    sw = destreak.swap(img, ref, levels=7, stripe_px=256)
+    out = destreak.match_bands(img, sw, ref, zone_px=256)
+    assert np.isfinite(out).all()
+    p = lambda a: cv2.GaussianBlur(a - clean, (0, 0), 50).mean(axis=0)
+    # Taken relative to a plane (nothing outside the zone to fade to), the band still goes and the reference's
+    # shading doesn't come in.
+    assert np.ptp(p(out)[1500:2500]) < 0.4 * np.ptp(p(sw)[1500:2500])
+
+
+def test_harmonic_fill_keeps_offsets_and_gradients_with_or_without_a_zone_edge():
+    yy, xx = np.mgrid[:40, :50].astype(np.float64)
+    v = 3 + 0.5 * xx - 0.2 * yy
+    zone = np.zeros(v.shape, bool)
+    zone[10:30, 15:35] = True
+    np.testing.assert_allclose(destreak._harmonic_fill(v, zone), v, atol=1e-9)
+    np.testing.assert_allclose(destreak._harmonic_fill(v, np.ones(v.shape, bool)), v, atol=1e-9)
+    bump = v + np.exp(-((xx - 25) ** 2 + (yy - 20) ** 2) / 50)          # a local band is what's left to take out
+    assert np.abs(destreak._harmonic_fill(bump, np.ones(v.shape, bool)) - v).max() < 0.1
