@@ -313,29 +313,8 @@ def test_band_match_takes_broad_bands_in_curtain_zones_without_lightening():
         destreak.settings({"destreak": {"band_match": True}})
     with pytest.raises(ValueError, match="unknown keys"):          # the zone swap of deeper levels it replaced
         destreak.settings({"destreak": {**REF, "levels": 8, "band_levels": 10}})
-
-
-def test_band_tolerance_leaves_the_detectors_natural_disagreement_in_zones():
-    clean, band, img, ref, x = _band_scene((4096, 4096))
-    lp = lambda a: cv2.GaussianBlur(a, (0, 0), 50)
-    away = np.abs(x - 2000) > 900
-    sw = destreak.swap(img, ref, levels=7, stripe_px=256)
-    full = destreak.match_bands(img, sw, ref, 1.0, 256)
-    np.testing.assert_array_equal(destreak.match_bands(img, sw, ref, 1.0, 256, tolerance=0.0), full)
-    tol = destreak.match_bands(img, sw, ref, 1.0, 256, tolerance=1.0)
-    zone_cols = np.abs(full - sw).max(axis=0) > 0
-    flank = zone_cols & (np.abs(x - 2000) > 250)          # in the zone, off the band: blobs the detectors differ on
-    took = lambda out: float(np.std((lp(out) - lp(sw))[:, flank]))
-    assert took(tol) < 0.25 * took(full)                   # the zone keeps the image's own look there...
-    p = lp(tol - clean).mean(axis=0)
-    p -= p[away].mean()
-    depth = band[0, 1900:2100].mean()
-    assert p[1900:2100].mean() / depth < 0.3               # ...and most of the band still goes
-    assert p[1300:2700].max() < 0.1 * abs(depth)
-    cfg = {"destreak": {**REF, "levels": 7, "stripe_px": 256, "band_match": True, "band_tolerance": 1.0}}
-    np.testing.assert_array_equal(destreak.destreak_from_cfg(img, cfg, ref), tol)
-    with pytest.raises(ValueError, match="band_tolerance must be >= 0"):
-        destreak.settings({"destreak": {**REF, "band_match": True, "band_tolerance": -1}})
+    with pytest.raises(ValueError, match="unknown keys"):          # tried 16 Nov 2026, replaced by band_max_px
+        destreak.settings({"destreak": {**REF, "band_match": True, "band_tolerance": 1.0}})
 
 
 def test_band_max_px_takes_curtain_bands_but_not_wider_regions_the_detectors_differ_on():

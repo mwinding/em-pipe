@@ -207,9 +207,6 @@ destreak:
   band_along_px: 512         # band = image - matched reference, smoothed this much along the stripes (a band
                              # persists; the detectors' differing tissue contrast averages out)...
   band_across_px: 32         # ...and this much across them
-  band_tolerance: 0.0        # take only what exceeds this many times the detectors' natural band-wise
-                             # disagreement (robust SD of the band outside the zones): without it a zone
-                             # takes the reference's look there; e.g. 1
   band_max_px: null          # take only bands up to this wide across the stripes (a curtain cluster's band is
                              # a few hundred px); wider differences, e.g. a cluster of cell bodies the
                              # detectors show differently, are left; e.g. 768
