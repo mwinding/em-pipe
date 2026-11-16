@@ -210,6 +210,9 @@ destreak:
   band_tolerance: 0.0        # take only what exceeds this many times the detectors' natural band-wise
                              # disagreement (robust SD of the band outside the zones): without it a zone
                              # takes the reference's look there; e.g. 1
+  band_max_px: null          # take only bands up to this wide across the stripes (a curtain cluster's band is
+                             # a few hundred px); wider differences, e.g. a cluster of cell bodies the
+                             # detectors show differently, are left; e.g. 768
 
 zcorrect:
   enabled: false             # run zcorrect and let render use positions.csv

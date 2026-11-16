@@ -338,6 +338,35 @@ def test_band_tolerance_leaves_the_detectors_natural_disagreement_in_zones():
         destreak.settings({"destreak": {**REF, "band_match": True, "band_tolerance": -1}})
 
 
+def test_band_max_px_takes_curtain_bands_but_not_wider_regions_the_detectors_differ_on():
+    shape = (2048, 4096)
+    rng = np.random.default_rng(3)
+    x = np.arange(shape[1], dtype=np.float32)
+    clean = _texture(shape, 16)
+    band = (-0.1 * np.exp(-((x - 1500) / 100.0) ** 2)).astype(np.float32)[None, :]       # ~300 px wide
+    region = (0.05 / (1 + np.exp(-(x - 2000) / 30)) / (1 + np.exp((x - 2900) / 30))).astype(np.float32)[None, :]
+    fine = _curtains(shape, 0.06, 3) * ((x > 1200) & (x < 2900))       # one curtain zone over both
+    img = clean + band + region + fine + rng.normal(0, 0.01, shape).astype(np.float32)
+    ref = 0.6 * clean + rng.normal(0, 0.03, shape).astype(np.float32)   # shows the region like the rest
+    sw = destreak.swap(img, ref, levels=7, stripe_px=256)
+    lp = lambda a: cv2.GaussianBlur(a, (0, 0), 50)
+
+    def check(out):
+        p = lp(out - clean - region).mean(axis=0)
+        p -= p[:600].mean()
+        return p[1450:1550].mean() / -0.1, -lp(out - sw).mean(axis=0)[2200:2700].mean() / 0.05
+
+    band_all, region_all = check(destreak.match_bands(img, sw, ref, 1.0, 256))
+    limited = destreak.match_bands(img, sw, ref, 1.0, 256, max_px=768)
+    band_lim, region_lim = check(limited)
+    assert band_all < 0.15 and region_all > 0.7        # without the limit the 900 px region goes with the band
+    assert band_lim < 0.15 and region_lim < 0.3        # with it the band still goes, the region stays
+    cfg = {"destreak": {**REF, "levels": 7, "stripe_px": 256, "band_match": True, "band_max_px": 768}}
+    np.testing.assert_array_equal(destreak.destreak_from_cfg(img, cfg, ref), limited)
+    with pytest.raises(ValueError, match="band_max_px must be > 0"):
+        destreak.settings({"destreak": {**REF, "band_match": True, "band_max_px": 0}})
+
+
 def test_band_match_on_a_tile_all_in_one_curtain_zone():
     clean, band, img, ref, x = _band_scene((1024, 4096))
     img = img + _curtains(img.shape, 0.06, 4)                        # curtains everywhere: the zone has no edge
