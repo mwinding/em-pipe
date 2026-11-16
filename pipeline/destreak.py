@@ -74,6 +74,8 @@ DEFAULTS = {
         "band_along_px": 512,   # band = image - matched reference, smoothed this much along the stripes
                                 # (a band persists; the detectors' differing tissue contrast averages out)...
         "band_across_px": 32,   # ...and this much across them
+        "band_tolerance": 0.0,  # take only what exceeds this many times the detectors' natural band-wise
+                                # disagreement (measured outside the zones), so zones keep the image's look
     },
 }
 
@@ -288,8 +290,18 @@ def _sigmas(axis, along, across, factor):
     return s
 
 
+def _natural_spread(band, mask, trend_sigma):
+    """Robust SD of ``band`` on ``mask`` about its trend (Gaussian ``trend_sigma``, normalised over the mask):
+    how much the detectors disagree, band-wise, where there are no curtains."""
+    m = mask.astype(np.float64)
+    den = ndimage.gaussian_filter(m, trend_sigma)
+    trend = ndimage.gaussian_filter(band * m, trend_sigma) / np.maximum(den, 1e-6)
+    r = (band - trend)[mask]
+    return float(1.4826 * np.median(np.abs(r - np.median(r)))) if r.size else 0.0
+
+
 def match_bands(img, out, ref, threshold=1.0, zone_px=256, along_px=512.0, across_px=32.0, direction="vertical",
-                wavelet="db4", factor=32):
+                wavelet="db4", factor=32, tolerance=0.0, trend_px=1024.0):
     """The broad bands curtain clusters darken, left in ``out`` (= swap(img, ref)), matched to ``ref`` in
     curtain zones, seamlessly.
 
@@ -302,6 +314,13 @@ def match_bands(img, out, ref, threshold=1.0, zone_px=256, along_px=512.0, acros
     harmonic interpolation from the zone's edge (Poisson / seamless blending): the correction is 0 at the
     edge, and smooth differences between the detectors (offsets, gradients) cancel. Outside, out is unchanged.
     All but the last step runs on a ``factor``-times smaller grid.
+
+    The detectors disagree band-wise a little even without curtains (they show tissue with other contrast),
+    and taking all of the band in a zone would give the zone the reference's look there. With ``tolerance``
+    > 0 only what exceeds ``tolerance`` times that natural disagreement is taken: the correction shrinks by
+    it towards 0 (soft threshold, so it stays continuous and 0 at the zone's edge). The natural disagreement
+    is the band's robust SD outside the zones about its ``trend_px`` trend (on all of the image if the zones
+    leave less than a tenth).
 
     Swapping deeper wavelet levels in the zones instead brings their side lobes: wavelets average to 0, so a
     dark band's coarse levels are flanked by lighter ones, and the blend, pinned to them at the zone's edge,
@@ -324,7 +343,11 @@ def match_bands(img, out, ref, threshold=1.0, zone_px=256, along_px=512.0, acros
     a = float(np.mean((ef - ef.mean()) * (of - of.mean())) / (ef.var() + 1e-12))
     b = float(of.mean() - a * ef.mean())
     band = ndimage.gaussian_filter(o - (a * e + b), _sigmas(axis, along_px, across_px, factor))
-    corr = np.where(zone, band - _harmonic_fill(band, zone), 0.0).astype(np.float32)
+    corr = band - _harmonic_fill(band, zone)
+    if tolerance > 0:
+        t = float(tolerance) * _natural_spread(band, fit, trend_px / factor)
+        corr = np.sign(corr) * np.maximum(np.abs(corr) - t, 0.0)
+    corr = np.where(zone, corr, 0.0).astype(np.float32)
     return (out - cv2.resize(corr, (w, h), interpolation=cv2.INTER_LINEAR)).astype(np.float32)
 
 
@@ -355,8 +378,9 @@ def settings(cfg):
         for key in ("band_zone", "band_along_px", "band_across_px"):
             if not float(p[key]) > 0:
                 raise ValueError(f"destreak.{key} must be > 0, got {p[key]!r}")
-        if not float(p["band_zone_px"]) >= 0:
-            raise ValueError(f"destreak.band_zone_px must be >= 0, got {p['band_zone_px']!r}")
+        for key in ("band_zone_px", "band_tolerance"):
+            if not float(p[key]) >= 0:
+                raise ValueError(f"destreak.{key} must be >= 0, got {p[key]!r}")
     if p["core_threshold"] is not None:
         if p["reference_from"] is None:
             raise ValueError("destreak.core_threshold needs a reference (destreak.reference_from / _to)")
@@ -381,7 +405,7 @@ def destreak_from_cfg(img, cfg, ref=None):
                p["stripe_aspect"])
     if p["band_match"]:
         out = match_bands(img, out, ref, p["band_zone"], p["band_zone_px"], p["band_along_px"], p["band_across_px"],
-                          p["direction"], p["wavelet"])
+                          p["direction"], p["wavelet"], tolerance=float(p["band_tolerance"]))
     if p["core_threshold"] is not None:
         out = fill_cores(img, out, ref, float(p["core_threshold"]), p["direction"], p["core_dilate_px"],
                          p["core_window_px"], p["core_denoise_px"], p["wavelet"])

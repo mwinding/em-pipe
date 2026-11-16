@@ -138,7 +138,8 @@ The export serves like any volume: `python3 -m pipeline.serve FOLDER` lists `*.p
   `destreak.reference_from` / `reference_to` swap the stripe part from it instead of removing it, so
   structure that runs along the curtains is kept; `stripe_px` sets what counts as a stripe by length,
   `core_threshold` fills the cores of strong curtains from the matched reference, and `band_match`
-  matches the broad bands that clusters of curtains darken to the reference, only around the curtains.
+  matches the broad bands that clusters of curtains darken to the reference, only around the curtains
+  (`band_tolerance` leaves the detectors' natural disagreement there, so those areas keep the image's look).
 - **patchgrid** needs `overlaps.patch_grid` > 0 (e.g. 8) and `intensity.balance_source: overlaps`.
   Setting or changing `overlaps.patch_grid` re-measures every overlap chunk; new shapes change the
   levels and the render plan (render init then asks for `--overwrite`, and render run refuses to go on). With patchgrid off and
