@@ -18,7 +18,7 @@ fit: boosted trees (pipeline/boost.py; deterministic) on the table, each (datase
   the fractions of its reference-tissue and other cells above probability 0.5.
 draw: one PNG per labelled plane (labels_<dataset>_z<z>.png), at 128 nm (scale 4 of the volume): boxes
   in green (reference tissue) or red (other). With --previous OLD.json, boxes not in OLD are drawn in
-  cyan (reference tissue) or orange (other), and OLD's boxes that are gone as thin grey outlines.
+  cyan (reference tissue) or orange (other), and OLD's boxes that are gone as dashed magenta outlines.
 
 Boxes of one plane must not overlap (each cell is labelled at most once): table and draw refuse them.
 """
@@ -166,6 +166,15 @@ def fit(a):
     return 0
 
 
+def dashed_rect(img, x0, y0, x1, y1, col, dash=8):
+    for x in range(x0, x1, 2 * dash):
+        cv2.line(img, (x, y0), (min(x + dash, x1), y0), col, 1)
+        cv2.line(img, (x, y1), (min(x + dash, x1), y1), col, 1)
+    for y in range(y0, y1, 2 * dash):
+        cv2.line(img, (x0, y), (x0, min(y + dash, y1)), col, 1)
+        cv2.line(img, (x1, y), (x1, min(y + dash, y1)), col, 1)
+
+
 def draw(a):
     labels = json.loads(Path(a.labels).read_text())
     check_overlaps(labels)
@@ -186,8 +195,8 @@ def draw(a):
             if old is not None:
                 for b in old:
                     if b["dataset"] == v and b["z"] == z and key(b) not in new_keys:
-                        cv2.rectangle(rgb, (round(b["x0"] / f), round(b["y0"] / f)),
-                                      (round(b["x1"] / f) - 1, round(b["y1"] / f) - 1), (150, 150, 150), 1)
+                        dashed_rect(rgb, round(b["x0"] / f), round(b["y0"] / f), round(b["x1"] / f) - 1,
+                                    round(b["y1"] / f) - 1, (255, 0, 255))
             for b in labels["boxes"]:
                 if b["dataset"] != v or b["z"] != z:
                     continue
@@ -199,7 +208,7 @@ def draw(a):
                               col, 2)
             title = f"{v} z {z}, 128 nm: green neuropil, red other"
             if old is not None:
-                title += f"; changed ({n_changed}): cyan neuropil, orange other; grey: removed"
+                title += f"; new/changed ({n_changed}): cyan neuropil, orange other; dashed magenta: removed"
             cv2.putText(rgb, title, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 5, cv2.LINE_AA)
             cv2.putText(rgb, title, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
             name = out / f"labels_{v}_z{z}.png"
