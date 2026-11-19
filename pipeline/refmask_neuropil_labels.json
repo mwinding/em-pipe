@@ -1,5 +1,5 @@
 {
- "description": "Labelled boxes for the reference tissue classifier (pipeline/refmask.py, tools/refmask_train.py): label 'neuropil' (with tracts) or 'other' (cell bodies, glia, gut...). 'dataset' is a short name that the training tool maps to a config and volume (--dataset NAME=CONFIG,VOLUME). Boxes in that volume's stored voxels (x0, y0, x1, y1; x1/y1 exclusive), plane z; only the tissue cells (not background) inside a box are used. Picked by eye on the 128 nm preview thumbnails, conservatively (unsure areas left out).",
+ "description": "Labelled boxes for the reference tissue classifier (pipeline/refmask.py, tools/refmask_train.py): label 'neuropil' (with tracts) or 'other' (cell bodies, glia, gut...). 'dataset' is a short name that the training tool maps to a config and volume (--dataset NAME=CONFIG,VOLUME). Boxes in that volume's stored voxels (x0, y0, x1, y1; x1/y1 exclusive), plane z; only the tissue cells (not background) inside a box are used. Picked by eye on the 128 nm preview thumbnails: neuropil as single 10 um grid cells well inside the neuropil (plus hand-picked patches), other as boxes in cell-body rind clear of neuropil. Boxes of one plane must not overlap.",
  "tissue": "neuropil",
  "boxes": [
   {
@@ -35,42 +35,12 @@
   {
    "dataset": "35h",
    "z": 2640,
-   "x0": 21760,
+   "x0": 23040,
    "y0": 20480,
    "x1": 25600,
-   "y1": 24320,
+   "y1": 23040,
    "label": "other",
    "note": "cell bodies right of the neuropil"
-  },
-  {
-   "dataset": "35h",
-   "z": 2640,
-   "x0": 10240,
-   "y0": 19200,
-   "x1": 19200,
-   "y1": 23040,
-   "label": "neuropil",
-   "note": "central neuropil and tracts"
-  },
-  {
-   "dataset": "35h",
-   "z": 5328,
-   "x0": 7680,
-   "y0": 16640,
-   "x1": 14080,
-   "y1": 23040,
-   "label": "neuropil",
-   "note": "central neuropil"
-  },
-  {
-   "dataset": "35h",
-   "z": 5328,
-   "x0": 15360,
-   "y0": 16640,
-   "x1": 21760,
-   "y1": 23040,
-   "label": "neuropil",
-   "note": "central neuropil"
   },
   {
    "dataset": "35h",
@@ -125,49 +95,19 @@
   {
    "dataset": "35h",
    "z": 8848,
-   "x0": 19200,
-   "y0": 6400,
+   "x0": 17920,
+   "y0": 0,
    "x1": 25600,
-   "y1": 11520,
-   "label": "neuropil",
-   "note": "right neuropil"
-  },
-  {
-   "dataset": "35h",
-   "z": 8848,
-   "x0": 3840,
-   "y0": 5120,
-   "x1": 8960,
-   "y1": 10240,
-   "label": "neuropil",
-   "note": "left neuropil"
-  },
-  {
-   "dataset": "35h",
-   "z": 8848,
-   "x0": 8960,
-   "y0": 14080,
-   "x1": 14080,
-   "y1": 20480,
-   "label": "neuropil",
-   "note": "central neuropil"
-  },
-  {
-   "dataset": "35h",
-   "z": 8848,
-   "x0": 16640,
-   "y0": 14080,
-   "x1": 20480,
-   "y1": 20480,
-   "label": "neuropil",
-   "note": "central neuropil"
+   "y1": 2560,
+   "label": "other",
+   "note": "cell bodies"
   },
   {
    "dataset": "35h",
    "z": 8848,
    "x0": 17920,
-   "y0": 0,
-   "x1": 25600,
+   "y0": 2560,
+   "x1": 20480,
    "y1": 3840,
    "label": "other",
    "note": "cell bodies"
@@ -186,9 +126,19 @@
    "dataset": "35h",
    "z": 8848,
    "x0": 6400,
-   "y0": 21760,
+   "y0": 23040,
    "x1": 14080,
    "y1": 25600,
+   "label": "other",
+   "note": "cell bodies"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 6400,
+   "y0": 21760,
+   "x1": 10240,
+   "y1": 23040,
    "label": "other",
    "note": "cell bodies"
   },
@@ -205,30 +155,10 @@
   {
    "dataset": "35h",
    "z": 15056,
-   "x0": 5120,
-   "y0": 5120,
-   "x1": 10240,
-   "y1": 10240,
-   "label": "neuropil",
-   "note": "left neuropil"
-  },
-  {
-   "dataset": "35h",
-   "z": 15056,
-   "x0": 16640,
-   "y0": 5120,
-   "x1": 21760,
-   "y1": 10240,
-   "label": "neuropil",
-   "note": "right neuropil"
-  },
-  {
-   "dataset": "35h",
-   "z": 15056,
    "x0": 3840,
    "y0": 11520,
    "x1": 11520,
-   "y1": 17920,
+   "y1": 16640,
    "label": "other",
    "note": "cell bodies"
   },
@@ -237,6 +167,16 @@
    "z": 15056,
    "x0": 19200,
    "y0": 11520,
+   "x1": 25600,
+   "y1": 16640,
+   "label": "other",
+   "note": "cell bodies"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 20480,
+   "y0": 16640,
    "x1": 25600,
    "y1": 19200,
    "label": "other",
@@ -248,7 +188,7 @@
    "x0": 3840,
    "y0": 2560,
    "x1": 11520,
-   "y1": 5120,
+   "y1": 3840,
    "label": "other",
    "note": "cell bodies"
   },
@@ -258,6 +198,16 @@
    "x0": 16640,
    "y0": 2560,
    "x1": 21760,
+   "y1": 3840,
+   "label": "other",
+   "note": "cell bodies"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 16640,
+   "y0": 3840,
+   "x1": 17920,
    "y1": 5120,
    "label": "other",
    "note": "cell bodies"
@@ -265,30 +215,10 @@
   {
    "dataset": "37i",
    "z": 1000,
-   "x0": 8960,
-   "y0": 23040,
-   "x1": 12800,
-   "y1": 28160,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "37i",
-   "z": 1000,
-   "x0": 15360,
-   "y0": 23040,
-   "x1": 20480,
-   "y1": 28160,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "37i",
-   "z": 1000,
    "x0": 6400,
    "y0": 21760,
    "x1": 7680,
-   "y1": 26880,
+   "y1": 24320,
    "label": "other",
    "note": "cell bodies"
   },
@@ -298,7 +228,7 @@
    "x0": 20480,
    "y0": 21760,
    "x1": 23040,
-   "y1": 26880,
+   "y1": 24320,
    "label": "other",
    "note": "cell bodies"
   },
@@ -315,40 +245,10 @@
   {
    "dataset": "37i",
    "z": 9600,
-   "x0": 3840,
-   "y0": 5120,
-   "x1": 10240,
-   "y1": 12800,
-   "label": "neuropil",
-   "note": "left neuropil"
-  },
-  {
-   "dataset": "37i",
-   "z": 9600,
-   "x0": 16640,
-   "y0": 7680,
-   "x1": 23040,
-   "y1": 12800,
-   "label": "neuropil",
-   "note": "right neuropil and tract"
-  },
-  {
-   "dataset": "37i",
-   "z": 9600,
-   "x0": 8960,
-   "y0": 17920,
-   "x1": 17920,
-   "y1": 23040,
-   "label": "neuropil",
-   "note": "central neuropil"
-  },
-  {
-   "dataset": "37i",
-   "z": 9600,
    "x0": 1280,
    "y0": 0,
    "x1": 10240,
-   "y1": 3840,
+   "y1": 2560,
    "label": "other",
    "note": "cell bodies"
   },
@@ -358,15 +258,15 @@
    "x0": 17920,
    "y0": 0,
    "x1": 26880,
-   "y1": 3840,
+   "y1": 2560,
    "label": "other",
    "note": "cell bodies"
   },
   {
    "dataset": "37i",
    "z": 9600,
-   "x0": 2560,
-   "y0": 14080,
+   "x0": 3840,
+   "y0": 16640,
    "x1": 7680,
    "y1": 24320,
    "label": "other",
@@ -375,10 +275,10 @@
   {
    "dataset": "37i",
    "z": 9600,
-   "x0": 19200,
+   "x0": 20480,
    "y0": 15360,
    "x1": 25600,
-   "y1": 24320,
+   "y1": 23040,
    "label": "other",
    "note": "cell bodies"
   },
@@ -405,70 +305,10 @@
   {
    "dataset": "A1001",
    "z": 56,
-   "x0": 1280,
-   "y0": 5120,
-   "x1": 8960,
-   "y1": 8960,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 56,
-   "x0": 1280,
-   "y0": 11520,
-   "x1": 8960,
-   "y1": 15360,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 56,
-   "x0": 17920,
-   "y0": 12800,
-   "x1": 23040,
-   "y1": 15360,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 56,
-   "x0": 17920,
-   "y0": 16640,
-   "x1": 23040,
-   "y1": 20480,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 56,
-   "x0": 17920,
-   "y0": 3840,
-   "x1": 21760,
-   "y1": 7680,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 56,
-   "x0": 8960,
-   "y0": 11520,
-   "x1": 12800,
-   "y1": 14080,
-   "label": "neuropil",
-   "note": "tracts (along the section) and neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 56,
    "x0": 0,
    "y0": 1280,
-   "x1": 8960,
-   "y1": 5120,
+   "x1": 7680,
+   "y1": 3840,
    "label": "other",
    "note": "cell bodies"
   },
@@ -477,7 +317,7 @@
    "z": 56,
    "x0": 12800,
    "y0": 0,
-   "x1": 16640,
+   "x1": 15360,
    "y1": 5120,
    "label": "other",
    "note": "cell bodies"
@@ -497,7 +337,7 @@
    "z": 56,
    "x0": 12800,
    "y0": 19200,
-   "x1": 17920,
+   "x1": 16640,
    "y1": 24320,
    "label": "other",
    "note": "packed cell bodies"
@@ -506,7 +346,7 @@
    "dataset": "A1001",
    "z": 56,
    "x0": 21760,
-   "y0": 20480,
+   "y0": 21760,
    "x1": 26880,
    "y1": 24320,
    "label": "other",
@@ -515,8 +355,8 @@
   {
    "dataset": "A1001",
    "z": 56,
-   "x0": 23040,
-   "y0": 1280,
+   "x0": 24320,
+   "y0": 2560,
    "x1": 26880,
    "y1": 7680,
    "label": "other",
@@ -525,60 +365,10 @@
   {
    "dataset": "A1001",
    "z": 240,
-   "x0": 1280,
-   "y0": 5120,
-   "x1": 8960,
-   "y1": 8960,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 240,
-   "x0": 0,
-   "y0": 11520,
-   "x1": 8960,
-   "y1": 15360,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 240,
-   "x0": 17920,
-   "y0": 5120,
-   "x1": 23040,
-   "y1": 8960,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 240,
-   "x0": 17920,
-   "y0": 12800,
-   "x1": 23040,
-   "y1": 20480,
-   "label": "neuropil",
-   "note": "neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 240,
-   "x0": 8960,
-   "y0": 11520,
-   "x1": 12800,
-   "y1": 14080,
-   "label": "neuropil",
-   "note": "tracts (along the section) and neuropil"
-  },
-  {
-   "dataset": "A1001",
-   "z": 240,
    "x0": 0,
    "y0": 1280,
-   "x1": 10240,
-   "y1": 5120,
+   "x1": 8960,
+   "y1": 3840,
    "label": "other",
    "note": "cell bodies"
   },
@@ -587,7 +377,7 @@
    "z": 240,
    "x0": 12800,
    "y0": 0,
-   "x1": 16640,
+   "x1": 15360,
    "y1": 5120,
    "label": "other",
    "note": "cell bodies"
@@ -595,8 +385,8 @@
   {
    "dataset": "A1001",
    "z": 240,
-   "x0": 23040,
-   "y0": 1280,
+   "x0": 24320,
+   "y0": 2560,
    "x1": 26880,
    "y1": 8960,
    "label": "other",
@@ -606,7 +396,7 @@
    "dataset": "A1001",
    "z": 240,
    "x0": 0,
-   "y0": 15360,
+   "y0": 16640,
    "x1": 8960,
    "y1": 19200,
    "label": "other",
@@ -625,8 +415,8 @@
   {
    "dataset": "A1001",
    "z": 240,
-   "x0": 20480,
-   "y0": 20480,
+   "x0": 21760,
+   "y0": 21760,
    "x1": 25600,
    "y1": 24320,
    "label": "other",
@@ -635,10 +425,10 @@
   {
    "dataset": "A1001",
    "z": 240,
-   "x0": 8960,
+   "x0": 10240,
    "y0": 8960,
    "x1": 12800,
-   "y1": 11520,
+   "y1": 10240,
    "label": "other",
    "note": "midline cell bodies"
   },
@@ -1381,6 +1171,1936 @@
    "y1": 23278,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)"
+  },
+  {
+   "dataset": "35h",
+   "z": 2640,
+   "x0": 11520,
+   "y0": 20480,
+   "x1": 12800,
+   "y1": 21760,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 2640,
+   "x0": 12800,
+   "y0": 20480,
+   "x1": 14080,
+   "y1": 21760,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 2640,
+   "x0": 14080,
+   "y0": 20480,
+   "x1": 15360,
+   "y1": 21760,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 2640,
+   "x0": 15360,
+   "y0": 20480,
+   "x1": 16640,
+   "y1": 21760,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 2640,
+   "x0": 16640,
+   "y0": 20480,
+   "x1": 17920,
+   "y1": 21760,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 2640,
+   "x0": 12800,
+   "y0": 21760,
+   "x1": 14080,
+   "y1": 23040,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 2640,
+   "x0": 14080,
+   "y0": 21760,
+   "x1": 15360,
+   "y1": 23040,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 2640,
+   "x0": 15360,
+   "y0": 21760,
+   "x1": 16640,
+   "y1": 23040,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 2640,
+   "x0": 11520,
+   "y0": 19200,
+   "x1": 12800,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 2640,
+   "x0": 12800,
+   "y0": 19200,
+   "x1": 14080,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 5328,
+   "x0": 12800,
+   "y0": 17920,
+   "x1": 14080,
+   "y1": 19200,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 5328,
+   "x0": 8960,
+   "y0": 19200,
+   "x1": 10240,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 5328,
+   "x0": 12800,
+   "y0": 19200,
+   "x1": 14080,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 5328,
+   "x0": 10240,
+   "y0": 16640,
+   "x1": 11520,
+   "y1": 17920,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 5328,
+   "x0": 11520,
+   "y0": 16640,
+   "x1": 12800,
+   "y1": 17920,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 23040,
+   "y0": 7680,
+   "x1": 24320,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 23040,
+   "y0": 8960,
+   "x1": 24320,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 21760,
+   "y0": 6400,
+   "x1": 23040,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 23040,
+   "y0": 6400,
+   "x1": 24320,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 3840,
+   "y0": 6400,
+   "x1": 5120,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 3840,
+   "y0": 7680,
+   "x1": 5120,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 7680,
+   "y0": 7680,
+   "x1": 8960,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 8960,
+   "y0": 14080,
+   "x1": 10240,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 10240,
+   "y0": 14080,
+   "x1": 11520,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 8960,
+   "y0": 15360,
+   "x1": 10240,
+   "y1": 16640,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 10240,
+   "y0": 15360,
+   "x1": 11520,
+   "y1": 16640,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 10240,
+   "y0": 16640,
+   "x1": 11520,
+   "y1": 17920,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 11520,
+   "y0": 16640,
+   "x1": 12800,
+   "y1": 17920,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 10240,
+   "y0": 17920,
+   "x1": 11520,
+   "y1": 19200,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 11520,
+   "y0": 17920,
+   "x1": 12800,
+   "y1": 19200,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 10240,
+   "y0": 19200,
+   "x1": 11520,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 11520,
+   "y0": 19200,
+   "x1": 12800,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 16640,
+   "y0": 14080,
+   "x1": 17920,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 17920,
+   "y0": 14080,
+   "x1": 19200,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 16640,
+   "y0": 15360,
+   "x1": 17920,
+   "y1": 16640,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 17920,
+   "y0": 15360,
+   "x1": 19200,
+   "y1": 16640,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 19200,
+   "y0": 15360,
+   "x1": 20480,
+   "y1": 16640,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 16640,
+   "y0": 16640,
+   "x1": 17920,
+   "y1": 17920,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 17920,
+   "y0": 16640,
+   "x1": 19200,
+   "y1": 17920,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 16640,
+   "y0": 17920,
+   "x1": 17920,
+   "y1": 19200,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 17920,
+   "y0": 17920,
+   "x1": 19200,
+   "y1": 19200,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 16640,
+   "y0": 19200,
+   "x1": 17920,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 8848,
+   "x0": 17920,
+   "y0": 19200,
+   "x1": 19200,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 6400,
+   "y0": 6400,
+   "x1": 7680,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 7680,
+   "y0": 6400,
+   "x1": 8960,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 8960,
+   "y0": 6400,
+   "x1": 10240,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 6400,
+   "y0": 7680,
+   "x1": 7680,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 7680,
+   "y0": 7680,
+   "x1": 8960,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 8960,
+   "y0": 7680,
+   "x1": 10240,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 6400,
+   "y0": 8960,
+   "x1": 7680,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 7680,
+   "y0": 8960,
+   "x1": 8960,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 8960,
+   "y0": 8960,
+   "x1": 10240,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 7680,
+   "y0": 5120,
+   "x1": 8960,
+   "y1": 6400,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 17920,
+   "y0": 6400,
+   "x1": 19200,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 19200,
+   "y0": 6400,
+   "x1": 20480,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 20480,
+   "y0": 6400,
+   "x1": 21760,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 16640,
+   "y0": 7680,
+   "x1": 17920,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 17920,
+   "y0": 7680,
+   "x1": 19200,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 19200,
+   "y0": 7680,
+   "x1": 20480,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 17920,
+   "y0": 8960,
+   "x1": 19200,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 19200,
+   "y0": 8960,
+   "x1": 20480,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "x0": 19200,
+   "y0": 5120,
+   "x1": 20480,
+   "y1": 6400,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 10240,
+   "y0": 23040,
+   "x1": 11520,
+   "y1": 24320,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 11520,
+   "y0": 23040,
+   "x1": 12800,
+   "y1": 24320,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 8960,
+   "y0": 24320,
+   "x1": 10240,
+   "y1": 25600,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 10240,
+   "y0": 24320,
+   "x1": 11520,
+   "y1": 25600,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 11520,
+   "y0": 24320,
+   "x1": 12800,
+   "y1": 25600,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 8960,
+   "y0": 25600,
+   "x1": 10240,
+   "y1": 26880,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 10240,
+   "y0": 25600,
+   "x1": 11520,
+   "y1": 26880,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 11520,
+   "y0": 25600,
+   "x1": 12800,
+   "y1": 26880,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 10240,
+   "y0": 26880,
+   "x1": 11520,
+   "y1": 28160,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 15360,
+   "y0": 23040,
+   "x1": 16640,
+   "y1": 24320,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 16640,
+   "y0": 23040,
+   "x1": 17920,
+   "y1": 24320,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 17920,
+   "y0": 23040,
+   "x1": 19200,
+   "y1": 24320,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 15360,
+   "y0": 24320,
+   "x1": 16640,
+   "y1": 25600,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 16640,
+   "y0": 24320,
+   "x1": 17920,
+   "y1": 25600,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 17920,
+   "y0": 24320,
+   "x1": 19200,
+   "y1": 25600,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 16640,
+   "y0": 25600,
+   "x1": 17920,
+   "y1": 26880,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 17920,
+   "y0": 25600,
+   "x1": 19200,
+   "y1": 26880,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 16640,
+   "y0": 26880,
+   "x1": 17920,
+   "y1": 28160,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 1000,
+   "x0": 17920,
+   "y0": 26880,
+   "x1": 19200,
+   "y1": 28160,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 5120,
+   "y0": 6400,
+   "x1": 6400,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 6400,
+   "y0": 6400,
+   "x1": 7680,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 7680,
+   "y0": 6400,
+   "x1": 8960,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 3840,
+   "y0": 7680,
+   "x1": 5120,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 5120,
+   "y0": 7680,
+   "x1": 6400,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 6400,
+   "y0": 7680,
+   "x1": 7680,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 7680,
+   "y0": 7680,
+   "x1": 8960,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 8960,
+   "y0": 7680,
+   "x1": 10240,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 5120,
+   "y0": 8960,
+   "x1": 6400,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 6400,
+   "y0": 8960,
+   "x1": 7680,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 7680,
+   "y0": 8960,
+   "x1": 8960,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 8960,
+   "y0": 8960,
+   "x1": 10240,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 5120,
+   "y0": 10240,
+   "x1": 6400,
+   "y1": 11520,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 6400,
+   "y0": 10240,
+   "x1": 7680,
+   "y1": 11520,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 7680,
+   "y0": 10240,
+   "x1": 8960,
+   "y1": 11520,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 5120,
+   "y0": 11520,
+   "x1": 6400,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 6400,
+   "y0": 11520,
+   "x1": 7680,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 7680,
+   "y0": 11520,
+   "x1": 8960,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 17920,
+   "y0": 7680,
+   "x1": 19200,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 19200,
+   "y0": 7680,
+   "x1": 20480,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 20480,
+   "y0": 7680,
+   "x1": 21760,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 17920,
+   "y0": 8960,
+   "x1": 19200,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 19200,
+   "y0": 8960,
+   "x1": 20480,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 20480,
+   "y0": 8960,
+   "x1": 21760,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 21760,
+   "y0": 8960,
+   "x1": 23040,
+   "y1": 10240,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 17920,
+   "y0": 10240,
+   "x1": 19200,
+   "y1": 11520,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 19200,
+   "y0": 10240,
+   "x1": 20480,
+   "y1": 11520,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 20480,
+   "y0": 10240,
+   "x1": 21760,
+   "y1": 11520,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 17920,
+   "y0": 11520,
+   "x1": 19200,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 19200,
+   "y0": 11520,
+   "x1": 20480,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 20480,
+   "y0": 11520,
+   "x1": 21760,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 10240,
+   "y0": 19200,
+   "x1": 11520,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 11520,
+   "y0": 19200,
+   "x1": 12800,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 12800,
+   "y0": 19200,
+   "x1": 14080,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 14080,
+   "y0": 19200,
+   "x1": 15360,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 15360,
+   "y0": 19200,
+   "x1": 16640,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 10240,
+   "y0": 20480,
+   "x1": 11520,
+   "y1": 21760,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 11520,
+   "y0": 20480,
+   "x1": 12800,
+   "y1": 21760,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 12800,
+   "y0": 20480,
+   "x1": 14080,
+   "y1": 21760,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 14080,
+   "y0": 20480,
+   "x1": 15360,
+   "y1": 21760,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 15360,
+   "y0": 20480,
+   "x1": 16640,
+   "y1": 21760,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 11520,
+   "y0": 21760,
+   "x1": 12800,
+   "y1": 23040,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 12800,
+   "y0": 21760,
+   "x1": 14080,
+   "y1": 23040,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "x0": 14080,
+   "y0": 21760,
+   "x1": 15360,
+   "y1": 23040,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 2560,
+   "y0": 6400,
+   "x1": 3840,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 3840,
+   "y0": 6400,
+   "x1": 5120,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 5120,
+   "y0": 6400,
+   "x1": 6400,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 6400,
+   "y0": 6400,
+   "x1": 7680,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 2560,
+   "y0": 7680,
+   "x1": 3840,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 3840,
+   "y0": 7680,
+   "x1": 5120,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 5120,
+   "y0": 7680,
+   "x1": 6400,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 6400,
+   "y0": 7680,
+   "x1": 7680,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 5120,
+   "y0": 11520,
+   "x1": 6400,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 6400,
+   "y0": 11520,
+   "x1": 7680,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 2560,
+   "y0": 12800,
+   "x1": 3840,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 3840,
+   "y0": 12800,
+   "x1": 5120,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 5120,
+   "y0": 12800,
+   "x1": 6400,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 6400,
+   "y0": 12800,
+   "x1": 7680,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 3840,
+   "y0": 14080,
+   "x1": 5120,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 5120,
+   "y0": 14080,
+   "x1": 6400,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 17920,
+   "y0": 14080,
+   "x1": 19200,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 19200,
+   "y0": 14080,
+   "x1": 20480,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 20480,
+   "y0": 14080,
+   "x1": 21760,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 19200,
+   "y0": 12800,
+   "x1": 20480,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 20480,
+   "y0": 12800,
+   "x1": 21760,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 19200,
+   "y0": 16640,
+   "x1": 20480,
+   "y1": 17920,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 20480,
+   "y0": 16640,
+   "x1": 21760,
+   "y1": 17920,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 19200,
+   "y0": 17920,
+   "x1": 20480,
+   "y1": 19200,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 20480,
+   "y0": 17920,
+   "x1": 21760,
+   "y1": 19200,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 21760,
+   "y0": 17920,
+   "x1": 23040,
+   "y1": 19200,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 20480,
+   "y0": 19200,
+   "x1": 21760,
+   "y1": 20480,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 17920,
+   "y0": 5120,
+   "x1": 19200,
+   "y1": 6400,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 19200,
+   "y0": 5120,
+   "x1": 20480,
+   "y1": 6400,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 20480,
+   "y0": 5120,
+   "x1": 21760,
+   "y1": 6400,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 17920,
+   "y0": 6400,
+   "x1": 19200,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 19200,
+   "y0": 6400,
+   "x1": 20480,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 19200,
+   "y0": 3840,
+   "x1": 20480,
+   "y1": 5120,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 8960,
+   "y0": 12800,
+   "x1": 10240,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 10240,
+   "y0": 12800,
+   "x1": 11520,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "x0": 11520,
+   "y0": 12800,
+   "x1": 12800,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 2560,
+   "y0": 6400,
+   "x1": 3840,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 3840,
+   "y0": 6400,
+   "x1": 5120,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 5120,
+   "y0": 6400,
+   "x1": 6400,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 6400,
+   "y0": 6400,
+   "x1": 7680,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 2560,
+   "y0": 7680,
+   "x1": 3840,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 3840,
+   "y0": 7680,
+   "x1": 5120,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 5120,
+   "y0": 7680,
+   "x1": 6400,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 6400,
+   "y0": 7680,
+   "x1": 7680,
+   "y1": 8960,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 2560,
+   "y0": 11520,
+   "x1": 3840,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 3840,
+   "y0": 11520,
+   "x1": 5120,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 5120,
+   "y0": 11520,
+   "x1": 6400,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 6400,
+   "y0": 11520,
+   "x1": 7680,
+   "y1": 12800,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 2560,
+   "y0": 12800,
+   "x1": 3840,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 3840,
+   "y0": 12800,
+   "x1": 5120,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 5120,
+   "y0": 12800,
+   "x1": 6400,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 6400,
+   "y0": 12800,
+   "x1": 7680,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 19200,
+   "y0": 5120,
+   "x1": 20480,
+   "y1": 6400,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 20480,
+   "y0": 5120,
+   "x1": 21760,
+   "y1": 6400,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 19200,
+   "y0": 6400,
+   "x1": 20480,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 20480,
+   "y0": 6400,
+   "x1": 21760,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 21760,
+   "y0": 6400,
+   "x1": 23040,
+   "y1": 7680,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 19200,
+   "y0": 14080,
+   "x1": 20480,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 20480,
+   "y0": 14080,
+   "x1": 21760,
+   "y1": 15360,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 19200,
+   "y0": 15360,
+   "x1": 20480,
+   "y1": 16640,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 20480,
+   "y0": 15360,
+   "x1": 21760,
+   "y1": 16640,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 19200,
+   "y0": 16640,
+   "x1": 20480,
+   "y1": 17920,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 20480,
+   "y0": 16640,
+   "x1": 21760,
+   "y1": 17920,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 19200,
+   "y0": 17920,
+   "x1": 20480,
+   "y1": 19200,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 20480,
+   "y0": 17920,
+   "x1": 21760,
+   "y1": 19200,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 8960,
+   "y0": 12800,
+   "x1": 10240,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 10240,
+   "y0": 12800,
+   "x1": 11520,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "x0": 11520,
+   "y0": 12800,
+   "x1": 12800,
+   "y1": 14080,
+   "label": "neuropil",
+   "note": "neuropil, well inside"
   }
  ]
 }

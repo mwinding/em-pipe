@@ -16,8 +16,11 @@ fit: boosted trees (pipeline/boost.py; deterministic) on the table, each (datase
   the same total weight; writes the model JSON (pipeline/refmask_<tissue>.json is the shipped one).
   --lodo: also leave each dataset out in turn (train on the others, test on it): per-cell AUC, and
   the fractions of its reference-tissue and other cells above probability 0.5.
-draw: one PNG per dataset: each labelled plane at 256 nm (scale 4 of the volume, halved), boxes in
-  green (reference tissue) or red (other).
+draw: one PNG per labelled plane (labels_<dataset>_z<z>.png), at 128 nm (scale 4 of the volume): boxes
+  in green (reference tissue) or red (other). With --previous OLD.json, boxes not in OLD are drawn in
+  cyan (reference tissue) or orange (other), and OLD's boxes that are gone as thin grey outlines.
+
+Boxes of one plane must not overlap (each cell is labelled at most once): table and draw refuse them.
 """
 import argparse
 import json
@@ -62,6 +65,21 @@ def datasets(labels, specs, remap=None):
     return out
 
 
+def check_overlaps(labels):
+    """Raise if two boxes of one (dataset, z) overlap."""
+    by = {}
+    for i, b in enumerate(labels["boxes"]):
+        by.setdefault((b["dataset"], b["z"]), []).append((i, b))
+    bad = []
+    for (d, z), bs in by.items():
+        for k, (i, a) in enumerate(bs):
+            for j, b in bs[k + 1:]:
+                if min(a["x1"], b["x1"]) > max(a["x0"], b["x0"]) and min(a["y1"], b["y1"]) > max(a["y0"], b["y0"]):
+                    bad.append(f"{d} z {z}: boxes {i} and {j}")
+    if bad:
+        raise SystemExit(f"{len(bad)} overlapping label boxes (each cell must be labelled once), e.g. " + "; ".join(bad[:5]))
+
+
 def plane_rows(ds, z, boxes, settings):
     """Feature rows and labels of the tissue cells of plane z whose centres lie in the boxes."""
     rows = ds.index[ds.index.z == z]
@@ -88,6 +106,7 @@ def plane_rows(ds, z, boxes, settings):
 
 def table(a):
     labels = json.loads(Path(a.labels).read_text())
+    check_overlaps(labels)
     settings = {**refmask.DEFAULTS["refmask"], "tissue": labels.get("tissue", "neuropil")}
     dss = datasets(labels, a.dataset, a.remap)
     X, y, vol, zs, names = [], [], [], [], None
@@ -149,35 +168,43 @@ def fit(a):
 
 def draw(a):
     labels = json.loads(Path(a.labels).read_text())
+    check_overlaps(labels)
+    old = json.loads(Path(a.previous).read_text())["boxes"] if a.previous else None
+    key = lambda b: (b["dataset"], b["z"], b["x0"], b["y0"], b["x1"], b["y1"], b["label"])  # noqa: E731
+    new_keys = {key(b) for b in labels["boxes"]}
+    old_keys = {key(b) for b in old} if old is not None else set()
     dss = datasets(labels, a.dataset, a.remap)
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     f, scale = 16, 4
     for v, ds in dss.items():
         arr = omezarr.open_scale(ds.root, scale)
-        panels = []
         for z in sorted({b["z"] for b in labels["boxes"] if b["dataset"] == v}):
             img = np.asarray(arr[ds.planes[z] // f].read().result())
             rgb = np.repeat(img[:, :, None], 3, axis=2)
+            n_changed = 0
+            if old is not None:
+                for b in old:
+                    if b["dataset"] == v and b["z"] == z and key(b) not in new_keys:
+                        cv2.rectangle(rgb, (round(b["x0"] / f), round(b["y0"] / f)),
+                                      (round(b["x1"] / f) - 1, round(b["y1"] / f) - 1), (150, 150, 150), 1)
             for b in labels["boxes"]:
-                if b["dataset"] == v and b["z"] == z:
-                    col = (60, 220, 60) if b["label"] in ("neuropil", "reference") else (60, 60, 255)
-                    cv2.rectangle(rgb, (round(b["x0"] / f), round(b["y0"] / f)), (round(b["x1"] / f) - 1, round(b["y1"] / f) - 1),
-                                  col, 3)
-            cv2.putText(rgb, f"z {z}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 8, cv2.LINE_AA)
-            cv2.putText(rgb, f"z {z}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3, cv2.LINE_AA)
-            panels.append(cv2.resize(rgb, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA))
-        h = max(p.shape[0] for p in panels)
-        panels = [np.pad(p, ((0, h - p.shape[0]), (0, 8), (0, 0)), constant_values=255) for p in panels]
-        ncol = 3
-        rows = [np.concatenate(panels[i:i + ncol] + [np.full_like(panels[0], 255)] * (ncol - len(panels[i:i + ncol])), axis=1)
-                for i in range(0, len(panels), ncol)]
-        name = out / f"labels_{v}.png"
-        title = "labels: green = neuropil (incl. tracts), red = other (cell bodies etc.); 256 nm"
-        sheet = np.concatenate([np.full((60, rows[0].shape[1], 3), 255, np.uint8)] + rows)
-        cv2.putText(sheet, f"{v}  {title}", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
-        cv2.imwrite(str(name), sheet, [cv2.IMWRITE_PNG_COMPRESSION, 9])
-        print("wrote", name, flush=True)
+                if b["dataset"] != v or b["z"] != z:
+                    continue
+                ref = b["label"] in ("neuropil", "reference")
+                changed = old is not None and key(b) not in old_keys
+                n_changed += changed
+                col = ((255, 255, 0) if ref else (0, 140, 255)) if changed else ((60, 200, 60) if ref else (60, 60, 255))
+                cv2.rectangle(rgb, (round(b["x0"] / f), round(b["y0"] / f)), (round(b["x1"] / f) - 1, round(b["y1"] / f) - 1),
+                              col, 2)
+            title = f"{v} z {z}, 128 nm: green neuropil, red other"
+            if old is not None:
+                title += f"; changed ({n_changed}): cyan neuropil, orange other; grey: removed"
+            cv2.putText(rgb, title, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 5, cv2.LINE_AA)
+            cv2.putText(rgb, title, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+            name = out / f"labels_{v}_z{z}.png"
+            cv2.imwrite(str(name), rgb, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+            print("wrote", name, flush=True)
     return 0
 
 
@@ -193,6 +220,7 @@ def main(argv=None):
     t = sub.add_parser("draw")
     t.add_argument("labels"), t.add_argument("out_dir")
     t.add_argument("--dataset", action="append", required=True, help="NAME=CONFIG,VOLUME")
+    t.add_argument("--previous", help="an earlier label file: mark what changed")
     t.add_argument("--remap", help="OLD=NEW: replace the prefix OLD of each output_dir by NEW")
     a = ap.parse_args(argv)
     return {"table": table, "fit": fit, "draw": draw}[a.cmd](a)
