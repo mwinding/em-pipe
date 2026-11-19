@@ -192,7 +192,8 @@ def _tile_plan(cfg):
         plan["lo"], plan["hi"] = _fixed_window(cfg, plan)
         log.info("render.intensity false: one raw window %g-%g for every tile slice", *plan[["lo", "hi"]].iloc[0])
         return plan
-    levels = step_path(cfg, "intensity", "levels.csv")
+    from .intensity import levels_path   # intensity.output: a variant's own levels
+    levels = levels_path(cfg)
     if levels.exists():
         lv = pd.read_csv(levels, dtype={"tile": str})[["z", "tile", "lo", "hi"]]
         plan = plan.merge(lv, on=["z", "tile"], how="left", validate="many_to_one")
@@ -240,6 +241,30 @@ def _canvas(plan, bbox, margin=0):
         bbox = (bbox[0] - margin, bbox[1] - margin, bbox[2] + margin, bbox[3] + margin)
     x0, y0 = math.floor(bbox[0]), math.floor(bbox[1])
     return x0, y0, math.ceil(bbox[2]) - x0, math.ceil(bbox[3]) - y0
+
+
+def frame(cfg):
+    """The volume frame init would create now: {origin_xy, canvas_size_xy, downsample, rotated, plan}
+    (plan: the tile plan, transform tile -> aligned per (z, tile)), for mapping tiles to volume voxels
+    before the volume exists."""
+    s = _settings(cfg)
+    plan = _tile_plan(cfg)
+    x0, y0, w, h = _canvas(plan, s["bbox"], s.get("append_margin_px", 0))
+    return {"origin_xy": [x0, y0], "canvas_size_xy": [w, h], "downsample": s["downsample"],
+            "rotated": s.get("rotate_deg", 0) == 180, "plan": plan}
+
+
+def to_volume(frame, T):
+    """2x3 transform: tile px -> volume voxels (output px of ``frame``) for a tile -> aligned T."""
+    f = frame["downsample"]
+    M = np.array(T, float).copy()
+    M[:, 2] -= frame["origin_xy"]
+    M /= f
+    M[:, 2] -= (f - 1) / (2 * f)   # aligned px centre c -> output px (c - (f - 1) / 2) / f
+    if frame["rotated"]:
+        W, H = (int(np.ceil(v / f)) for v in frame["canvas_size_xy"])
+        M = np.array([[-1.0, 0, W - 1], [0, -1.0, H - 1]]) @ np.r_[M, [[0, 0, 1]]]
+    return M
 
 
 def _positions(cfg, zs):

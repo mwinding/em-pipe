@@ -2,13 +2,14 @@
 # Submit the em-pipe steps for one dataset to Slurm, each job waiting for the previous one.
 #
 # Usage: ./run_pipeline.sh CONFIG [--steps a,b,...] [--from STEP] [--after JOBID] [--dry-run]
-#   steps (in order): check preview stitch align shading overlaps patchgrid intensity zcorrect render pyramid export
-#                     precomputed upload
+#   steps (in order): check preview refmask stitch align shading overlaps patchgrid refstats intensity zcorrect
+#                     render pyramid export precomputed upload
 #   --steps a,b  only these steps (the first one waits for nothing)
 #   --from STEP  STEP and every later step
 #   --after ID   the first job waits for Slurm job ID to finish successfully
 #   --dry-run    print the sbatch commands instead of submitting them
-# shading, overlaps, patchgrid, zcorrect, precomputed and upload run only when their enabled setting is true.
+# refmask, shading, overlaps, patchgrid, refstats, zcorrect, precomputed and upload run only when their enabled
+# setting is true.
 # Array sizes, CPUs, memory, time, partition and gres come from the config's slurm: section (see
 # configs/example.yaml); logs go to output_dir/work/logs/.
 # Set EM_PIPE_SKIP_ENV=1 to skip sourcing slurm/env.sh (when the environment is already active).
@@ -17,8 +18,8 @@
 # the old volume), then  ./run_pipeline.sh CONFIG --from render.
 set -eo pipefail
 
-STEPS="check preview stitch align shading overlaps patchgrid intensity zcorrect render pyramid export precomputed upload"
-usage() { sed -n '4,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "$1"; }
+STEPS="check preview refmask stitch align shading overlaps patchgrid refstats intensity zcorrect render pyramid export precomputed upload"
+usage() { sed -n '4,18p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "$1"; }
 
 CONFIG= SELECT= FROM= AFTER= DRY=0
 while [ $# -gt 0 ]; do
@@ -57,10 +58,10 @@ wanted() {  # wanted STEP: is STEP selected?
 
 # Everything needed from the config in two calls (python start-up can be slow on shared filesystems).
 VALUES=$(cfg --get output_dir zcorrect.enabled render.num_scales precomputed.enabled upload.enabled shading.enabled \
-         overlaps.enabled patchgrid.enabled)
+         overlaps.enabled patchgrid.enabled refmask.enabled refstats.enabled)
 SBATCH=$(cfg --sbatch-args)   # one line per job: the job, then its sbatch options, tab-separated
 { read -r OUT; read -r ZCORRECT; read -r NUM_SCALES; read -r PRECOMPUTED; read -r UPLOAD; read -r SHADING
-  read -r OVERLAPS; read -r PATCHGRID; } <<< "$VALUES"
+  read -r OVERLAPS; read -r PATCHGRID; read -r REFMASK; read -r REFSTATS; } <<< "$VALUES"
 
 PREV=$AFTER
 submit() {  # submit JOB NAME STEP [ARGS...]: sbatch slurm/STEP.sbatch after the previous job
@@ -90,6 +91,14 @@ if wanted preview; then
   submit preview em-preview-run preview run
   submit preview_merge em-preview-merge preview merge
 fi
+if wanted refmask; then
+  if [ "$REFMASK" = true ]; then
+    submit refmask em-refmask-run refmask run
+    submit refmask_merge em-refmask-merge refmask merge
+  else
+    echo "refmask.enabled is false: refmask skipped" >&2
+  fi
+fi
 if wanted stitch; then
   submit stitch em-stitch-run stitch run
   submit stitch_merge em-stitch-merge stitch merge
@@ -118,6 +127,14 @@ if wanted patchgrid; then
     submit patchgrid em-patchgrid patchgrid
   else
     echo "patchgrid.enabled is false: patchgrid skipped" >&2
+  fi
+fi
+if wanted refstats; then
+  if [ "$REFSTATS" = true ]; then
+    submit refstats em-refstats-run refstats run
+    submit refstats_merge em-refstats-merge refstats merge
+  else
+    echo "refstats.enabled is false: refstats skipped" >&2
   fi
 fi
 if wanted intensity; then submit intensity em-intensity intensity; fi

@@ -20,10 +20,29 @@ background left out) at grey ``target_median`` and makes the tissue p5-p95 span 
 greys, so brightness and contrast stay the same whatever is in the field of view (35h: percentile
 windows rendered the tissue median at 145-215 across tile layout changes, as a few % of very dark
 pixels moved the black point; median-anchored windows at 134-186, no steps). percentile maps the
-preview percentiles lo_percentile / hi_percentile (all pixels) to 0 / 255.
+preview percentiles lo_percentile / hi_percentile (all pixels) to 0 / 255. reference sets every
+slice's window so that the reference tissue (neuropil, pipeline/refmask.py) comes out at the grey
+``reference.median`` with the spread ``reference.contrast`` in greys, by ``reference.measure``:
+p5_p95, the width between the 5th and 95th percentile of the slice's neuropil (its histogram's width;
+the default), or lc32, its local contrast (the mean SD in 8 px windows at 32 nm). The percentiles a
+window clips at are not chosen: they follow from matching the reference tissue, and the QC reports
+them. From the refstats step's per-slice neuropil median m and spread c on the common
+scale the tiles are balanced to (refstats measures it as render applies it), smoothed over z with a
+running median of ``reference.smooth_slices`` (restarting at segment changes), interpolated between
+the sampled slices (held at a segment's ends) and averaged over ``reference.ramp_slices``, so the
+window changes smoothly along z. The window is hi - lo = 255 c / C_ref, lo = m - median_ref (hi - lo)
+/ 255; tile balance and per-slice jumps as for the other windows. A segment without reference tissue
+keeps the median window. QC: qc/intensity_reference[_<output>].png and .json: predicted neuropil
+grey and contrast per sampled slice, clipped tissue fractions, the largest slice-to-slice change of
+the neuropil's grey and contrast (flicker), and the step across every segment change next to the
+step with the previous levels.
+
+``intensity.output``: a name for a variant's levels (work/intensity/<output>/levels.csv, which
+render then reads), so a variant config doesn't replace the base config's levels.
 """
 
 import itertools
+import json
 import logging
 import sys
 from pathlib import Path
@@ -39,7 +58,7 @@ from scipy.sparse.csgraph import connected_components  # noqa: E402
 
 from . import background, patchgrid, shading, transforms  # noqa: E402
 from .cli import atomic_write, base_parser, setup  # noqa: E402
-from .config import deep_merge, get, qc_path, step_dir, step_path  # noqa: E402
+from .config import deep_merge, get, qc_path, step_path  # noqa: E402
 from .preview import PERCENTILES, TISSUE, plot_tiles, save, thumb_to_tile, thumb_values  # noqa: E402
 from .slices import load_slices  # noqa: E402
 
@@ -69,6 +88,22 @@ DEFAULTS = {
         # its own jump; slice: one jump per slice (the median over its tiles, relative to their
         # windows), which keeps tiles matched when the balance follows every slice; false: off.
         "per_slice": True,
+        "output": None,           # variant name: levels in work/intensity/<output>/ (render reads them there)
+        # window: reference (pipeline/refmask.py, refstats): the reference tissue's grey and contrast
+        "reference": {
+            "median": None,       # grey of the reference tissue's median (0-255)
+            "contrast": None,     # its spread in greys, as measured by ``measure``
+            # p5_p95: the width between the 5th and 95th percentile of the slice's reference tissue (its
+            # histogram's width) | lc32: its local contrast, the mean SD in 8 px windows at 32 nm
+            "measure": "p5_p95",
+            "smooth_slices": 601,   # running median of the sampled stats over z (slices; restarts at segment changes)
+            "ramp_slices": 129,   # running mean over z after interpolation (no kinks at the samples)
+            "min_cells": 20,      # samples with fewer reference cells don't count
+            "boundary_slices": 300,   # QC: samples within this many slices each side of a segment change
+            "band_pct": 5.0,      # QC: target band, +- % of median and contrast
+            "clip_warn": 0.01,    # QC: warn when more than this fraction of tissue is at 0 or at 255
+            "flicker_warn": 1.0,  # QC: warn when the neuropil grey changes by more than this between slices
+        },
     },
 }
 
@@ -113,14 +148,49 @@ def load_inputs(cfg, need):
     return df.sort_values(["z", "tile"]).reset_index(drop=True)
 
 
+def levels_path(cfg, output=None):
+    """work/intensity/levels.csv, or work/intensity/<output>/levels.csv for intensity.output."""
+    out = output if output is not None else (cfg.get("intensity") or {}).get("output")
+    return step_path(cfg, "intensity", *([str(out)] if out else []), "levels.csv")
+
+
+def _qc_name(cfg, name):
+    out = (cfg.get("intensity") or {}).get("output")
+    return f"{name}_{out}" if out else name
+
+
+WINDOWS = ("median", "percentile", "reference")
+
+
 def compute_levels(cfg):
     """DataFrame of every selected (z, tile) with lo, hi (and gain g, offset o when balanced)."""
     c = cfg["intensity"]
-    if c["window"] not in ("median", "percentile"):
-        raise ValueError(f"intensity.window must be median or percentile, not {c['window']!r}")
+    if c["window"] not in WINDOWS:
+        raise ValueError(f"intensity.window must be one of {WINDOWS}, not {c['window']!r}")
+    df = balanced_scale(cfg)
+    if c["window"] == "reference":
+        df = reference_windows(cfg, df)
+    if c["per_slice"] == "slice":
+        rel = df["jump"] / (df["hi"] - df["lo"])
+        df["jump"] = rel.groupby(df["z"]).transform("median") * (df["hi"] - df["lo"])
+    if c["per_slice"]:
+        df["lo"] += df["jump"]
+        df["hi"] += df["jump"]
+    return df
+
+
+def balanced_scale(cfg):
+    """Every selected (z, tile) with its starting window lo, hi (median window for window: reference),
+    jump, and tile gain g and offset o onto the slice's common scale (NaN where unbalanced).
+
+    The common scale is g u + o, u a tile's values as render corrects them (flat-field, patchgrid
+    shape); intensity's windows are windows on it, and refstats measures there."""
+    c = cfg["intensity"]
+    if c["window"] not in WINDOWS:
+        raise ValueError(f"intensity.window must be one of {WINDOWS}, not {c['window']!r}")
     if int(c["smooth_slices"]) < 1 or int(c["balance_every"]) < 1:
         raise ValueError("intensity.smooth_slices and balance_every must be at least 1")
-    if c["window"] == "median":
+    if c["window"] in ("median", "reference"):
         tm, ts = float(c["target_median"]), float(c["target_span"])
         if not (0 < tm < 255 and ts > 0):
             raise ValueError("intensity.target_median must be in (0, 255) and target_span positive")
@@ -151,7 +221,9 @@ def compute_levels(cfg):
         raise ValueError(f"intensity.per_slice must be true, false or slice, not {c['per_slice']!r}")
     if c["balance_source"] not in ("thumbnails", "overlaps"):
         raise ValueError(f"intensity.balance_source must be thumbnails or overlaps, not {c['balance_source']!r}")
+    df["g"], df["o"] = np.nan, np.nan
     if c["balance_tiles"]:
+        df = df.drop(columns=["g", "o"])
         tiles_csv = step_path(cfg, "stitch", "tiles.csv")
         if get(cfg, "patchgrid.enabled", False) and c["balance_source"] != "overlaps":
             raise ValueError("patchgrid.enabled needs intensity.balance_source: overlaps (render applies the "
@@ -164,13 +236,265 @@ def compute_levels(cfg):
                          int(c["balance_every"]))
         else:
             log.warning("%s not found: per-tile levels without tile balancing", tiles_csv)
-    if c["per_slice"] == "slice":
-        rel = df["jump"] / (df["hi"] - df["lo"])
-        df["jump"] = rel.groupby(df["z"]).transform("median") * (df["hi"] - df["lo"])
-    if c["per_slice"]:
-        df["lo"] += df["jump"]
-        df["hi"] += df["jump"]
+            df["g"], df["o"] = np.nan, np.nan
     return df
+
+
+# ----- window: reference ----------------------------------------------------------------------
+
+def reference_settings(cfg):
+    r = {**DEFAULTS["intensity"]["reference"], **(cfg["intensity"].get("reference") or {})}
+    for key in ("median", "contrast"):
+        if r[key] is None or not float(r[key]) > 0:
+            raise ValueError(f"intensity.window: reference needs intensity.reference.{key} (a positive number)")
+    if r["measure"] not in MEASURES:
+        raise ValueError(f"intensity.reference.measure must be one of {MEASURES}, not {r['measure']!r}")
+    if not 0 < float(r["median"]) < 255:
+        raise ValueError("intensity.reference.median must be in (0, 255)")
+    return r
+
+
+MEASURES = ("p5_p95", "lc32")
+
+
+def spread(st, measure):
+    """The reference tissue's spread per row of refstats' table: p5_p95 (rq_95 - rq_5, its histogram's
+    width) or lc32 (local contrast), on the same scale as its median."""
+    if measure == "p5_p95":
+        return st["rq_95"] - st["rq_5"]
+    if measure == "lc32":
+        return st["lc32"]
+    raise ValueError(f"unknown measure {measure!r} (one of {MEASURES})")
+
+
+def window_from_stats(m, c, median_ref, contrast_ref):
+    """(lo, hi) on the common scale that put a tissue of median m and contrast c (same scale) at grey
+    median_ref with contrast contrast_ref: hi - lo = 255 c / contrast_ref, lo = m - median_ref (hi - lo) / 255."""
+    span = 255.0 * np.asarray(c, float) / float(contrast_ref)
+    lo = np.asarray(m, float) - float(median_ref) * span / 255.0
+    return lo, lo + span
+
+
+def grey(v, lo, hi):
+    """Grey (0-255, unclipped) of value v in the window lo-hi."""
+    return 255.0 * (np.asarray(v, float) - lo) / (hi - lo)
+
+
+def smooth_samples(pos, values, all_pos, smooth, ramp):
+    """A smooth curve over the positions all_pos (one segment) from samples (pos, values): running
+    median over +-smooth/2 positions, linear interpolation (held at the ends), then a running mean
+    over +-ramp/2 positions. NaN samples are left out; None when no sample is valid."""
+    pos, values = np.asarray(pos, float), np.asarray(values, float)
+    ok = np.isfinite(values)
+    pos, values = pos[ok], values[ok]
+    if not len(pos):
+        return None
+    order = np.argsort(pos)
+    pos, values = pos[order], values[order]
+    half = max(float(smooth), 1.0) / 2
+    med = np.array([np.median(values[np.abs(pos - p) <= half]) for p in pos])
+    curve = np.interp(all_pos, pos, med)
+    k = int(ramp) // 2
+    if k > 0 and len(curve) > 1:
+        padded = np.pad(curve, k, mode="edge")
+        csum = np.cumsum(np.r_[0.0, padded])
+        curve = (csum[2 * k + 1:] - csum[:-(2 * k + 1)]) / (2 * k + 1)
+    return curve
+
+
+def load_refstats(cfg):
+    path = step_path(cfg, "refstats", "stats.csv")
+    if not path.exists():
+        raise FileNotFoundError(f"{path} not found: intensity.window: reference needs the refstats step (run, merge)")
+    return pd.read_csv(path)
+
+
+def reference_windows(cfg, df):
+    """Replace the windows by the reference windows (common scale L, H per z, mapped into each tile).
+
+    Adds per-row columns m_s, c_s (smoothed stats), L, H (the slice's common window) and ref (False
+    where a segment had no reference tissue and keeps the starting window)."""
+    r = reference_settings(cfg)
+    st = load_refstats(cfg)
+    st = st[st["n_cells"] >= int(r["min_cells"])]
+    per_z = df.groupby("z").agg(segment=("segment", "first"), pos=("pos", "first")).reset_index()
+    st = st.assign(spread=spread(st, r["measure"]))
+    per_z = per_z.merge(st[["z", "median", "spread"]], on="z", how="left")
+    cols = {k: np.full(len(per_z), np.nan) for k in ("m_s", "c_s")}
+    for seg, g in per_z.groupby("segment"):
+        m = smooth_samples(g["pos"], g["median"], g["pos"].to_numpy(float), r["smooth_slices"], r["ramp_slices"])
+        cc = smooth_samples(g["pos"], g["spread"], g["pos"].to_numpy(float), r["smooth_slices"], r["ramp_slices"])
+        if m is None or cc is None:
+            log.warning("segment %s (z %d-%d) has no sampled slice with reference tissue: it keeps the median window",
+                        seg, g["z"].min(), g["z"].max())
+            continue
+        n = int(g["median"].notna().sum())
+        if n < 3:
+            log.warning("segment %s (z %d-%d): only %d sampled slices with reference tissue", seg, g["z"].min(),
+                        g["z"].max(), n)
+        cols["m_s"][g.index], cols["c_s"][g.index] = m, cc
+    per_z["m_s"], per_z["c_s"] = cols["m_s"], cols["c_s"]
+    per_z["L"], per_z["H"] = window_from_stats(per_z["m_s"], per_z["c_s"], r["median"], r["contrast"])
+    df = df.drop(columns=[c for c in ("m_s", "c_s", "L", "H") if c in df]).merge(
+        per_z[["z", "m_s", "c_s", "L", "H"]], on="z", how="left")
+    df["ref"] = df["L"].notna()
+    g = df["g"].fillna(1.0)
+    o = df["o"].fillna(0.0)
+    df.loc[df["ref"], "lo"] = ((df["L"] - o) / g)[df["ref"]]
+    df.loc[df["ref"], "hi"] = ((df["H"] - o) / g)[df["ref"]]
+    log.info("reference windows for %d of %d slices (median %g, %s %g)", int(per_z["L"].notna().sum()), len(per_z),
+             float(r["median"]), r["measure"], float(r["contrast"]))
+    return df
+
+
+def common_window(df):
+    """Per z: the common-scale window (median over tiles of g lo + o, g hi + o; g 1, o 0 unbalanced)."""
+    g, o = df["g"].fillna(1.0), df["o"].fillna(0.0)
+    w = pd.DataFrame({"z": df["z"], "Lc": g * df["lo"] + o, "Hc": g * df["hi"] + o})
+    return w.groupby("z")[["Lc", "Hc"]].median()
+
+
+def _cdf(x, row, qcols):
+    """Fraction of tissue below x from a row's tissue quantiles (columns tq_<percent>)."""
+    ps = np.array([float(c[3:]) for c in qcols]) / 100
+    vs = row[qcols].to_numpy(float)
+    if not np.isfinite(vs).all():
+        return np.nan
+    return float(np.interp(x, vs, ps, left=0.0, right=1.0))
+
+
+def flicker(per_z, Lc, Hc):
+    """Per consecutive selected slices: |change| of the smoothed neuropil's grey and contrast when the
+    window changes from one slice to the next (the tissue itself held), and whether they straddle a
+    segment change."""
+    m, c = per_z["m_s"].to_numpy(float), per_z["c_s"].to_numpy(float)
+    L, H = Lc.to_numpy(float), Hc.to_numpy(float)
+    d_med = np.abs(grey(m[:-1], L[1:], H[1:]) - grey(m[:-1], L[:-1], H[:-1]))
+    d_con = np.abs(255 * c[:-1] / (H[1:] - L[1:]) - 255 * c[:-1] / (H[:-1] - L[:-1]))
+    seg = per_z["segment"].to_numpy()
+    return pd.DataFrame({"z": per_z["z"].to_numpy()[1:], "d_median": d_med, "d_contrast": d_con,
+                         "boundary": seg[1:] != seg[:-1]})
+
+
+def reference_qc(cfg, df, old=None):
+    """QC of reference windows: predicted greys, clipping, flicker and segment-change steps (dict),
+    the per-sample table and the flicker table. ``old``: the previous levels (z, tile, lo, hi)."""
+    r = reference_settings(cfg)
+    st = load_refstats(cfg)
+    per_z = df.groupby("z").agg(segment=("segment", "first"), pos=("pos", "first"), m_s=("m_s", "first"),
+                                c_s=("c_s", "first"), L=("L", "first"), H=("H", "first")).reset_index()
+    new_w = common_window(df)
+    windows = {"new": new_w}
+    if old is not None:
+        o = df[["z", "tile", "g", "o"]].merge(old[["z", "tile", "lo", "hi"]], on=["z", "tile"], how="inner")
+        if len(o):
+            windows["old"] = common_window(o)
+    qcols = [c for c in st.columns if c.startswith("tq_")]
+    samp = st.merge(per_z[["z", "segment", "pos"]], on="z", how="inner")
+    samp = samp[samp["n_cells"] >= int(r["min_cells"])].copy()
+    for k, w in windows.items():
+        Lw, Hw = w["Lc"].reindex(samp["z"]).to_numpy(), w["Hc"].reindex(samp["z"]).to_numpy()
+        samp[f"grey_{k}"] = grey(samp["median"], Lw, Hw)
+        samp[f"contrast_{k}"] = 255 * spread(samp, r["measure"]) / (Hw - Lw)
+        samp[f"lc32_{k}"] = 255 * samp["lc32"] / (Hw - Lw)        # cross-check: local contrast in greys
+        samp[f"p5_{k}"] = grey(samp["rq_5"], Lw, Hw)             # the tissue's 5th / 95th percentile in greys
+        samp[f"p95_{k}"] = grey(samp["rq_95"], Lw, Hw)
+        if qcols:
+            samp[f"clip_lo_{k}"] = [_cdf(lo, row, qcols) for lo, (_, row) in zip(Lw, samp.iterrows())]
+            samp[f"clip_hi_{k}"] = [1 - _cdf(hi, row, qcols) for hi, (_, row) in zip(Hw, samp.iterrows())]
+    fl = {}
+    for k, w in windows.items():
+        fl[k] = flicker(per_z, w["Lc"].reindex(per_z["z"]).reset_index(drop=True),
+                        w["Hc"].reindex(per_z["z"]).reset_index(drop=True))
+    # The reference part alone (before the per-slice jumps, which the other windows have too)
+    fl["new_without_jumps"] = flicker(per_z, per_z["L"], per_z["H"])
+    out = {"reference": {k: r[k] for k in ("median", "contrast", "measure", "smooth_slices", "ramp_slices")},
+           "samples": int(len(samp)), "slices": int(len(per_z)),
+           "slices_without_reference": int(per_z["L"].isna().sum())}
+    band = float(r["band_pct"]) / 100
+    for k in windows:
+        g_, c_ = samp[f"grey_{k}"], samp[f"contrast_{k}"]
+        out[f"predicted_{k}"] = {
+            "median_grey_p5_p50_p95": [round(float(v), 2) for v in np.nanpercentile(g_, [5, 50, 95])] if len(g_) else None,
+            "contrast_p5_p50_p95": [round(float(v), 2) for v in np.nanpercentile(c_, [5, 50, 95])] if len(c_) else None,
+            "in_band_median": float(np.mean(np.abs(g_ / float(r["median"]) - 1) <= band)) if len(g_) else None,
+            "in_band_contrast": float(np.mean(np.abs(c_ / float(r["contrast"]) - 1) <= band)) if len(c_) else None,
+        }
+        if f"clip_lo_{k}" in samp:
+            clip = samp[f"clip_lo_{k}"] + samp[f"clip_hi_{k}"]
+            out[f"predicted_{k}"]["clipped_max"] = round(float(np.nanmax(clip)), 5) if len(clip) else None
+            out[f"predicted_{k}"]["clipped_median"] = round(float(np.nanmedian(clip)), 5) if len(clip) else None
+            out[f"predicted_{k}"]["clip_warn_slices"] = [int(z) for z in samp.loc[clip > float(r["clip_warn"]), "z"]]
+    for k, f in fl.items():
+        inner = f[~f["boundary"]]
+        out[f"flicker_{k}"] = {"max_d_median": round(float(inner["d_median"].max()), 3) if len(inner) else None,
+                               "max_d_contrast": round(float(inner["d_contrast"].max()), 3) if len(inner) else None,
+                               "slices_over_warn": int((inner["d_median"] > float(r["flicker_warn"])).sum())}
+    # Segment changes: each side's neuropil grey from the samples within boundary_slices of the change
+    steps = []
+    bpos = per_z.loc[per_z["segment"].ne(per_z["segment"].shift()) & (per_z.index > 0)]
+    half = int(r["boundary_slices"])
+    for i, row in bpos.iterrows():
+        before, after = per_z.loc[i - 1], row
+        side = {"before": samp[(samp["segment"] == before["segment"]) & (samp["pos"] > before["pos"] - half)],
+                "after": samp[(samp["segment"] == after["segment"]) & (samp["pos"] < after["pos"] + half)]}
+        rec = {"z": int(after["z"]), "segments": [int(before["segment"]), int(after["segment"])],
+               "samples": [int(len(side["before"])), int(len(side["after"]))]}
+        for k in windows:
+            if all(len(v) for v in side.values()):
+                rec[f"step_grey_{k}"] = round(float(side["after"][f"grey_{k}"].median() - side["before"][f"grey_{k}"].median()), 2)
+                rec[f"step_contrast_{k}"] = round(float(side["after"][f"contrast_{k}"].median()
+                                                        - side["before"][f"contrast_{k}"].median()), 2)
+        rec["window_step_grey_new"] = round(float(fl["new"].loc[fl["new"]["z"] == after["z"], "d_median"].iloc[0]), 2)
+        if "step_grey_old" in rec and "step_grey_new" in rec:
+            rec["bigger_than_old"] = bool(abs(rec["step_grey_new"]) > abs(rec["step_grey_old"]))
+        steps.append(rec)
+    out["segment_changes"] = steps
+    out["flags"] = [f"segment change at z {s['z']}: neuropil step {s['step_grey_new']} greys (old {s['step_grey_old']})"
+                    for s in steps if s.get("bigger_than_old")]
+    if out["flicker_new"]["max_d_median"] is not None and out["flicker_new"]["max_d_median"] > float(r["flicker_warn"]):
+        out["flags"].append(f"slice-to-slice change of the neuropil grey up to {out['flicker_new']['max_d_median']} "
+                            "greys away from segment changes")
+    return out, samp, fl
+
+
+def plot_reference(cfg, samp, fl, qc, path):
+    r = reference_settings(cfg)
+    fig, axes = plt.subplots(4, 1, sharex=True, figsize=(12, 12), layout="constrained")
+    band = float(r["band_pct"]) / 100
+    for ax, col, target, label in ((axes[0], "grey", float(r["median"]), "neuropil median (grey)"),
+                                   (axes[1], "contrast", float(r["contrast"]), f"neuropil {r['measure']} (greys)")):
+        ax.axhspan(target * (1 - band), target * (1 + band), color="#1baf7a", alpha=0.15, lw=0,
+                   label=f"target +-{r['band_pct']:g} %")
+        ax.axhline(target, color="#1baf7a", lw=1)
+        if f"{col}_old" in samp:
+            ax.plot(samp["z"], samp[f"{col}_old"], "o", ms=3, color="0.6", label="previous levels")
+        ax.plot(samp["z"], samp[f"{col}_new"], "o", ms=3, color="#2a78d6", label="reference window")
+        ax.set_ylabel(label)
+        ax.legend(fontsize=8, loc="upper right")
+    ax = axes[2]
+    if "clip_lo_new" in samp:
+        for k, colr in (("old", "0.6"), ("new", "#eb6834")):
+            if f"clip_lo_{k}" in samp:
+                ax.plot(samp["z"], 100 * (samp[f"clip_lo_{k}"] + samp[f"clip_hi_{k}"]), "o-", ms=3, lw=0.8, color=colr,
+                        label=f"{'previous levels' if k == 'old' else 'reference window'}")
+        ax.axhline(100 * float(r["clip_warn"]), color="#e34948", lw=1, ls="--", label="warning")
+        ax.legend(fontsize=8, loc="upper right")
+    ax.set_ylabel("tissue clipped (%)")
+    ax = axes[3]
+    for k, colr, lab in (("old", "0.6", "previous levels"), ("new", "#2a78d6", "reference window"),
+                         ("new_without_jumps", "#4a3aa7", "reference part (before per-slice jumps)")):
+        if k in fl:
+            ax.plot(fl[k]["z"], fl[k]["d_median"], lw=0.6, color=colr, label=lab)
+    ax.axhline(float(r["flicker_warn"]), color="#e34948", lw=1, ls="--", label="1 grey")
+    for z in fl["new"].loc[fl["new"]["boundary"], "z"]:
+        for a in axes:
+            a.axvline(z, color="0.75", lw=0.6)
+    ax.set_ylabel("|neuropil grey change|\nslice to slice")
+    ax.set_xlabel("z")
+    ax.legend(fontsize=8, loc="upper right")
+    axes[0].set_title("Reference window: predicted neuropil at the sampled slices (grey lines: segment changes)")
+    save(fig, path)
 
 
 def _measurements(found):
@@ -412,10 +736,25 @@ def main(argv=None):
     p = base_parser(__doc__.splitlines()[0])
     args = p.parse_args(argv)
     cfg = setup(args, deep_merge(deep_merge(DEFAULTS, shading.DEFAULTS), patchgrid.DEFAULTS))
+    out = levels_path(cfg)
+    # The previous levels, for the reference window's QC: this output's own, else the base levels
+    prev = out if out.exists() else levels_path(cfg, output="")
+    old = pd.read_csv(prev, dtype={"tile": str}) if prev.exists() else None
     df = compute_levels(cfg)
-    atomic_write(step_dir(cfg, "intensity", "levels.csv"),
-                 lambda t: df[["z", "tile", "lo", "hi"]].to_csv(t, index=False, float_format="%.2f"))
-    plot(df, qc_path(cfg, "intensity.png"))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(out, lambda t: df[["z", "tile", "lo", "hi"]].to_csv(t, index=False, float_format="%.2f"))
+    plot(df, qc_path(cfg, f"{_qc_name(cfg, 'intensity')}.png"))
+    if cfg["intensity"]["window"] == "reference":
+        qc, samp, fl = reference_qc(cfg, df, old)
+        qc["previous_levels"] = str(prev) if old is not None else None
+        name = _qc_name(cfg, "intensity_reference")
+        plot_reference(cfg, samp, fl, qc, qc_path(cfg, f"{name}.png"))
+        atomic_write(qc_path(cfg, f"{name}.json"), lambda t: Path(t).write_text(json.dumps(qc, indent=1)))
+        atomic_write(qc_path(cfg, f"{name}_samples.csv"), lambda t: samp.to_csv(t, index=False, float_format="%.4f"))
+        for flag in qc["flags"]:
+            log.warning("reference window: %s", flag)
+        log.info("reference window: predicted neuropil grey p5/p50/p95 %s, flicker max %.3f greys",
+                 qc["predicted_new"]["median_grey_p5_p50_p95"], qc["flicker_new"]["max_d_median"] or 0)
     log.info("levels for %d (z, tile) over %d slices", len(df), df["z"].nunique())
     return 0
 

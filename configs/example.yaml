@@ -43,6 +43,22 @@ preview:
   sheet_slices: 6            # evenly spaced slices shown on each daily contact sheet
   edge_margin_px: 0          # stats ignore this many full-res px at tile edges (e.g. dark off-sample bands)
 
+refmask:                     # reference tissue (neuropil, tracts included) per ~2 um cell of each thumbnail
+  enabled: false             # run_pipeline.sh: after preview (for intensity.window: reference)
+  tissue: neuropil           # the reference tissue (only neuropil so far)
+  method: classifier         # classifier: trained trees on texture features | score: the texture score alone
+  model: null                # classifier model JSON; null: the shipped pipeline/refmask_neuropil.json
+  prob_threshold: 0.5        # classifier: cells above this probability are candidates
+  seed_prob: 0.8             # classifier: a kept area holds a cell whose wider-average probability is over this
+  cell_px: 16                # cell size in thumbnail px (16 at 128 nm: ~2 um)
+  smooth_cells: 1.0          # Gaussian sigma (cells) of the score averaging
+  threshold_range: [0.4, 0.7]  # score: the per-slice Otsu threshold is kept within this range
+  seed_smooth_cells: 2.0     # Gaussian sigma (cells) of the wider average for seeds
+  seed_score: 0.9            # score: a kept area must hold a cell whose wider average is over this
+  min_cells: 12              # smallest reference area kept (cells)
+  max_hole_cells: 4          # holes up to this size (cells) are filled
+  max_background: 0.5        # cells with more background than this have no score
+
 stitch:
   sample_every: 50           # stitch every n-th selected z of a segment (plus its ends and seams)
   refine_px: 5.0             # stitch more slices between two samples whose tiles differ by more than
@@ -120,7 +136,8 @@ align:
 
 intensity:
   window: median             # median: tissue median -> target_median, tissue p5-p95 over target_span greys
-                             # (background left out) | percentile: lo/hi_percentile -> 0 / 255
+                             # (background left out) | percentile: lo/hi_percentile -> 0 / 255 |
+                             # reference: every slice's reference tissue at reference.median / contrast
   target_median: 140         # median: grey of the tissue median (0-255)
   target_span: 160           # median: greys between the tissue p5 and p95
   lo_percentile: 0.5         # percentile: preview percentile rendered as 0 (all: 0.5, 1, 50, 99, 99.5;
@@ -135,6 +152,19 @@ intensity:
   balance_tissue_only: true  # thumbnails: compare overlaps on tissue pixels only (background left out)
   balance_smooth_slices: null  # running median of tile gains/offsets over this many slices; null: smooth_slices
   per_slice: true            # follow slice-to-slice jumps: true per tile | slice: one per slice (keeps tiles matched) | false
+  output: null               # variant name: levels in work/intensity/<output>/ (render reads them there)
+  reference:                 # window: reference (needs refmask and refstats): the reference tissue's grey and contrast
+    median: null             # grey of the reference tissue's median (0-255)
+    contrast: null           # its spread in greys, as measured by measure
+    measure: p5_p95          # p5_p95: width between the 5th and 95th percentile of the slice's reference tissue |
+                             # lc32: its local contrast, the mean SD in 8 px windows at 32 nm
+    smooth_slices: 601       # running median of the sampled stats over z (slices; restarts at segment changes)
+    ramp_slices: 129         # running mean over z after interpolation (no kinks at the samples)
+    min_cells: 20            # samples with fewer reference cells don't count
+    boundary_slices: 300     # QC: samples within this many slices each side of a segment change
+    band_pct: 5.0            # QC: target band, +- % of median and contrast
+    clip_warn: 0.01          # QC: warn when more than this fraction of tissue is at 0 or at 255
+    flicker_warn: 1.0        # QC: warn when the neuropil grey changes by more than this between slices
 
 shading:                     # flat-field: a smooth gain field per tile position and segment, from the thumbnails
   enabled: false             # runs in the intensity job; render divides each tile slice by its field
@@ -168,6 +198,15 @@ patchgrid:                   # within-tile brightness shapes per tile position a
   gain_power: 2.0            # a bin's gain equation is weighted by min(1, cnr / 10) ** gain_power
   gain_cnr_min: 5.0          # bins with less contrast than this (resin) give no gain equation (8 for 2x2 tiles of ~13k px)
   reference: null            # R, the raw intensity at which the shapes' change c is defined; null: the median bin centre
+
+refstats:                    # reference tissue median and lc32 on the common scale, at sampled slices
+  enabled: false             # run_pipeline.sh: after patchgrid (for intensity.window: reference)
+  every: 32                  # measure every N-th selected slice of each segment (and its last)
+  region: null               # [x0, y0, x1, y1] volume voxels (null sides open), e.g. [7700, null, null, null]
+  erode_cells: 1             # reference cells eroded by this many cells
+  chunk_samples: 4           # sampled slices per array-task chunk
+  median_stride: 4           # 8 nm px stride of the values the median is taken from
+  tissue_stride: 8           # 8 nm px stride of the tissue values the quantiles are taken from
 
 # Curtaining removal inside render. Tune first: python -m pipeline.destreak test --config C --z Z --tile r-c
 # Alone it is the wavelet-FFT filter (Münch et al. 2009): it takes the stripe part out of each level's
@@ -332,6 +371,8 @@ movie:                       # fly-through MP4 (python -m pipeline.movie; sbatch
 slurm:
   mail_user: null            # sbatch --mail-user (failure mails); null: Slurm's default
   preview: {array: 20}
+  refmask: {array: 10}
+  refstats: {array: 10}
   stitch: {array: 10}
   align: {array: 20}
   overlaps: {array: 20}

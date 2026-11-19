@@ -31,7 +31,10 @@ along). Known weakness: densely packed small cell bodies (~2-3 um, little nucleu
 neuropil-like spectrum at this resolution and can be included.
 """
 
+import hashlib
 import json
+import logging
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -39,8 +42,11 @@ from scipy import ndimage
 
 from . import background, boost
 
+log = logging.getLogger(__name__)
+
 DEFAULTS = {
     "refmask": {
+        "enabled": False,              # run_pipeline.sh: the refmask step after preview (for intensity.window: reference)
         "tissue": "neuropil",          # the reference tissue (only neuropil so far)
         "method": "classifier",        # classifier: trained trees on texture features | score: the texture score alone
         "model": None,                 # classifier model JSON (None: the one shipped, pipeline/refmask_<tissue>.json)
@@ -246,3 +252,166 @@ def to_pixels(cell_mask, shape, cell_px=16):
     """A cell mask at thumbnail resolution (``shape``)."""
     m = np.repeat(np.repeat(np.asarray(cell_mask, bool), cell_px, 0), cell_px, 1)
     return m[:shape[0], :shape[1]]
+
+
+# ----- pipeline step -------------------------------------------------------------------------------
+# refmask run (array over preview's z-chunks): every selected (z, tile) classified from its preview
+# thumbnail; work/refmask/masks/z<chunk>_tile<t>.npy, uint8 [n, cells y, cells x]: CELL_BACKGROUND
+# (no score), CELL_TISSUE, CELL_REFERENCE; work/refmask/chunks/chunk_<chunk>.csv (z, tile, npy, i,
+# threshold, tissue_cells, reference_cells, digest) marks a chunk done. refmask merge: index.csv and
+# qc/refmask.png (reference tissue's share of the tissue per slice).
+
+CELL_BACKGROUND, CELL_TISSUE, CELL_REFERENCE = 0, 1, 2
+
+
+def settings_of(cfg):
+    return {**DEFAULTS["refmask"], **(cfg.get("refmask") or {})}
+
+
+def digest(s):
+    """Identifies what the masks were made with: the settings and the model file's bytes."""
+    h = hashlib.sha256(json.dumps({k: v for k, v in s.items() if k != "enabled"}, sort_keys=True).encode())
+    if s["method"] == "classifier":
+        path = s.get("model") or Path(__file__).with_name(f"refmask_{s['tissue']}.json")
+        h.update(Path(path).read_bytes())
+    return h.hexdigest()[:16]
+
+
+def cell_codes(mask, score):
+    out = np.full(mask.shape, CELL_TISSUE, np.uint8)
+    out[~np.isfinite(score)] = CELL_BACKGROUND
+    out[mask] = CELL_REFERENCE
+    return out
+
+
+def _thumbs(cfg):
+    import pandas as pd
+    from .config import step_path
+    idx = pd.read_csv(step_path(cfg, "preview", "thumbs", "index.csv"), dtype={"tile": str})
+    st = pd.read_csv(step_path(cfg, "preview", "stats.csv"), dtype={"tile": str}, usecols=["z", "tile", "p0_5", "p99_5"])
+    return idx.merge(st, on=["z", "tile"])
+
+
+def run(cfg, args):
+    import pandas as pd
+    from .cli import atomic_write, my_chunks, task_info
+    from .config import step_dir, step_path
+    from .preview import chunk_name, z_chunks
+    from .slices import load_slices
+    s = settings_of(cfg)
+    dg = digest(s)
+    if int(cfg["preview"]["factor"]) != 16:
+        log.warning("preview.factor is %s: the shipped model was trained on 16x thumbnails (128 nm at 8 nm)",
+                    cfg["preview"]["factor"])
+    slices = load_slices(cfg)
+    thumbs = _thumbs(cfg)
+    thumbs_dir = step_path(cfg, "preview", "thumbs")
+    mine = my_chunks(z_chunks(slices, cfg["preview"]["chunk_slices"]), *task_info(args))
+    log.info("%d chunks for this task", len(mine))
+    for zs in mine:
+        name = chunk_name(zs)
+        out = step_dir(cfg, "refmask", "chunks", f"chunk_{name}.csv")
+        want = slices[slices["z"].isin(zs)][["z", "tile"]]
+        if out.exists() and not args.overwrite:
+            done = pd.read_csv(out, dtype={"tile": str})
+            if (done["digest"] == dg).all() and pd.MultiIndex.from_frame(want).isin(
+                    pd.MultiIndex.from_frame(done[["z", "tile"]])).all():
+                log.info("chunk %s exists, skipping", name)
+                continue
+        out.unlink(missing_ok=True)
+        rows, stacks = [], {}
+        for z in zs:
+            tz = thumbs[thumbs["z"] == z]
+            tiles = {r.tile: (np.asarray(np.load(thumbs_dir / r.npy, mmap_mode="r")[int(r.i)]), r.p0_5, r.p99_5)
+                     for r in tz.itertuples()}
+            if not tiles:
+                continue
+            masks, scores, thr = slice_masks(tiles, s)
+            for t in sorted(tiles):
+                code = cell_codes(masks[t], scores[t])
+                stacks.setdefault(t, []).append(code)
+                rows.append({"z": z, "tile": t, "npy": f"z{name}_tile{t}.npy", "i": len(stacks[t]) - 1,
+                             "threshold": round(float(thr), 4), "tissue_cells": int((code > 0).sum()),
+                             "reference_cells": int((code == CELL_REFERENCE).sum()), "digest": dg})
+        for t, st in stacks.items():
+            data = np.stack(st)
+            atomic_write(step_dir(cfg, "refmask", "masks", f"z{name}_tile{t}.npy"), lambda f, d=data: np.save(f, d))
+        atomic_write(out, lambda f: pd.DataFrame(rows).to_csv(f, index=False))
+        log.info("chunk %s: %d tile slices", name, len(rows))
+    return 0
+
+
+def merge(cfg, args):
+    import pandas as pd
+    from .cli import atomic_write
+    from .config import qc_path, step_dir
+    from .preview import chunk_name, save, z_chunks
+    from .slices import load_slices
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    s = settings_of(cfg)
+    dg = digest(s)
+    slices = load_slices(cfg)
+    parts, missing = [], []
+    for zs in z_chunks(slices, cfg["preview"]["chunk_slices"]):
+        path = step_dir(cfg, "refmask", "chunks", f"chunk_{chunk_name(zs)}.csv")
+        if not path.exists():
+            missing.append(path.name)
+            continue
+        d = pd.read_csv(path, dtype={"tile": str})
+        if not (d["digest"] == dg).all():
+            missing.append(f"{path.name} (other settings or model)")
+            continue
+        parts.append(d[d["z"].isin(zs)])
+    if missing:
+        raise RuntimeError(f"{len(missing)} refmask chunks missing or out of date, e.g. {missing[:3]}: run 'refmask run'")
+    idx = pd.concat(parts, ignore_index=True)
+    atomic_write(step_dir(cfg, "refmask", "index.csv"), lambda f: idx.to_csv(f, index=False))
+    per_z = idx.groupby("z")[["tissue_cells", "reference_cells"]].sum()
+    fig, ax = plt.subplots(figsize=(12, 3.5), layout="constrained")
+    ax.plot(per_z.index, 100 * per_z["reference_cells"] / per_z["tissue_cells"].clip(lower=1), lw=0.8, color="#2a78d6")
+    ax.set_xlabel("z")
+    ax.set_ylabel(f"{s['tissue']} (% of tissue cells)")
+    ax.set_title(f"Reference tissue mask ({s['method']}): share of the tissue per slice")
+    save(fig, qc_path(cfg, "refmask.png"))
+    log.info("refmask index: %d (z, tile) over %d slices", len(idx), len(per_z))
+    return 0
+
+
+class Cells:
+    """Cell codes of (z, tile) from work/refmask (index.csv and the mask stacks)."""
+
+    def __init__(self, cfg):
+        import pandas as pd
+        from .config import step_path
+        path = step_path(cfg, "refmask", "index.csv")
+        if not path.exists():
+            raise FileNotFoundError(f"{path} not found: run the refmask step (run, merge)")
+        self.dir = step_path(cfg, "refmask", "masks")
+        self.index = pd.read_csv(path, dtype={"tile": str}).set_index(["z", "tile"])
+        self.cell_px = int(settings_of(cfg)["cell_px"])
+        self._open = {}
+
+    def get(self, z, tile):
+        if (z, tile) not in self.index.index:
+            return None
+        r = self.index.loc[(z, tile)]
+        if r["npy"] not in self._open:
+            self._open[r["npy"]] = np.load(self.dir / r["npy"], mmap_mode="r")
+        return np.asarray(self._open[r["npy"]][int(r["i"])])
+
+
+def main(argv=None):
+    from .cli import base_parser, setup
+    from .config import deep_merge
+    from .preview import DEFAULTS as PREVIEW
+    p = base_parser("Reference tissue mask of every selected (z, tile) from the preview thumbnails")
+    p.add_argument("command", choices=["run", "merge"])
+    args = p.parse_args(argv)
+    cfg = setup(args, deep_merge(DEFAULTS, PREVIEW))
+    return run(cfg, args) if args.command == "run" else merge(cfg, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
