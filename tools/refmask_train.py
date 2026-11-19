@@ -3,6 +3,7 @@
     python tools/refmask_train.py table LABELS.json OUT.npz --dataset NAME=CONFIG,VOLUME [--dataset ...]
     python tools/refmask_train.py fit OUT.npz MODEL.json [--lodo REPORT.json]
     python tools/refmask_train.py draw LABELS.json OUT_DIR --dataset NAME=CONFIG,VOLUME [--dataset ...]
+    python tools/refmask_train.py propose LABELS.json OUT.json --dataset ... --planes NAME:Z,...
 
 The label file names datasets by short names; --dataset maps each to a config and a rendered volume
 (a folder in the config's output_dir). --remap OLD=NEW replaces the prefix OLD of the configs'
@@ -19,6 +20,18 @@ fit: boosted trees (pipeline/boost.py; deterministic) on the table, each (datase
 draw: one PNG per labelled plane (labels_<dataset>_z<z>.png), at 128 nm (scale 4 of the volume): boxes
   in green (reference tissue) or red (other). With --previous OLD.json, boxes not in OLD are drawn in
   cyan (reference tissue) or orange (other), and OLD's boxes that are gone as dashed magenta outlines.
+  --outline: the classifier's mask outline as a thin yellow line. Box IDs are written next to the
+  boxes, and OUT_DIR/boxes.csv lists every box (dataset, z, id, label, x0, y0, x1, y1, note).
+
+propose: conservative boxes from the current classifier's mask. A box (--box-um, 10 um) is a
+  reference-tissue box only if it and a margin of --margin-um (10 um) all round lie inside the mask in
+  every tile covering it, and an "other" box only if box and margin are tissue with no mask, no
+  candidate cell (probability over the threshold) and no background. Boxes already in LABELS.json
+  are kept only if they pass the same test (dropped ones are listed). On each --planes plane up to
+  --per-plane boxes of each label are added, spread out (farthest-point, at least --spacing-um apart
+  and not overlapping kept boxes). Every box gets an ID per plane: N1, N2... (reference tissue),
+  C1, C2... (other). Drawing positives from the classifier's own mask is self-referential: only a
+  person's check of the pictures (draw --outline) validates them.
 
 Boxes of one plane must not overlap (each cell is labelled at most once): table and draw refuse them.
 """
@@ -166,6 +179,125 @@ def fit(a):
     return 0
 
 
+def plane_regions(ds, z, settings, f=16):
+    """At downsample f of the stored volume: (reference_ok, other_ok, mask) of plane z.
+
+    reference_ok: inside the mask in every tile covering the pixel; other_ok: tissue with neither
+    mask nor candidate (probability or score over the threshold) in every covering tile; mask: the
+    mask in any tile."""
+    rows = ds.index[ds.index.z == z]
+    tiles = {r.tile: (np.asarray(np.load(ds.thumbs_dir / r.npy, mmap_mode="r")[int(r.i)]), r.p0_5, r.p99_5)
+             for r in rows.itertuples()}
+    masks, scores, thr = refmask.slice_masks(tiles, settings)
+    W, H = (int(np.ceil(v / f)) for v in ds.meta["canvas_size_xy"])
+    covered, mask_any = np.zeros((H, W), bool), np.zeros((H, W), bool)
+    ref_ok, other_ok = np.ones((H, W), bool), np.ones((H, W), bool)
+    c = settings["cell_px"]
+    for t, (thumb, _, _) in tiles.items():
+        sc = scores[t]
+        parts = [refmask.to_pixels(a, thumb.shape, c) for a in
+                 (masks[t], np.nan_to_num(sc, nan=-np.inf) > thr, np.isfinite(sc))]
+        M = ds.to_volume(z, t, thumb.shape, f)
+        m, cand, tis, cov = (cv2.warpAffine(a.astype(np.uint8), M, (W, H), flags=cv2.INTER_NEAREST) > 0
+                             for a in (*parts, np.ones(thumb.shape, bool)))
+        covered |= cov
+        mask_any |= m
+        ref_ok &= ~cov | m
+        other_ok &= ~cov | (tis & ~cand & ~m)
+    return ref_ok & covered, other_ok & covered, mask_any
+
+
+def _inside(ok, box, margin, f):
+    """True if box (stored voxels) plus margin lies wholly in ok (at downsample f)."""
+    y0, x0 = int(np.floor((box["y0"] - margin) / f)), int(np.floor((box["x0"] - margin) / f))
+    y1, x1 = int(np.ceil((box["y1"] + margin) / f)), int(np.ceil((box["x1"] + margin) / f))
+    if y0 < 0 or x0 < 0 or y1 > ok.shape[0] or x1 > ok.shape[1]:
+        return False
+    return bool(ok[y0:y1, x0:x1].all())
+
+
+def _spread(ok, b, m, n, spacing, existing, step=4):
+    """Up to n top-left corners (downsample px) of b-px boxes whose box plus m px margin lies in ok,
+    farthest-point spread, at least spacing px between box centres and from the existing centres."""
+    w = b + 2 * m
+    S = np.pad(np.cumsum(np.cumsum(ok.astype(np.int64), 0), 1), ((1, 0), (1, 0)))
+    if ok.shape[0] < w or ok.shape[1] < w:
+        return []
+    cnt = S[w:, w:] - S[:-w, w:] - S[w:, :-w] + S[:-w, :-w]
+    ys, xs = np.nonzero(cnt[::step, ::step] == w * w)
+    if not len(ys):
+        return []
+    cy, cx = ys * step + m + b / 2, xs * step + m + b / 2
+    chosen = [np.asarray(e, float) for e in existing]
+    picked = []
+    d = np.full(len(cy), np.inf)
+    for e in chosen:
+        d = np.minimum(d, np.hypot(cy - e[0], cx - e[1]))
+    if not chosen:   # start nearest the middle of the allowed area
+        i = int(np.argmin(np.hypot(cy - cy.mean(), cx - cx.mean())))
+    else:
+        i = int(np.argmax(d))
+    while len(picked) < n and d[i] >= spacing:
+        picked.append((int(ys[i] * step + m), int(xs[i] * step + m)))
+        d = np.minimum(d, np.hypot(cy - cy[i], cx - cx[i]))
+        i = int(np.argmax(d))
+    return picked
+
+
+def propose(a):
+    labels = json.loads(Path(a.labels).read_text())
+    settings = {**refmask.DEFAULTS["refmask"], "tissue": labels.get("tissue", "neuropil")}
+    planes = [(p.split(":")[0], int(p.split(":")[1])) for p in a.planes.split(",")] if a.planes else []
+    names = {d.split("=", 1)[0] for d in a.dataset}
+    if any(d not in names for d, _ in planes):
+        raise SystemExit("every --planes dataset needs a --dataset")
+    labels = {**labels, "boxes": [b for b in labels["boxes"] if b["dataset"] in names]}
+    dss = datasets({"boxes": labels["boxes"] + [{"dataset": d} for d, _ in planes]}, a.dataset, a.remap)
+    f = 16
+    box, margin, spacing = (round(v * 1000 / 8) for v in (a.box_um, a.margin_um, a.spacing_um))   # 8 nm voxels
+    todo = sorted({(b["dataset"], b["z"]) for b in labels["boxes"]} | set(planes))
+    out, dropped = [], []
+    for d, z in todo:
+        ds = dss[d]
+        ref_ok, other_ok, _ = plane_regions(ds, z, settings, f)
+        kept = {"ref": [], "other": []}
+        for b in labels["boxes"]:
+            if (b["dataset"], b["z"]) != (d, z):
+                continue
+            ref = b["label"] in ("neuropil", "reference")
+            if _inside(ref_ok if ref else other_ok, b, margin, f):
+                kept["ref" if ref else "other"].append(dict(b))
+            else:
+                dropped.append(b)
+        if (d, z) in planes:
+            for kind, ok, lab in (("ref", ref_ok, settings["tissue"]), ("other", other_ok, "other")):
+                existing = [((b["y0"] + b["y1"]) / 2 / f, (b["x0"] + b["x1"]) / 2 / f) for b in kept[kind]]
+                n = max(a.per_plane - len(existing), 0)
+                for y, x in _spread(ok, box // f, margin // f, n, spacing / f, existing):
+                    kept[kind].append({"dataset": d, "z": z, "x0": x * f, "y0": y * f, "x1": x * f + box, "y1": y * f + box,
+                                       "label": lab, "note": "proposed from the classifier mask (box and margin inside)"})
+        for kind, prefix in (("ref", "N"), ("other", "C")):
+            for i, b in enumerate(sorted(kept[kind], key=lambda b: (b["y0"], b["x0"])), 1):
+                b["id"] = f"{prefix}{i}"
+                out.append(b)
+        print(f"{d} z {z}: {sum(b['label'] != 'other' for b in out if (b['dataset'], b['z']) == (d, z))} reference, "
+              f"{sum(b['label'] == 'other' for b in out if (b['dataset'], b['z']) == (d, z))} other", flush=True)
+    res = {k: v for k, v in labels.items() if k != "boxes"}
+    res["description"] = (f"Labelled boxes for the reference tissue classifier, proposed by tools/refmask_train.py propose: "
+                          f"box {a.box_um:g} um, margin {a.margin_um:g} um all round inside the classifier's mask (reference "
+                          f"tissue) or inside tissue with no mask, candidate or background (other). Drawn from the classifier's own "
+                          f"mask, so only a person's check of the pictures validates them. 'dataset' names map to a config and "
+                          f"volume (--dataset NAME=CONFIG,VOLUME); boxes in that volume's stored voxels (x0, y0, x1, y1; x1/y1 "
+                          f"exclusive), plane z; 'id' is per plane. Boxes of one plane must not overlap.")
+    res["boxes"] = out
+    check_overlaps(res)
+    Path(a.out).write_text(json.dumps(res, indent=1))
+    print(f"{len(out)} boxes -> {a.out}; dropped {len(dropped)} input boxes:", flush=True)
+    for b in dropped:
+        print(f"  dropped {b['dataset']} z {b['z']} {b['label']} x {b['x0']}-{b['x1']} y {b['y0']}-{b['y1']} ({b.get('note', '')})")
+    return 0
+
+
 def dashed_rect(img, x0, y0, x1, y1, col, dash=8):
     for x in range(x0, x1, 2 * dash):
         cv2.line(img, (x, y0), (min(x + dash, x1), y0), col, 1)
@@ -186,11 +318,18 @@ def draw(a):
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     f, scale = 16, 4
+    settings = {**refmask.DEFAULTS["refmask"], "tissue": labels.get("tissue", "neuropil")}
+    rows_csv = ["dataset,z,id,label,x0,y0,x1,y1,note"]
     for v, ds in dss.items():
         arr = omezarr.open_scale(ds.root, scale)
         for z in sorted({b["z"] for b in labels["boxes"] if b["dataset"] == v}):
             img = np.asarray(arr[ds.planes[z] // f].read().result())
             rgb = np.repeat(img[:, :, None], 3, axis=2)
+            if a.outline:
+                _, _, mk = plane_regions(ds, z, settings, f)
+                mk = mk[:rgb.shape[0], :rgb.shape[1]]
+                cnt, _ = cv2.findContours(mk.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+                cv2.drawContours(rgb, cnt, -1, (0, 230, 255), 1)
             n_changed = 0
             if old is not None:
                 for b in old:
@@ -204,9 +343,15 @@ def draw(a):
                 changed = old is not None and key(b) not in old_keys
                 n_changed += changed
                 col = ((255, 255, 0) if ref else (0, 140, 255)) if changed else ((60, 200, 60) if ref else (60, 60, 255))
-                cv2.rectangle(rgb, (round(b["x0"] / f), round(b["y0"] / f)), (round(b["x1"] / f) - 1, round(b["y1"] / f) - 1),
-                              col, 2)
-            title = f"{v} z {z}, 128 nm: green neuropil, red other"
+                p0, p1 = (round(b["x0"] / f), round(b["y0"] / f)), (round(b["x1"] / f) - 1, round(b["y1"] / f) - 1)
+                cv2.rectangle(rgb, p0, p1, col, 2)
+                if b.get("id"):
+                    org = (p0[0] + 3, p0[1] - 6 if p0[1] > 24 else p1[1] + 20)
+                    cv2.putText(rgb, b["id"], org, cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 0), 5, cv2.LINE_AA)
+                    cv2.putText(rgb, b["id"], org, cv2.FONT_HERSHEY_SIMPLEX, 0.65, col, 2, cv2.LINE_AA)
+                note = b.get("note", "").replace(",", ";")
+                rows_csv.append(f"{v},{z},{b.get('id', '')},{b['label']},{b['x0']},{b['y0']},{b['x1']},{b['y1']},{note}")
+            title = f"{v} z {z}, 128 nm: green neuropil, red other" + ("; yellow: mask outline" if a.outline else "")
             if old is not None:
                 title += f"; new/changed ({n_changed}): cyan neuropil, orange other; dashed magenta: removed"
             cv2.putText(rgb, title, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 5, cv2.LINE_AA)
@@ -214,6 +359,7 @@ def draw(a):
             name = out / f"labels_{v}_z{z}.png"
             cv2.imwrite(str(name), rgb, [cv2.IMWRITE_PNG_COMPRESSION, 9])
             print("wrote", name, flush=True)
+    (out / "boxes.csv").write_text("\n".join(rows_csv) + "\n")
     return 0
 
 
@@ -230,9 +376,19 @@ def main(argv=None):
     t.add_argument("labels"), t.add_argument("out_dir")
     t.add_argument("--dataset", action="append", required=True, help="NAME=CONFIG,VOLUME")
     t.add_argument("--previous", help="an earlier label file: mark what changed")
+    t.add_argument("--outline", action="store_true", help="draw the classifier's mask outline (thin yellow)")
+    t.add_argument("--remap", help="OLD=NEW: replace the prefix OLD of each output_dir by NEW")
+    t = sub.add_parser("propose")
+    t.add_argument("labels"), t.add_argument("out")
+    t.add_argument("--dataset", action="append", required=True, help="NAME=CONFIG,VOLUME")
+    t.add_argument("--planes", help="NAME:Z,... planes to add boxes on")
+    t.add_argument("--box-um", type=float, default=10.0)
+    t.add_argument("--margin-um", type=float, default=10.0)
+    t.add_argument("--spacing-um", type=float, default=30.0)
+    t.add_argument("--per-plane", type=int, default=6, help="boxes per label and plane (kept ones included)")
     t.add_argument("--remap", help="OLD=NEW: replace the prefix OLD of each output_dir by NEW")
     a = ap.parse_args(argv)
-    return {"table": table, "fit": fit, "draw": draw}[a.cmd](a)
+    return {"table": table, "fit": fit, "draw": draw, "propose": propose}[a.cmd](a)
 
 
 if __name__ == "__main__":

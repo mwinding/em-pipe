@@ -168,3 +168,15 @@ timeline changed.
 `tools/` holds one-off analysis scripts that read a run's working files (e.g. `shading_measure.py`,
 `shading_before_after.py`; usage in each docstring). `qc/` in a clone is git-ignored: a place to
 copy a run's `qc/` plots and comparison stacks for looking at locally.
+
+## Reference tissue mask (in development)
+
+`pipeline/refmask.py` marks a reference tissue (neuropil, with tracts) on the preview thumbnails, per
+~2 µm cell, so that intensity statistics can be measured in the same tissue in every volume. It is a
+small trained classifier (`pipeline/refmask_neuropil.json`) on texture features that ignore gain,
+offset and rotation; `tools/refmask_check.py` draws it over a volume and measures neuropil statistics
+inside it, and `tools/refmask_train.py` rebuilds the model from labelled boxes
+(`pipeline/refmask_neuropil_labels.json`). `refmask_train.py propose` draws new label boxes from the
+current classifier's own mask (a box and a 10 µm margin all inside the mask, or all in tissue
+without it). That is self-referential: the labels are only validated by a person checking the
+pictures (`refmask_train.py draw --outline`, every box with an ID), box by box.
