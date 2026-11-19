@@ -163,8 +163,32 @@ Each frame reads only what is on screen from the matching pyramid level, so a sh
 few GB whatever the volume's size. Frames go to `work/movie/<name>/`; a re-run keeps them unless the
 timeline changed.
 
-## tools/ and qc/
+## tools/, dev/ and qc/
 
-`tools/` holds one-off analysis scripts that read a run's working files (e.g. `shading_measure.py`,
-`shading_before_after.py`; usage in each docstring). `qc/` in a clone is git-ignored: a place to
-copy a run's `qc/` plots and comparison stacks for looking at locally.
+`tools/` holds checks and helpers that work on any dataset; usage is in each docstring:
+
+| Tool | What it does |
+|---|---|
+| `raw_stats.py` (+ `slurm/raw_stats.sbatch`) | Raw detector values per tile at sampled slices, by class: tissue, resin, off-sample (and neuropil vs other tissue where the reference-tissue mask is available). Histograms, per-tile percentiles, plots; `compare` draws several datasets together. Resin comes from the background mask and is not validated as a reference yet. |
+| `copy_verify.py` (+ `slurm/copy_verify.sbatch`) | Copy raw files to another place, md5 both sides, and write a checksum manifest next to the copy only when every file matches. Never deletes; refuses nested folders. |
+| `tile_jumps.py` | Tile jumps and alignment problems over a whole run (plot + summary): candidates for `align.local_windows`. |
+| `seam_steps.py`, `shading_measure.py`, `shading_before_after.py`, `clipping_check.py`, `map_point.py`, `triptych.py` | Seam brightness steps, flat-field measurements and before/after stacks, clipping, mapping a point between volume and raw tiles, side-by-side figures. |
+| `check_private.sh` | Run before every push: fails if the files or commits about to be pushed contain site-specific details (paths, hosts, names, dataset IDs). Generic patterns are in `tools/private_patterns.txt`; put your own (cluster, share, people) in the git-ignored `tools/private_patterns.local.txt`. |
+
+```bash
+# raw statistics of a dataset (8 slices; on the cluster, in parallel, then merge)
+A=$(sbatch --parsable --array=0-7 slurm/raw_stats.sbatch configs/lab/my_volume.yaml --num-tasks 8)
+sbatch --dependency=afterok:$A slurm/raw_stats.sbatch configs/lab/my_volume.yaml merge
+python tools/raw_stats.py compare --out cmp A=/path/to/a/qc/raw_stats B=/path/to/b/qc/raw_stats
+
+# copy raw data and verify it (a Slurm chain: copy array, md5 array, verify)
+python tools/copy_verify.py submit /path/to/raw/my_volume /path/to/copy/my_volume --group-rw
+```
+
+Keep the record of which data were copied where (and other site details) in your own configuration
+repository, not here.
+
+`dev/` holds development analyses: the checks and experiments behind the pipeline's design and the
+datasets' settings, kept so the reasoning can be traced. They are not pipeline code and not tested;
+see [dev/README.md](dev/README.md). `qc/` in a clone is git-ignored: a place to copy a run's `qc/`
+plots and comparison stacks for looking at locally.

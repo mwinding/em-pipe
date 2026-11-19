@@ -63,6 +63,11 @@ destreak has no batch stage: it is a function applied per tile inside render whe
   rename) and skips work whose output already exists unless `--overwrite` is given. Chunk files
   record what they were computed from (slices, settings) and are redone when that changes;
   merge/solve steps refuse missing or out-of-date chunks.
+- **Where code lives**: `pipeline/` the steps; `tools/` general checks and helpers that read a run's
+  outputs or raw data (config-driven, read-only on the data, writing under `<output_dir>/qc/` or a
+  folder given to them); `dev/` the development analyses behind design choices and dataset settings
+  (kept for the record, not maintained). Analysis code is never left only in a scratch folder or an
+  inline command. Nothing site-specific is committed (`tools/check_private.sh` before every push).
 
 ## Output files
 
