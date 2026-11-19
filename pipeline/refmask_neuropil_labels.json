@@ -1,5 +1,5 @@
 {
- "description": "Labelled boxes for the reference tissue classifier, proposed by tools/refmask_train.py propose: box 10 um, margin 10 um all round inside the classifier's mask (reference tissue) or inside tissue with no mask, candidate or background (other). Drawn from the classifier's own mask, so only a person's check of the pictures validates them. 'dataset' names map to a config and volume (--dataset NAME=CONFIG,VOLUME); boxes in that volume's stored voxels (x0, y0, x1, y1; x1/y1 exclusive), plane z; 'id' is per plane. Boxes of one plane must not overlap.",
+ "description": "Labelled boxes for the reference tissue classifier, proposed by tools/refmask_train.py propose: box 10 um, margin 10 um all round inside the classifier's mask (reference tissue) or inside tissue with no mask, candidate or background (other). Drawn from the classifier's own mask, so only a person's check of the pictures validates them. 'dataset' names map to a config and volume (--dataset NAME=CONFIG,VOLUME); boxes in that volume's stored voxels (x0, y0, x1, y1; x1/y1 exclusive), plane z; 'id' is per plane. Boxes of one plane must not overlap. Every box was checked by a person on the pictures (draw --outline) on 2026-11-19: the boxes here were confirmed ('reviewed'), the ones in 'rejected_in_review' were removed. Class rule: 'other' boxes are cell bodies only (cell-body rind), never gut, oesophagus, trachea or other non-neural tissue.",
  "tissue": "neuropil",
  "boxes": [
   {
@@ -11,7 +11,8 @@
    "y1": 19970,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -22,7 +23,8 @@
    "y1": 21442,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -33,7 +35,8 @@
    "y1": 22082,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N3"
+   "id": "N3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -44,7 +47,8 @@
    "y1": 3202,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C1"
+   "id": "C1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -55,7 +59,8 @@
    "y1": 3266,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C2"
+   "id": "C2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -66,7 +71,8 @@
    "y1": 10882,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C3"
+   "id": "C3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -77,7 +83,8 @@
    "y1": 13506,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C4"
+   "id": "C4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -88,7 +95,8 @@
    "y1": 15106,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C5"
+   "id": "C5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -99,7 +107,8 @@
    "y1": 24130,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C6"
+   "id": "C6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -110,7 +119,8 @@
    "y1": 20205,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -121,7 +131,8 @@
    "y1": 20930,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -132,7 +143,8 @@
    "y1": 2882,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C1"
+   "id": "C1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -143,7 +155,8 @@
    "y1": 2946,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C2"
+   "id": "C2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -154,7 +167,8 @@
    "y1": 2946,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C3"
+   "id": "C3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -165,7 +179,8 @@
    "y1": 10818,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C4"
+   "id": "C4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -176,7 +191,8 @@
    "y1": 16066,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C5"
+   "id": "C5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -187,7 +203,8 @@
    "y1": 19202,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C6"
+   "id": "C6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -198,7 +215,8 @@
    "y1": 20205,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -209,7 +227,8 @@
    "y1": 6466,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -220,7 +239,8 @@
    "y1": 9965,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -231,7 +251,8 @@
    "y1": 12525,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N3"
+   "id": "N3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -242,7 +263,8 @@
    "y1": 14146,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N4"
+   "id": "N4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -253,7 +275,8 @@
    "y1": 17346,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N5"
+   "id": "N5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -264,7 +287,8 @@
    "y1": 20205,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N6"
+   "id": "N6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -275,7 +299,8 @@
    "y1": 2690,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C1"
+   "id": "C1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -286,7 +311,8 @@
    "y1": 4226,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C2"
+   "id": "C2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -297,7 +323,8 @@
    "y1": 16386,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C3"
+   "id": "C3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -308,7 +335,8 @@
    "y1": 18754,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C4"
+   "id": "C4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -319,7 +347,8 @@
    "y1": 18882,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C5"
+   "id": "C5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -330,7 +359,8 @@
    "y1": 23810,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C6"
+   "id": "C6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -341,7 +371,8 @@
    "y1": 9965,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -352,7 +383,8 @@
    "y1": 9965,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -363,7 +395,8 @@
    "y1": 12525,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N3"
+   "id": "N3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -374,7 +407,8 @@
    "y1": 20205,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N4"
+   "id": "N4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -385,7 +419,8 @@
    "y1": 7618,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -396,7 +431,8 @@
    "y1": 8130,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -407,7 +443,8 @@
    "y1": 8898,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N3"
+   "id": "N3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -418,7 +455,8 @@
    "y1": 12525,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N4"
+   "id": "N4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -429,7 +467,8 @@
    "y1": 13442,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N5"
+   "id": "N5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -440,7 +479,8 @@
    "y1": 19522,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N6"
+   "id": "N6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -451,7 +491,8 @@
    "y1": 2562,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C1"
+   "id": "C1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -462,7 +503,8 @@
    "y1": 2562,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C2"
+   "id": "C2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -473,7 +515,8 @@
    "y1": 3586,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C3"
+   "id": "C3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -484,7 +527,8 @@
    "y1": 18242,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C4"
+   "id": "C4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -495,7 +539,8 @@
    "y1": 18818,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C5"
+   "id": "C5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -506,7 +551,8 @@
    "y1": 23170,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C6"
+   "id": "C6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -517,7 +563,8 @@
    "y1": 12525,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -528,7 +575,8 @@
    "y1": 8834,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -539,7 +587,8 @@
    "y1": 9346,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -550,7 +599,8 @@
    "y1": 13698,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C1"
+   "id": "C1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -561,7 +611,8 @@
    "y1": 14594,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C2"
+   "id": "C2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -572,7 +623,8 @@
    "y1": 15426,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C3"
+   "id": "C3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -583,7 +635,8 @@
    "y1": 17090,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C4"
+   "id": "C4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "35h",
@@ -594,18 +647,8 @@
    "y1": 19778,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C5"
-  },
-  {
-   "dataset": "35h",
-   "z": 15056,
-   "x0": 9888,
-   "y0": 18848,
-   "x1": 11138,
-   "y1": 20098,
-   "label": "other",
-   "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C6"
+   "id": "C5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -616,7 +659,8 @@
    "y1": 24770,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -627,7 +671,8 @@
    "y1": 25922,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -638,7 +683,8 @@
    "y1": 27074,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N3"
+   "id": "N3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -649,7 +695,8 @@
    "y1": 26332,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -660,7 +707,8 @@
    "y1": 26332,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -671,7 +719,8 @@
    "y1": 26332,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -682,7 +731,8 @@
    "y1": 7682,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -693,7 +743,8 @@
    "y1": 8450,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -704,7 +755,8 @@
    "y1": 14274,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N3"
+   "id": "N3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -715,7 +767,8 @@
    "y1": 16834,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N4"
+   "id": "N4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -726,7 +779,8 @@
    "y1": 21442,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N5"
+   "id": "N5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -737,7 +791,8 @@
    "y1": 22018,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N6"
+   "id": "N6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -748,7 +803,8 @@
    "y1": 3138,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C1"
+   "id": "C1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -759,18 +815,8 @@
    "y1": 3842,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C2"
-  },
-  {
-   "dataset": "37i",
-   "z": 9600,
-   "x0": 4064,
-   "y0": 14624,
-   "x1": 5314,
-   "y1": 15874,
-   "label": "other",
-   "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C3"
+   "id": "C2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -781,7 +827,8 @@
    "y1": 18882,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C4"
+   "id": "C4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -792,7 +839,8 @@
    "y1": 21954,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C5"
+   "id": "C5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -803,7 +851,8 @@
    "y1": 22786,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C6"
+   "id": "C6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -814,7 +863,8 @@
    "y1": 10528,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -825,7 +875,8 @@
    "y1": 10528,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -836,7 +887,8 @@
    "y1": 10528,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -847,7 +899,8 @@
    "y1": 10528,
    "label": "neuropil",
    "note": "hand-picked neuropil patch (contrast matching)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -858,7 +911,8 @@
    "y1": 6082,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C1"
+   "id": "C1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -869,7 +923,8 @@
    "y1": 6082,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C2"
+   "id": "C2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -880,7 +935,8 @@
    "y1": 11906,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C3"
+   "id": "C3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -891,7 +947,8 @@
    "y1": 13954,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C4"
+   "id": "C4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -902,7 +959,8 @@
    "y1": 20482,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C5"
+   "id": "C5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "37i",
@@ -913,7 +971,8 @@
    "y1": 20994,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C6"
+   "id": "C6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -924,7 +983,8 @@
    "y1": 5058,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -935,7 +995,8 @@
    "y1": 7938,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -946,7 +1007,8 @@
    "y1": 9218,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N3"
+   "id": "N3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -957,7 +1019,8 @@
    "y1": 13506,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N4"
+   "id": "N4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -968,7 +1031,8 @@
    "y1": 14082,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N5"
+   "id": "N5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -979,7 +1043,8 @@
    "y1": 17538,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N6"
+   "id": "N6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -990,18 +1055,8 @@
    "y1": 2562,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C1"
-  },
-  {
-   "dataset": "A1001",
-   "z": 56,
-   "x0": 20640,
-   "y0": 9952,
-   "x1": 21890,
-   "y1": 11202,
-   "label": "other",
-   "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C2"
+   "id": "C1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1012,7 +1067,8 @@
    "y1": 19202,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C3"
+   "id": "C3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1023,7 +1079,8 @@
    "y1": 22658,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C4"
+   "id": "C4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1034,7 +1091,8 @@
    "y1": 23682,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C5"
+   "id": "C5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1045,7 +1103,8 @@
    "y1": 5122,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N1"
+   "id": "N1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1056,7 +1115,8 @@
    "y1": 7682,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N2"
+   "id": "N2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1067,7 +1127,8 @@
    "y1": 11010,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N3"
+   "id": "N3",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1078,7 +1139,8 @@
    "y1": 14018,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N4"
+   "id": "N4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1089,7 +1151,8 @@
    "y1": 15810,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N5"
+   "id": "N5",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1100,7 +1163,8 @@
    "y1": 20098,
    "label": "neuropil",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "N6"
+   "id": "N6",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1111,7 +1175,8 @@
    "y1": 2562,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C1"
+   "id": "C1",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1122,18 +1187,8 @@
    "y1": 4098,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C2"
-  },
-  {
-   "dataset": "A1001",
-   "z": 240,
-   "x0": 20640,
-   "y0": 9952,
-   "x1": 21890,
-   "y1": 11202,
-   "label": "other",
-   "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C3"
+   "id": "C2",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1144,7 +1199,8 @@
    "y1": 19586,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C4"
+   "id": "C4",
+   "reviewed": "2026-11-19 confirmed"
   },
   {
    "dataset": "A1001",
@@ -1155,7 +1211,54 @@
    "y1": 23682,
    "label": "other",
    "note": "proposed from the classifier mask (box and margin inside)",
-   "id": "C5"
+   "id": "C5",
+   "reviewed": "2026-11-19 confirmed"
+  }
+ ],
+ "rejected_in_review": [
+  {
+   "dataset": "35h",
+   "z": 15056,
+   "id": "C6",
+   "label": "other",
+   "x0": 9888,
+   "y0": 18848,
+   "x1": 11138,
+   "y1": 20098,
+   "reason": "wrong"
+  },
+  {
+   "dataset": "37i",
+   "z": 9600,
+   "id": "C3",
+   "label": "other",
+   "x0": 4064,
+   "y0": 14624,
+   "x1": 5314,
+   "y1": 15874,
+   "reason": "wrong"
+  },
+  {
+   "dataset": "A1001",
+   "z": 56,
+   "id": "C2",
+   "label": "other",
+   "x0": 20640,
+   "y0": 9952,
+   "x1": 21890,
+   "y1": 11202,
+   "reason": "oesophagus, not cell bodies"
+  },
+  {
+   "dataset": "A1001",
+   "z": 240,
+   "id": "C3",
+   "label": "other",
+   "x0": 20640,
+   "y0": 9952,
+   "x1": 21890,
+   "y1": 11202,
+   "reason": "oesophagus, not cell bodies"
   }
  ]
 }

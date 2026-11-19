@@ -179,4 +179,7 @@ inside it, and `tools/refmask_train.py` rebuilds the model from labelled boxes
 (`pipeline/refmask_neuropil_labels.json`). `refmask_train.py propose` draws new label boxes from the
 current classifier's own mask (a box and a 10 µm margin all inside the mask, or all in tissue
 without it). That is self-referential: the labels are only validated by a person checking the
-pictures (`refmask_train.py draw --outline`, every box with an ID), box by box.
+pictures (`refmask_train.py draw --outline`, every box with an ID), box by box; the label file
+records what was confirmed and what was rejected. "Other" boxes must be cell bodies only, never gut,
+oesophagus or trachea: `propose` can't tell those apart (it only keeps new boxes off regions
+rejected before), so the person checking has to reject them.

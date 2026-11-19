@@ -30,8 +30,11 @@ propose: conservative boxes from the current classifier's mask. A box (--box-um,
   are kept only if they pass the same test (dropped ones are listed). On each --planes plane up to
   --per-plane boxes of each label are added, spread out (farthest-point, at least --spacing-um apart
   and not overlapping kept boxes). Every box gets an ID per plane: N1, N2... (reference tissue),
-  C1, C2... (other). Drawing positives from the classifier's own mask is self-referential: only a
-  person's check of the pictures (draw --outline) validates them.
+  C1, C2... (other); boxes kept from LABELS.json keep their IDs. No box is proposed over (box plus
+  margin) a box listed in LABELS.json's "rejected_in_review". Drawing positives from the classifier's
+  own mask is self-referential: only a person's check of the pictures (draw --outline) validates
+  them. "other" boxes must be cell bodies only, never gut, oesophagus or trachea: propose can't tell
+  those apart from cell bodies (they also lack the mask), so the person checking rejects them.
 
 Boxes of one plane must not overlap (each cell is labelled at most once): table and draw refuse them.
 """
@@ -260,6 +263,12 @@ def propose(a):
     for d, z in todo:
         ds = dss[d]
         ref_ok, other_ok, _ = plane_regions(ds, z, settings, f)
+        for r in labels.get("rejected_in_review", []):   # nothing new over a rejected box
+            if (r["dataset"], r["z"]) == (d, z):
+                y0, x0 = max((r["y0"] - margin - box) // f, 0), max((r["x0"] - margin - box) // f, 0)
+                y1, x1 = (r["y1"] + margin + box) // f + 1, (r["x1"] + margin + box) // f + 1
+                ref_ok[y0:y1, x0:x1] = False
+                other_ok[y0:y1, x0:x1] = False
         kept = {"ref": [], "other": []}
         for b in labels["boxes"]:
             if (b["dataset"], b["z"]) != (d, z):
@@ -277,8 +286,12 @@ def propose(a):
                     kept[kind].append({"dataset": d, "z": z, "x0": x * f, "y0": y * f, "x1": x * f + box, "y1": y * f + box,
                                        "label": lab, "note": "proposed from the classifier mask (box and margin inside)"})
         for kind, prefix in (("ref", "N"), ("other", "C")):
-            for i, b in enumerate(sorted(kept[kind], key=lambda b: (b["y0"], b["x0"])), 1):
-                b["id"] = f"{prefix}{i}"
+            used = [int(b["id"][1:]) for b in kept[kind] if str(b.get("id", "")).startswith(prefix)]
+            nxt = max(used, default=0)
+            for b in sorted(kept[kind], key=lambda b: (b["y0"], b["x0"])):
+                if not str(b.get("id", "")).startswith(prefix):
+                    nxt += 1
+                    b["id"] = f"{prefix}{nxt}"
                 out.append(b)
         print(f"{d} z {z}: {sum(b['label'] != 'other' for b in out if (b['dataset'], b['z']) == (d, z))} reference, "
               f"{sum(b['label'] == 'other' for b in out if (b['dataset'], b['z']) == (d, z))} other", flush=True)
@@ -290,6 +303,8 @@ def propose(a):
                           f"volume (--dataset NAME=CONFIG,VOLUME); boxes in that volume's stored voxels (x0, y0, x1, y1; x1/y1 "
                           f"exclusive), plane z; 'id' is per plane. Boxes of one plane must not overlap.")
     res["boxes"] = out
+    if labels.get("rejected_in_review"):
+        res["rejected_in_review"] = labels["rejected_in_review"]
     check_overlaps(res)
     Path(a.out).write_text(json.dumps(res, indent=1))
     print(f"{len(out)} boxes -> {a.out}; dropped {len(dropped)} input boxes:", flush=True)
