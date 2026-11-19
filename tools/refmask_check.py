@@ -7,7 +7,7 @@ The mask is made from the preview thumbnails (as it would be before the intensit
 the rendered VOLUME (a folder in the config's output_dir) with render's frozen plan
 (work/render/<stem>/tiles.csv, render.json).
 
---overlay Z: OUT_DIR/<NAME>_z<Z>.png, the volume at 64 nm (scale 3, the plane holding z) with the mask
+--overlay Z: OUT_DIR/<NAME>_z<Z>.png, the volume at 128 nm (--scale 4, the plane holding z) with the mask
   tinted and outlined in yellow, the background (no score) tinted blue, and --boxes within 64 planes
   of z as magenta squares.
 --stats Z0: windows of 1024 px at 8 nm, wholly inside the mask of planes Z0+16 and Z0+48 (Z0 a multiple
@@ -111,8 +111,8 @@ class Dataset:
         return mask, bg & ~mask, cov, thr
 
 
-def overlay(ds, z, out_png, name, boxes=()):
-    f, scale = 8, 3
+def overlay(ds, z, out_png, name, boxes=(), scale=4):
+    f = 2 ** scale
     mask, bg, cov, thr = ds.volume_mask(z, f)
     arr = omezarr.open_scale(ds.root, scale)
     img = np.asarray(arr[ds.planes[z] // f].read().result())
@@ -123,15 +123,16 @@ def overlay(ds, z, out_png, name, boxes=()):
     rgb[bg & cov] = 0.8 * rgb[bg & cov] + 0.2 * np.array([255, 120, 0])  # BGR blue tint
     rgb = np.clip(rgb, 0, 255).astype(np.uint8)
     cnt, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-    cv2.drawContours(rgb, cnt, -1, (0, 230, 255), 2)
+    cv2.drawContours(rgb, cnt, -1, (0, 230, 255), 2 if f <= 8 else 1)
     near = {(b["y0"], b["y1"], b["x0"], b["x1"]) for b in boxes if abs(int(b["z"]) - z) <= 64}
     for y0, y1, x0, x1 in near:   # boxes of nearby planes (e.g. hand-picked patches), magenta
-        cv2.rectangle(rgb, (round(x0 / f), round(y0 / f)), (round(x1 / f), round(y1 / f)), (255, 0, 255), 3)
+        cv2.rectangle(rgb, (round(x0 / f), round(y0 / f)), (round(x1 / f), round(y1 / f)), (255, 0, 255), 2)
     tissue = cov & ~bg
     frac = mask.sum() / max(tissue.sum(), 1)
-    label = f"{name} z {z}  64 nm  neuropil mask (yellow) {100 * frac:.0f}% of tissue, threshold {thr:.2f}; blue: background"
-    cv2.putText(rgb, label, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 6, cv2.LINE_AA)
-    cv2.putText(rgb, label, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 2, cv2.LINE_AA)
+    label = f"{name} z {z}  {8 * f} nm  {ds.settings['method']}: neuropil mask (yellow) {100 * frac:.0f}% of tissue, threshold {thr:.2f}; blue: background"
+    fs = 1.4 * 8 / f
+    cv2.putText(rgb, label, (20, int(50 * 8 / f)), cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 0), 5, cv2.LINE_AA)
+    cv2.putText(rgb, label, (20, int(50 * 8 / f)), cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 255), 1, cv2.LINE_AA)
     cv2.imwrite(str(out_png), rgb, [cv2.IMWRITE_PNG_COMPRESSION, 6])
     return {"z": z, "threshold": thr, "mask_fraction_of_tissue": float(frac), "png": out_png.name}
 
@@ -203,15 +204,20 @@ def main(argv=None):
     ap.add_argument("--windows", type=int, default=25)
     ap.add_argument("--boxes")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--output-dir", help="the dataset's output_dir, if not the config's (e.g. mounted elsewhere)")
+    ap.add_argument("--method", choices=["classifier", "score"], help="refmask.method (default: the config's, else classifier)")
+    ap.add_argument("--scale", type=int, default=4, help="overlay pyramid scale (4: 128 nm, 3: 64 nm)")
     a = ap.parse_args(argv)
-    cfg = load_config(a.config)
+    cfg = load_config(a.config, output_dir=a.output_dir)
+    if a.method:
+        cfg.setdefault("refmask", {})["method"] = a.method
     ds = Dataset(cfg, a.volume)
     name = a.name or cfg.get("name", Path(a.config).stem)
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     res = {"name": name, "volume": a.volume, "settings": ds.settings}
     given = json.loads(Path(a.boxes).read_text()) if a.boxes else []
-    res["overlays"] = [overlay(ds, z, out / f"{name}_z{z}.png", name, given) for z in a.overlay]
+    res["overlays"] = [overlay(ds, z, out / f"{name}_z{z}.png", name, given, a.scale) for z in a.overlay]
     for o in res["overlays"]:
         print(f"overlay z {o['z']}: mask {100 * o['mask_fraction_of_tissue']:.0f}% of tissue, threshold "
               f"{o['threshold']:.2f}", flush=True)
