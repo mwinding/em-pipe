@@ -161,10 +161,16 @@ intensity:
     per: slice               # slice: the width (contrast) and the brightness shift follow the reference tissue slowly
                              # along z (smooth_slices, ramp_slices; restarting at each block) | segment: one width and
                              # one shift per block (a segment, split at breaks), the median of its samples
-    breaks: []               # z where a new block starts within a segment (e.g. a setting changed mid-run)
+    breaks: []               # z where a new block starts within a segment; rarely needed with adapt (it follows a
+                             # mid-run step by itself)
     brightness: tissue       # tissue: position follows every slice's tissue (as the median window), shifted so the
                              # reference tissue's median is at median | reference: from the reference tissue itself
-    smooth_slices: 2001      # per: slice: running median of the sampled stats over z (slices)
+    smooth_slices: 2001      # per: slice: running median of the sampled stats over z (slices); with adapt, the longest
+    adapt: true              # per: slice: the window is chosen at every sample from the data: smooth_slices where the
+                             # samples only scatter by their noise or drift slowly, shorter where they change faster
+                             # (a step, the microscope settling at a segment's start), so the levels follow; the QC
+                             # lists and shades where | false: smooth_slices everywhere
+    adapt_sigmas: 2.5        # adapt: how many standard errors a longer window's estimate may differ by
     ramp_slices: 129         # running mean over z after interpolation (no kinks at the samples)
     min_cells: 20            # samples with fewer reference cells don't count
     boundary_slices: 300     # QC: samples within this many slices each side of a segment change

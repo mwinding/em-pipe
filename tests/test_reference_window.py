@@ -146,3 +146,51 @@ def test_tissue_brightness_follows_a_slow_drift_within_a_block():
     assert abs(g_slow[2999] - g_slow[3000]) < 4                # no step into the next block
     # the shift changes slowly: the window still follows the fast tissue level slice by slice
     assert np.abs(np.diff(slow["L"].to_numpy() - level)[:2990]).max() < 2.0
+
+
+def _samples(fn, n=6000, every=64, noise=0.015, seed=0):
+    rng = np.random.default_rng(seed)
+    pos = np.arange(0, n, every, dtype=float)
+    return pos, fn(pos) * (1 + rng.normal(0, noise, len(pos))), np.arange(n, dtype=float)
+
+
+def test_sample_noise_ignores_slow_drift():
+    pos, v, _ = _samples(lambda p: 1 + 0.07 * p / 6000, noise=0.015)
+    assert abs(intensity.sample_noise([(pos, v)]) - 0.015) < 0.004
+
+
+def test_follow_samples_keeps_the_long_window_on_steady_or_slowly_drifting_samples():
+    """Noise and a slow drift only: the longest window everywhere (as smooth_samples), no flicker."""
+    pos, v, allp = _samples(lambda p: 1 + 0.07 * p / 6000)
+    sigma = intensity.sample_noise([(pos, v)])
+    curve, (sp, used) = intensity.follow_samples(pos, v, allp, 2001, 129, sigma, 2.5)
+    assert np.mean(used >= 2000) > 0.9
+    fixed = intensity.smooth_samples(pos, v, allp, 2001, 129)
+    assert np.abs(curve - fixed).max() < 0.01
+    assert np.abs(np.diff(curve)).max() < 2e-4
+
+
+def test_follow_samples_follows_a_fast_settling_at_the_block_start():
+    """+15 % at a block's start settling over ~300 slices (the microscope after a pause): the fixed window,
+    looking only forward there, leaves the first slices ~10 % off; the adaptive one follows."""
+    truth = lambda p: 1 + 0.15 * np.exp(-p / 300)
+    pos, v, allp = _samples(truth)
+    sigma = intensity.sample_noise([(pos, v)])
+    curve, (sp, used) = intensity.follow_samples(pos, v, allp, 2001, 129, sigma, 2.5)
+    fixed = intensity.smooth_samples(pos, v, allp, 2001, 129)
+    start = allp < 200
+    assert np.abs(fixed[start] - truth(allp[start])).max() > 0.06
+    assert np.abs(curve[start] - truth(allp[start])).max() < 0.05      # from ~0.12: what 1.5 % noise per sample allows
+    assert used[-1] >= 2000                                    # the long window once settled
+
+
+def test_follow_samples_follows_a_step_without_smearing_it():
+    """A 8 % step mid-block (a setting changed): followed within a few samples, steady on both sides."""
+    truth = lambda p: np.where(p < 3000, 1.0, 1.08)
+    pos, v, allp = _samples(truth, seed=2)
+    sigma = intensity.sample_noise([(pos, v)])
+    curve, _ = intensity.follow_samples(pos, v, allp, 2001, 129, sigma, 2.5)
+    far = np.abs(allp - 3000) > 400
+    assert np.abs(curve[far] - truth(allp[far])).max() < 0.02
+    fixed = intensity.smooth_samples(pos, v, allp, 2001, 129)
+

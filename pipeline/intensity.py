@@ -114,7 +114,13 @@ DEFAULTS = {
             # the reference tissue's median is at reference.median (per block, or slowly along z with
             # per: slice) | reference: set from the reference tissue's own median
             "brightness": "tissue",
-            "smooth_slices": 2001,  # per: slice: running median of the sampled stats over z (slices)
+            "smooth_slices": 2001,  # per: slice: running median of the sampled stats over z (slices); with adapt, the longest
+            # adapt (per: slice): the window is chosen at every sample from the data (follow_samples): as long as
+            # smooth_slices where the samples only scatter by their noise or drift slowly, shorter where they change
+            # faster than the noise allows (a step, or the microscope settling at a segment's start), so the levels
+            # follow it; the QC lists where | false: smooth_slices everywhere
+            "adapt": True,
+            "adapt_sigmas": 2.5,  # adapt: how many standard errors a longer window's estimate may differ by
             "ramp_slices": 129,   # running mean over z after interpolation (no kinks at the samples)
             "min_cells": 20,      # samples with fewer reference cells don't count
             "boundary_slices": 300,   # QC: samples within this many slices each side of a segment change
@@ -329,13 +335,98 @@ def smooth_samples(pos, values, all_pos, smooth, ramp):
     pos, values = pos[order], values[order]
     half = max(float(smooth), 1.0) / 2
     med = np.array([np.median(values[np.abs(pos - p) <= half]) for p in pos])
-    curve = np.interp(all_pos, pos, med)
+    return _ramp(np.interp(all_pos, pos, med), ramp)
+
+
+def _ramp(curve, ramp):
+    """Running mean over +-ramp/2 positions (edges held), so an interpolated curve has no kinks."""
     k = int(ramp) // 2
     if k > 0 and len(curve) > 1:
         padded = np.pad(curve, k, mode="edge")
         csum = np.cumsum(np.r_[0.0, padded])
         curve = (csum[2 * k + 1:] - csum[:-(2 * k + 1)]) / (2 * k + 1)
     return curve
+
+
+def sample_noise(series):
+    """Robust SD of the measurement noise of sampled values, from the changes between consecutive
+    samples within each series (one per block, as (pos, values)): the MAD of the changes / sqrt(2).
+    Slow real changes hardly move consecutive differences, so this is the noise from slice to slice."""
+    d = []
+    for pos, v in series:
+        pos, v = np.asarray(pos, float), np.asarray(v, float)
+        ok = np.isfinite(v)
+        vv = v[ok][np.argsort(pos[ok])]
+        if len(vv) > 1:
+            d.append(np.diff(vv))
+    if not d:
+        return float("nan")
+    d = np.concatenate(d)
+    return float(1.4826 * np.median(np.abs(d - np.median(d))) / np.sqrt(2))
+
+
+def follow_samples(pos, values, all_pos, smooth, ramp, sigma, sigmas):
+    """smooth_samples with the window chosen at every sample from the data: the longest window up to
+    ``smooth`` slices whose estimate agrees with every shorter window's, within ``sigmas`` times its
+    uncertainty (intersection of confidence intervals: Goldenshluger & Nemirovski 1997, Katkovnik 1999).
+
+    At each sample the half-window grows from about 1.5 sample spacings to smooth/2 in steps of sqrt(2);
+    a window wholly inside the block estimates by the median of its samples (uncertainty 1.25 sigma /
+    sqrt(n); a median keeps a step sharp), one cut off by the block's edge by a robust line through them
+    (_local_line), so that at a block's start, where the window can only look forward, it doesn't lag
+    behind a fast change. Where the
+    samples only scatter by their noise ``sigma`` (or drift slowly, which a symmetric window doesn't
+    bias), every window agrees and the longest is used, as smooth_samples would; where they change
+    faster than the noise allows (a step, or a fast settling at a block's start, where the window can
+    only look one way), the longer windows disagree and a shorter one is kept, so the curve follows.
+    Then interpolated and averaged over ``ramp`` as smooth_samples. Returns (curve, (sample positions,
+    window used in slices)); with no usable noise estimate the window is ``smooth`` throughout."""
+    pos, values = np.asarray(pos, float), np.asarray(values, float)
+    ok = np.isfinite(values)
+    pos, values = pos[ok], values[ok]
+    if not len(pos):
+        return None, None
+    order = np.argsort(pos)
+    pos, values = pos[order], values[order]
+    h_max = max(float(smooth), 1.0) / 2
+    if not (np.isfinite(sigma) and sigma > 0 and len(pos) > 2):
+        return smooth_samples(pos, values, all_pos, smooth, ramp), (pos, np.full(len(pos), 2 * h_max))
+    h_min = min(1.5 * float(np.median(np.diff(pos))), h_max)
+    ladder = list(h_min * np.sqrt(2.0) ** np.arange(int(np.floor(np.log(h_max / h_min) / np.log(np.sqrt(2.0)))) + 1))
+    if ladder[-1] < h_max:
+        ladder.append(h_max)
+    est, used = np.empty(len(pos)), np.empty(len(pos))
+    first, last = pos[0], pos[-1]
+    for i, p in enumerate(pos):
+        lo, hi = -np.inf, np.inf
+        for h in ladder:
+            sel = np.abs(pos - p) <= h
+            if p - h >= first and p + h <= last:      # the whole window inside the block: its median (keeps steps)
+                e, se = float(np.median(values[sel])), 1.2533 * sigma / np.sqrt(int(sel.sum()))
+            else:                                     # cut off at the block's edge: a robust line, so no lag
+                e, se = _local_line(pos[sel] - p, values[sel], sigma)
+            u = float(sigmas) * se
+            lo, hi = max(lo, e - u), min(hi, e + u)
+            if lo > hi and h > ladder[0]:
+                break
+            est[i], used[i] = e, 2 * h
+    return _ramp(np.interp(all_pos, pos, est), ramp), (pos, used)
+
+
+def _local_line(x, y, sigma):
+    """(value at x = 0, its standard error) of a robust straight line through (x, y): Theil-Sen slope
+    (median of the pairwise slopes), intercept the median of y - slope x. In a symmetric window this is
+    the window's level, as a median would give; at a block's edge, where the window only looks one way,
+    it follows a trend instead of lagging behind it. Fewer than 3 points or one x: the median."""
+    n = len(y)
+    if n < 3 or np.ptp(x) == 0:
+        return float(np.median(y)), 1.2533 * sigma / np.sqrt(n)
+    dx, dy = np.subtract.outer(x, x), np.subtract.outer(y, y)
+    up = np.triu(np.ones((n, n), bool), 1) & (dx != 0)
+    slope = float(np.median(dy[up] / dx[up]))
+    e = float(np.median(y - slope * x))
+    sxx = float(np.sum((x - x.mean()) ** 2))
+    return e, 1.1 * sigma * np.sqrt(1.0 / n + x.mean() ** 2 / sxx)
 
 
 def load_refstats(cfg):
@@ -358,7 +449,16 @@ def reference_windows(cfg, df):
     st = st.assign(spread=spread(st, r["measure"]))
     per_z = per_z.merge(st[["z", "median", "spread"]], on="z", how="left")
     per_z["block"] = block_ids(per_z, r["breaks"])
-    cols = {k: np.full(len(per_z), np.nan) for k in ("m_s", "c_s")}
+    cols = {k: np.full(len(per_z), np.nan) for k in ("m_s", "c_s", "win_c")}
+    adapt = r["per"] == "slice" and bool(r.get("adapt", True))
+    # The sampled stats relative to their block's median, so one noise level fits blocks of any level
+    rel = {}
+    for b, g in per_z.groupby("block"):
+        okb = g["median"].notna() & g["spread"].notna()
+        if okb.any():
+            rel[b] = {k: g[k] / float(g.loc[okb, k].median()) for k in ("median", "spread")}
+    noise = {k: sample_noise((per_z.loc[v[k].index, "pos"], v[k]) for v in rel.values()) if adapt else float("nan")
+             for k in ("median", "spread")}
     for b, g in per_z.groupby("block"):
         ok = g["median"].notna() & g["spread"].notna()
         span = f"block {b} (segment {g['segment'].iloc[0]}, z {g['z'].min()}-{g['z'].max()})"
@@ -367,19 +467,32 @@ def reference_windows(cfg, df):
             continue
         if ok.sum() < 3:
             log.warning("%s: only %d sampled slices with reference tissue", span, int(ok.sum()))
+        p_all = g["pos"].to_numpy(float)
         if r["per"] == "segment":
             m, cc = float(g.loc[ok, "median"].median()), float(g.loc[ok, "spread"].median())
+            win = np.nan
+        elif adapt:
+            sc = {k: float(g.loc[ok, k].median()) for k in ("median", "spread")}
+            m, _ = follow_samples(g["pos"], rel[b]["median"], p_all, r["smooth_slices"], r["ramp_slices"],
+                                  noise["median"], r["adapt_sigmas"])
+            cc, (sp, used) = follow_samples(g["pos"], rel[b]["spread"], p_all, r["smooth_slices"], r["ramp_slices"],
+                                            noise["spread"], r["adapt_sigmas"])
+            m, cc = m * sc["median"], cc * sc["spread"]
+            win = np.interp(p_all, sp, used)
         else:
-            m = smooth_samples(g["pos"], g["median"], g["pos"].to_numpy(float), r["smooth_slices"], r["ramp_slices"])
-            cc = smooth_samples(g["pos"], g["spread"], g["pos"].to_numpy(float), r["smooth_slices"], r["ramp_slices"])
-        cols["m_s"][g.index], cols["c_s"][g.index] = m, cc
-    per_z["m_s"], per_z["c_s"] = cols["m_s"], cols["c_s"]
+            m = smooth_samples(g["pos"], g["median"], p_all, r["smooth_slices"], r["ramp_slices"])
+            cc = smooth_samples(g["pos"], g["spread"], p_all, r["smooth_slices"], r["ramp_slices"])
+            win = float(r["smooth_slices"])
+        cols["m_s"][g.index], cols["c_s"][g.index], cols["win_c"][g.index] = m, cc, win
+    per_z["m_s"], per_z["c_s"], per_z["win_c"] = cols["m_s"], cols["c_s"], cols["win_c"]
+    per_z["noise_c"] = noise["spread"]
     if r["brightness"] == "tissue":
         per_z = _tissue_brightness(cfg, df, per_z, r)
     else:
         per_z["L"], per_z["H"] = window_from_stats(per_z["m_s"], per_z["c_s"], r["median"], r["contrast"])
-    df = df.drop(columns=[c for c in ("m_s", "c_s", "L", "H") if c in df]).merge(
-        per_z[["z", "m_s", "c_s", "L", "H"]], on="z", how="left")
+    extra = [c for c in ("win_c", "win_a", "noise_c", "noise_a") if c in per_z]
+    df = df.drop(columns=[c for c in ("m_s", "c_s", "L", "H", *extra) if c in df]).merge(
+        per_z[["z", "m_s", "c_s", "L", "H", *extra]], on="z", how="left")
     df["ref"] = df["L"].notna()
     g = df["g"].fillna(1.0)
     o = df["o"].fillna(0.0)
@@ -406,21 +519,31 @@ def _tissue_brightness(cfg, df, per_z, r):
         J = np.zeros(len(per_z))
     W = 255.0 * per_z["c_s"].to_numpy(float) / float(r["contrast"])
     follow = r.get("per", "segment") == "slice"
-    L = np.full(len(per_z), np.nan)
+    adapt = follow and bool(r.get("adapt", True))
+    L, win = np.full(len(per_z), np.nan), np.full(len(per_z), np.nan)
+    # per block and sampled slice: the shift that would put its reference tissue exactly at
+    # reference.median, in greys of the window (so one noise level fits blocks of any width)
+    needs = {}
     for b, g in per_z.groupby("block"):
         i = g.index.to_numpy()
         ok = g["median"].notna().to_numpy() & np.isfinite(W[i])
-        if not ok.any():
-            continue
-        # per sampled slice: the shift that would put its reference tissue exactly at reference.median
-        need = float(r["median"]) * W[i][ok] / 255.0 - (g["median"].to_numpy()[ok] - M[i][ok] - J[i][ok])
-        if follow:
-            pos = g["pos"].to_numpy(float)
-            a = smooth_samples(pos[ok], need, pos, r["smooth_slices"], r.get("ramp_slices", 0))
+        if ok.any():
+            need = float(r["median"]) * W[i][ok] / 255.0 - (g["median"].to_numpy()[ok] - M[i][ok] - J[i][ok])
+            needs[b] = (i, ok, g["pos"].to_numpy(float), 255.0 * need / W[i][ok])
+    noise = sample_noise((p[ok], v) for i, ok, p, v in needs.values()) if adapt else float("nan")
+    for b, (i, ok, pos, need_g) in needs.items():
+        if adapt:
+            a_g, (sp, used) = follow_samples(pos[ok], need_g, pos, r["smooth_slices"], r.get("ramp_slices", 0),
+                                             noise, r.get("adapt_sigmas", 2.5))
+            win[i] = np.interp(pos, sp, used)
+        elif follow:
+            a_g = smooth_samples(pos[ok], need_g, pos, r["smooth_slices"], r.get("ramp_slices", 0))
+            win[i] = float(r["smooth_slices"])
         else:
-            a = np.median(need)
-        L[i] = M[i] - a
+            a_g = np.median(need_g)
+        L[i] = M[i] - a_g * W[i] / 255.0
     per_z["L"], per_z["H"] = L, L + W
+    per_z["win_a"], per_z["noise_a"] = win, noise
     per_z["m_s"] = per_z["L"] + float(r["median"]) * W / 255.0     # the value each window puts at reference.median
     return per_z
 
@@ -446,8 +569,9 @@ def reference_qc(cfg, df, old=None):
     per-sample table. ``old``: the levels to compare with (z, tile, lo, hi), e.g. the rendered volume's."""
     r = reference_settings(cfg)
     st = load_refstats(cfg)
+    extra = {c: (c, "first") for c in ("win_c", "win_a", "noise_c", "noise_a") if c in df}
     per_z = df.groupby("z").agg(segment=("segment", "first"), pos=("pos", "first"), m_s=("m_s", "first"),
-                                c_s=("c_s", "first"), L=("L", "first"), H=("H", "first")).reset_index()
+                                c_s=("c_s", "first"), L=("L", "first"), H=("H", "first"), **extra).reset_index()
     new_w = common_window(df)
     windows = {"new": new_w}
     if old is not None:
@@ -468,9 +592,16 @@ def reference_qc(cfg, df, old=None):
         if qcols:
             samp[f"clip_lo_{k}"] = [_cdf(lo, row, qcols) for lo, (_, row) in zip(Lw, samp.iterrows())]
             samp[f"clip_hi_{k}"] = [1 - _cdf(hi, row, qcols) for hi, (_, row) in zip(Hw, samp.iterrows())]
-    out = {"reference": {k: r[k] for k in ("median", "contrast", "measure", "smooth_slices", "ramp_slices")},
+    out = {"reference": {k: r[k] for k in ("median", "contrast", "measure", "per", "smooth_slices", "ramp_slices",
+                                           "adapt", "adapt_sigmas")},
            "samples": int(len(samp)), "slices": int(len(per_z)),
            "slices_without_reference": int(per_z["L"].isna().sum())}
+    # Where the levels follow the neuropil faster than smooth_slices (adapt), and the noise that decided it
+    if "noise_c" in per_z and np.isfinite(per_z["noise_c"].iloc[0]):
+        out["sample_noise"] = {"width_pct": round(100 * float(per_z["noise_c"].iloc[0]), 2),
+                               "brightness_greys": round(float(per_z["noise_a"].iloc[0]), 2) if "noise_a" in per_z else None}
+    out["faster"] = {name: _shortened(per_z, col, float(r["smooth_slices"]))
+                     for name, col in (("width", "win_c"), ("brightness", "win_a")) if col in per_z}
     band = float(r["band_pct"]) / 100
     for k in windows:
         g_, c_ = samp[f"grey_{k}"], samp[f"contrast_{k}"]
@@ -509,10 +640,32 @@ def reference_qc(cfg, df, old=None):
     return out, samp
 
 
+def _shortened(per_z, col, smooth):
+    """z ranges (within a block) where the window used at ``col`` is shorter than ``smooth`` slices,
+    with the shortest window in each: [{"z0", "z1", "shortest_window"}]."""
+    win = per_z[col].to_numpy(float)
+    short = np.isfinite(win) & (win < 0.99 * smooth)
+    out, start = [], None
+    blocks = per_z["block"].to_numpy() if "block" in per_z else np.zeros(len(per_z))
+    for i in range(len(per_z) + 1):
+        end_run = i == len(per_z) or not short[i] or (start is not None and blocks[i] != blocks[start])
+        if start is not None and end_run:
+            out.append({"z0": int(per_z["z"].iloc[start]), "z1": int(per_z["z"].iloc[i - 1]),
+                        "shortest_window": int(round(np.nanmin(win[start:i])))})
+            start = None
+        if i < len(per_z) and short[i] and start is None:
+            start = i
+    return out
+
+
 def plot_reference(cfg, samp, qc, path):
     r = reference_settings(cfg)
     fig, axes = plt.subplots(3, 1, sharex=True, figsize=(12, 9.5), layout="constrained")
     band = float(r["band_pct"]) / 100
+    for ax, name in ((axes[0], "brightness"), (axes[1], "width")):
+        for k, rng in enumerate((qc.get("faster") or {}).get(name, [])):
+            ax.axvspan(rng["z0"], rng["z1"], color="#f5a623", alpha=0.18, lw=0,
+                       label="levels follow faster here" if k == 0 else None)
     for ax, col, target, label in ((axes[0], "grey", float(r["median"]), "neuropil median (grey)"),
                                    (axes[1], "contrast", float(r["contrast"]), f"neuropil {r['measure']} (greys)")):
         ax.axhspan(target * (1 - band), target * (1 + band), color="#1baf7a", alpha=0.15, lw=0,
@@ -800,6 +953,10 @@ def main(argv=None):
             log.warning("reference window: %s", flag)
         log.info("reference window: predicted neuropil grey p5/p50/p95 %s, width p5/p50/p95 %s",
                  qc["predicted_new"]["median_grey_p5_p50_p95"], qc["predicted_new"]["contrast_p5_p50_p95"])
+        for name, rngs in (qc.get("faster") or {}).items():
+            for g in rngs:
+                log.info("reference window: %s follows the neuropil faster at z %d-%d (window down to %d slices)",
+                         name, g["z0"], g["z1"], g["shortest_window"])
     log.info("levels for %d (z, tile) over %d slices", len(df), df["z"].nunique())
     return 0
 
