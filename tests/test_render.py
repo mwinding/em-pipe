@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import re
+import shutil
 import sys
 import types
 from datetime import datetime
@@ -352,6 +353,11 @@ def test_tasks_markers_and_reinit(truth, full, tmp_path):
     np.testing.assert_array_equal(_read(out), ref)
     assert render.main(["init", *args, "--overwrite"]) == 0
     assert not done.exists() and not _read(out).any()
+    # The volume deleted by hand: changed settings start a new one without --overwrite.
+    shutil.rmtree(out / "synthetic.ome.zarr")
+    cfg, _ = _setup(tmp_path, truth, render={"blend_px": 32})
+    assert render.main(["init", *args]) == 0
+    assert (out / "synthetic.ome.zarr" / "zarr.json").exists()
 
 
 def test_clahe_keeps_no_data_zero(truth, tmp_path):

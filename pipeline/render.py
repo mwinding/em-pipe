@@ -9,7 +9,8 @@ live in the volume's own work folder ``render/<name without .ome.zarr>/`` (``vol
 so several renders, e.g. a 32 nm overview and a full-resolution region, can share an output_dir. ``run`` (array over
 z-slabs of ``render.slab`` planes = one shard) renders slabs from that frozen plan only, so a
 config edit between init and run cannot mix geometries; re-running init detects changed
-inputs or settings via the digest in render.json. A finished slab leaves
+inputs or settings via the digest in render.json (refusing to re-create a volume that exists without
+--overwrite; a deleted volume's leftover render.json doesn't count). A finished slab leaves
 ``<work folder>/done/slab_{k:06d}`` holding that digest; markers of any other plan do not count.
 
 Grey levels of a tile slice: raw values (destreaked when enabled), divided by the tile's flat-field
@@ -381,6 +382,9 @@ def init(cfg, overwrite=False):
     wdir.mkdir(parents=True, exist_ok=True)
     meta_path = wdir / "render.json"
     old = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    if old and not root.exists():   # the volume was deleted: its record and markers describe nothing
+        log.info("%s is from a volume that no longer exists (%s): starting a new one", meta_path, root)
+        old = {}
     if old and not overwrite:
         if old.get("digest") == meta["digest"] and (root / "zarr.json").exists():
             log.info("%s matches the current inputs and settings: volume kept", meta_path)
