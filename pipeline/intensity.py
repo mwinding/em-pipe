@@ -96,7 +96,12 @@ DEFAULTS = {
             # p5_p95: the width between the 5th and 95th percentile of the slice's reference tissue (its
             # histogram's width) | lc32: its local contrast, the mean SD in 8 px windows at 32 nm
             "measure": "p5_p95",
-            "smooth_slices": 601,   # running median of the sampled stats over z (slices; restarts at segment changes)
+            # segment: one window per block (a segment, split at ``breaks``) from the median of its sampled
+            # slices, so nothing changes from slice to slice within it | slice: follow the samples along z
+            # (running median over smooth_slices, interpolated, running mean over ramp_slices)
+            "per": "segment",
+            "breaks": [],         # z where a new block starts within a segment (e.g. a setting changed mid-run)
+            "smooth_slices": 601,   # per: slice: running median of the sampled stats over z (slices)
             "ramp_slices": 129,   # running mean over z after interpolation (no kinks at the samples)
             "min_cells": 20,      # samples with fewer reference cells don't count
             "boundary_slices": 300,   # QC: samples within this many slices each side of a segment change
@@ -249,6 +254,9 @@ def reference_settings(cfg):
             raise ValueError(f"intensity.window: reference needs intensity.reference.{key} (a positive number)")
     if r["measure"] not in MEASURES:
         raise ValueError(f"intensity.reference.measure must be one of {MEASURES}, not {r['measure']!r}")
+    if r["per"] not in ("segment", "slice"):
+        raise ValueError(f"intensity.reference.per must be segment or slice, not {r['per']!r}")
+    r["breaks"] = sorted(int(b) for b in (r.get("breaks") or []))
     if not 0 < float(r["median"]) < 255:
         raise ValueError("intensity.reference.median must be in (0, 255)")
     return r
@@ -265,6 +273,18 @@ def spread(st, measure):
     if measure == "lc32":
         return st["lc32"]
     raise ValueError(f"unknown measure {measure!r} (one of {MEASURES})")
+
+
+def block_ids(per_z, breaks=None):
+    """Per row of per_z (sorted by z, with segment): the block its window is set over. A new block
+    starts at every segment change and at the first slice at or after each z in ``breaks`` (a change
+    within a segment, e.g. a microscope setting changed mid-run)."""
+    z = per_z["z"].to_numpy()
+    seg = per_z["segment"].to_numpy()
+    new = np.r_[True, seg[1:] != seg[:-1]]
+    for b in breaks or []:
+        new |= (z >= b) & np.r_[True, z[:-1] < b]
+    return np.cumsum(new) - 1
 
 
 def window_from_stats(m, c, median_ref, contrast_ref):
@@ -320,18 +340,21 @@ def reference_windows(cfg, df):
     per_z = df.groupby("z").agg(segment=("segment", "first"), pos=("pos", "first")).reset_index()
     st = st.assign(spread=spread(st, r["measure"]))
     per_z = per_z.merge(st[["z", "median", "spread"]], on="z", how="left")
+    per_z["block"] = block_ids(per_z, r["breaks"])
     cols = {k: np.full(len(per_z), np.nan) for k in ("m_s", "c_s")}
-    for seg, g in per_z.groupby("segment"):
-        m = smooth_samples(g["pos"], g["median"], g["pos"].to_numpy(float), r["smooth_slices"], r["ramp_slices"])
-        cc = smooth_samples(g["pos"], g["spread"], g["pos"].to_numpy(float), r["smooth_slices"], r["ramp_slices"])
-        if m is None or cc is None:
-            log.warning("segment %s (z %d-%d) has no sampled slice with reference tissue: it keeps the median window",
-                        seg, g["z"].min(), g["z"].max())
+    for b, g in per_z.groupby("block"):
+        ok = g["median"].notna() & g["spread"].notna()
+        span = f"block {b} (segment {g['segment'].iloc[0]}, z {g['z'].min()}-{g['z'].max()})"
+        if not ok.any():
+            log.warning("%s has no sampled slice with reference tissue: it keeps the median window", span)
             continue
-        n = int(g["median"].notna().sum())
-        if n < 3:
-            log.warning("segment %s (z %d-%d): only %d sampled slices with reference tissue", seg, g["z"].min(),
-                        g["z"].max(), n)
+        if ok.sum() < 3:
+            log.warning("%s: only %d sampled slices with reference tissue", span, int(ok.sum()))
+        if r["per"] == "segment":
+            m, cc = float(g.loc[ok, "median"].median()), float(g.loc[ok, "spread"].median())
+        else:
+            m = smooth_samples(g["pos"], g["median"], g["pos"].to_numpy(float), r["smooth_slices"], r["ramp_slices"])
+            cc = smooth_samples(g["pos"], g["spread"], g["pos"].to_numpy(float), r["smooth_slices"], r["ramp_slices"])
         cols["m_s"][g.index], cols["c_s"][g.index] = m, cc
     per_z["m_s"], per_z["c_s"] = cols["m_s"], cols["c_s"]
     per_z["L"], per_z["H"] = window_from_stats(per_z["m_s"], per_z["c_s"], r["median"], r["contrast"])
@@ -371,7 +394,7 @@ def flicker(per_z, Lc, Hc):
     L, H = Lc.to_numpy(float), Hc.to_numpy(float)
     d_med = np.abs(grey(m[:-1], L[1:], H[1:]) - grey(m[:-1], L[:-1], H[:-1]))
     d_con = np.abs(255 * c[:-1] / (H[1:] - L[1:]) - 255 * c[:-1] / (H[:-1] - L[:-1]))
-    seg = per_z["segment"].to_numpy()
+    seg = per_z["block" if "block" in per_z else "segment"].to_numpy()
     return pd.DataFrame({"z": per_z["z"].to_numpy()[1:], "d_median": d_med, "d_contrast": d_con,
                          "boundary": seg[1:] != seg[:-1]})
 
@@ -390,7 +413,8 @@ def reference_qc(cfg, df, old=None):
         if len(o):
             windows["old"] = common_window(o)
     qcols = [c for c in st.columns if c.startswith("tq_")]
-    samp = st.merge(per_z[["z", "segment", "pos"]], on="z", how="inner")
+    per_z["block"] = block_ids(per_z, r["breaks"])
+    samp = st.merge(per_z[["z", "segment", "block", "pos"]], on="z", how="inner")
     samp = samp[samp["n_cells"] >= int(r["min_cells"])].copy()
     for k, w in windows.items():
         Lw, Hw = w["Lc"].reindex(samp["z"]).to_numpy(), w["Hc"].reindex(samp["z"]).to_numpy()
@@ -432,12 +456,12 @@ def reference_qc(cfg, df, old=None):
                                "slices_over_warn": int((inner["d_median"] > float(r["flicker_warn"])).sum())}
     # Segment changes: each side's neuropil grey from the samples within boundary_slices of the change
     steps = []
-    bpos = per_z.loc[per_z["segment"].ne(per_z["segment"].shift()) & (per_z.index > 0)]
+    bpos = per_z.loc[per_z["block"].ne(per_z["block"].shift()) & (per_z.index > 0)]
     half = int(r["boundary_slices"])
     for i, row in bpos.iterrows():
         before, after = per_z.loc[i - 1], row
-        side = {"before": samp[(samp["segment"] == before["segment"]) & (samp["pos"] > before["pos"] - half)],
-                "after": samp[(samp["segment"] == after["segment"]) & (samp["pos"] < after["pos"] + half)]}
+        side = {"before": samp[(samp["block"] == before["block"]) & (samp["pos"] > before["pos"] - half)],
+                "after": samp[(samp["block"] == after["block"]) & (samp["pos"] < after["pos"] + half)]}
         rec = {"z": int(after["z"]), "segments": [int(before["segment"]), int(after["segment"])],
                "samples": [int(len(side["before"])), int(len(side["after"]))]}
         for k in windows:

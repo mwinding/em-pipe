@@ -14,6 +14,10 @@ which puts that slice's neuropil at the standard (the slice's own numbers, no sm
 Two crops per slice are shown before and after: one inside the neuropil, one across the neuropil /
 cell-body border. Pixels already at 0 or 255 in the rendered volume stay at the ends.
 
+With spec "mode": "levels" the crops are instead mapped exactly from each volume's levels to the levels a
+variant config wrote (intensity.output, e.g. intensity.window: reference): what a re-render would give.
+"z" may then be a list, and "crop_kinds" (["inside", "border"]) chooses the crops.
+
 Spec (JSON): {"median": 150, "width": 150, "crop_um": 10, "windows": 24, "seed": 0, "measure": "slice",
               "items": [{"name": "35h", "config": "...yaml", "volume": "..._8nm.ome.zarr", "z": 8848,
                          "region": [x0, y0, x1, y1] or null}, ...]}
@@ -106,8 +110,44 @@ def pick_crops(neuropil, tissue, size, rng):
     return out
 
 
+def _segments(cfg):
+    """z -> segment (work/check/slices.csv)."""
+    import pandas as pd
+    from pipeline.config import step_path
+    sl = pd.read_csv(step_path(cfg, "check", "slices.csv"), usecols=["z", "segment"])
+    return sl.drop_duplicates("z").set_index("z")["segment"]
+
+
+class LevelsMap:
+    """The exact change from a volume's levels to a variant's levels (e.g. intensity.window: reference with
+    intensity.output): per z, both common-scale windows, so a rendered grey g maps to the grey render would
+    write with the new levels: 255 (Lo + g (Ho - Lo) / 255 - Ln) / (Hn - Ln)."""
+
+    def __init__(self, cfg):
+        import pandas as pd
+        from pipeline import intensity
+        bal = intensity.balanced_scale(cfg)[["z", "tile", "g", "o"]]
+        def window(path):
+            lv = pd.read_csv(path, dtype={"tile": str})[["z", "tile", "lo", "hi"]].merge(bal, on=["z", "tile"])
+            return intensity.common_window(lv)
+        self.old_path, self.new_path = intensity.levels_path(cfg, output=""), intensity.levels_path(cfg)
+        if self.old_path == self.new_path:
+            raise ValueError("the config has no intensity.output: nothing to compare its levels with")
+        self.old, self.new = window(self.old_path), window(self.new_path)
+        self.segment = _segments(cfg)
+
+    def __call__(self, g, z):
+        Lo, Ho = self.old.loc[z, ["Lc", "Hc"]]
+        Ln, Hn = self.new.loc[z, ["Lc", "Hc"]]
+        u = Lo + g.astype(np.float64) * (Ho - Lo) / 255.0
+        return np.clip(255.0 * (u - Ln) / (Hn - Ln), 0, 255), float((Ho - Lo) / (Hn - Ln))
+
+
 def standardise(g, med, width, med_std, width_std):
     return np.clip(med_std + (g.astype(np.float64) - med) * width_std / width, 0, 255)
+
+
+_maps = {}
 
 
 def main(argv=None):
@@ -121,33 +161,52 @@ def main(argv=None):
     crop = int(round(float(spec.get("crop_um", 10)) / 0.008))
     rng = np.random.default_rng(int(spec.get("seed", 0)))
     rows, results = [], []
-    for it in spec["items"]:
+    mode = spec.get("mode", "measure")      # measure: the slice's own numbers | levels: a variant's levels
+    kinds = spec.get("crop_kinds", ["inside", "border"])
+    for it, z in ((it, int(z)) for it in spec["items"] for z in (it["z"] if isinstance(it["z"], list) else [it["z"]])):
         defaults = deep_merge(deep_merge(refmask.DEFAULTS, preview.DEFAULTS), {"refmask": {"method": "classifier"}})
+        if mode == "levels":
+            from pipeline import intensity, patchgrid, refstats, shading
+            for d in (intensity.DEFAULTS, shading.DEFAULTS, patchgrid.DEFAULTS, refstats.DEFAULTS):
+                defaults = deep_merge(defaults, d)
         cfg = load_config(it["config"], step_defaults=defaults)
         ds = Dataset(cfg, it["volume"])
-        z = int(it["z"])
+        lmap = None
+        if mode == "levels":
+            if it["config"] not in _maps:
+                _maps[it["config"]] = LevelsMap(cfg)
+            lmap = _maps[it["config"]]
         mask, bg, cov, _ = ds.volume_mask(z, F)
         ok = mask & region_mask(mask.shape, it.get("region"), F)
         tissue = cov & ~bg & region_mask(mask.shape, it.get("region"), F)
         arr = omezarr.open_scale(ds.root, 0)
         plane = ds.planes[z]
-        if spec.get("measure", "slice") == "slice":
-            num = neuropil_numbers_slice(arr, plane, ok)
+        if mode == "levels":
+            seg = int(lmap.segment.get(z, -1))
+            res = {"name": it["name"], "z": z, "mode": "levels", "segment": seg, "crops": []}
         else:
-            num = neuropil_numbers(arr, plane, ok, int(spec.get("windows", 24)), rng)
-        if num is None:
-            print(f"{it['name']} z {z}: no neuropil windows", flush=True)
-            continue
-        med, p5, p95, nwin = num
-        width = p95 - p5
-        res = {"name": it["name"], "z": z, "measure": spec.get("measure", "slice"), "n": nwin, "median": round(med, 1), "p5": round(p5, 1),
-               "p95": round(p95, 1), "width": round(width, 1), "scale": round(width_std / width, 3),
-               "shift_at_median": round(med_std - med, 1), "crops": []}
-        for kind, (y, x) in zip(("inside the neuropil", "neuropil / cell-body border"),
-                                pick_crops(mask, tissue, crop // F, rng)):
+            if spec.get("measure", "slice") == "slice":
+                num = neuropil_numbers_slice(arr, plane, ok)
+            else:
+                num = neuropil_numbers(arr, plane, ok, int(spec.get("windows", 24)), rng)
+            if num is None:
+                print(f"{it['name']} z {z}: no neuropil windows", flush=True)
+                continue
+            med, p5, p95, nwin = num
+            width = p95 - p5
+            res = {"name": it["name"], "z": z, "measure": spec.get("measure", "slice"), "n": nwin, "median": round(med, 1),
+                   "p5": round(p5, 1), "p95": round(p95, 1), "width": round(width, 1), "scale": round(width_std / width, 3),
+                   "shift_at_median": round(med_std - med, 1), "crops": []}
+        picks = dict(zip(("inside", "border"), pick_crops(mask, tissue, crop // F, rng)))
+        names = {"inside": "inside the neuropil", "border": "neuropil / cell-body border"}
+        for kind, (y, x) in ((names[k], picks[k]) for k in kinds if k in picks):
             Y, X = y * F, x * F
             g = np.asarray(arr[plane, Y:Y + crop, X:X + crop].read().result())
-            new = standardise(g, med, width, med_std, width_std)
+            if mode == "levels":
+                new, factor = lmap(g, z)
+                res["scale"] = round(factor, 3)
+            else:
+                new = standardise(g, med, width, med_std, width_std)
             data = g > 0
             clip = {"dark_now": float((g[data] == 0).mean()) if data.any() else 0.0,
                     "dark_std": float((new[data] <= 0).mean()), "bright_now": float((g[data] >= 255).mean()),
@@ -170,9 +229,13 @@ def plot(rows, med_std, width_std, spec, out_png):
     n = len(rows)
     fig, axes = plt.subplots(n, 2, figsize=(10, 5.2 * n), squeeze=False)
     for i, (name, z, kind, now, std, res, clip) in enumerate(rows):
-        for j, (img, title) in enumerate(((now, f"now: neuropil median {res['median']:.0f}, p5-p95 width {res['width']:.0f}"),
-                                          (std, f"standard {med_std:.0f} / {width_std:.0f}: "
-                                                f"contrast x{res['scale']:.2f}"))):
+        if res.get("mode") == "levels":
+            seg = f", segment {res['segment']}" if res.get("segment", -1) >= 0 else ""
+            titles = (f"now (current levels){seg}", f"new levels{seg}: contrast x{res['scale']:.2f}")
+        else:
+            titles = (f"now: neuropil median {res['median']:.0f}, p5-p95 width {res['width']:.0f}",
+                      f"standard {med_std:.0f} / {width_std:.0f}: contrast x{res['scale']:.2f}")
+        for j, (img, title) in enumerate(((now, titles[0]), (std, titles[1]))):
             ax = axes[i, j]
             ax.imshow(img, cmap="gray", vmin=0, vmax=255, interpolation="nearest")
             ax.set_xticks([]), ax.set_yticks([])

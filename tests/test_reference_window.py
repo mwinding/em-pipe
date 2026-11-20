@@ -77,3 +77,12 @@ def test_in_region_with_open_sides():
     assert refstats.in_region(None, M, pts).tolist() == [True, True, True]
     assert refstats.in_region([7700, None, None, None], M, pts).tolist() == [False, True, True]
     assert refstats.in_region([7700, None, None, 1000], M, pts).tolist() == [False, True, False]
+
+
+def test_blocks_split_at_segments_and_breaks():
+    per_z = pd.DataFrame({"z": range(10), "segment": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]})
+    assert intensity.block_ids(per_z).tolist() == [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+    assert intensity.block_ids(per_z, [3]).tolist() == [0, 0, 0, 1, 1, 2, 2, 2, 2, 2]
+    # a break on a slice that isn't selected starts the block at the next selected slice
+    gappy = pd.DataFrame({"z": [0, 1, 5, 6, 9], "segment": 0})
+    assert intensity.block_ids(gappy, [3]).tolist() == [0, 0, 1, 1, 1]

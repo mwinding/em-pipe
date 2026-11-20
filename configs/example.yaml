@@ -158,7 +158,10 @@ intensity:
     contrast: null           # its spread in greys, as measured by measure
     measure: p5_p95          # p5_p95: width between the 5th and 95th percentile of the slice's reference tissue |
                              # lc32: its local contrast, the mean SD in 8 px windows at 32 nm
-    smooth_slices: 601       # running median of the sampled stats over z (slices; restarts at segment changes)
+    per: segment             # segment: one window per block (a segment, split at breaks): the median of its samples |
+                             # slice: follow the samples along z (smooth_slices, ramp_slices)
+    breaks: []               # z where a new block starts within a segment (e.g. a setting changed mid-run)
+    smooth_slices: 601       # per: slice: running median of the sampled stats over z (slices)
     ramp_slices: 129         # running mean over z after interpolation (no kinks at the samples)
     min_cells: 20            # samples with fewer reference cells don't count
     boundary_slices: 300     # QC: samples within this many slices each side of a segment change
