@@ -935,17 +935,30 @@
       </table>
     </div>
     <figure>
-      <img src="img/qc_35h.jpg" alt="35h intensity reference QC plot with four panels over z: neuropil median grey around 150, neuropil p5 to p95 width around 140, percent of tissue clipped between about 1 and 3 percent, and the window's change between slices." loading="lazy">
-      <figcaption><span class="tag">Real data</span>35h's <code>intensity_reference</code> plot for the adopted
-        slow follow. Blue: the new window; grey: the version it is compared with (here, one width per segment).
-        <strong>1.</strong> Neuropil median grey per sampled slice, target 150 with a ±5% band.
-        <strong>2.</strong> Neuropil p5–p95 width, target 140 here: this plot was made with the earlier standard
-        width (the standard is now 130). <strong>3.</strong> Tissue turned pure black or
-        white, in percent; the dashed line is a 1% warning level that 35h is above everywhere, so treat it as a
-        guide. <strong>4.</strong> How far the window itself moves between neighbouring slices. Most of that is the
-        window following real slice-to-slice jumps in the raw data, so judge flicker by scrolling through the
-        rendered volume, not from this panel.</figcaption>
+      <img src="img/qc_35h_130.jpg" alt="35h intensity reference QC plot with three panels over z. Top: neuropil median grey, blue dots around 150, grey dots more scattered. Middle: neuropil p5 to p95 width, blue dots on 130, grey dots between about 125 and 175, highest in the first segments. Bottom: percent of tissue clipped, the new window mostly 1 to 2 percent, the current levels mostly 1.5 to 3.5 percent." loading="lazy">
+      <figcaption><span class="tag">Real data</span>35h's <code>intensity_reference</code> plot at the standard
+        (median 150, width 130), one dot per sampled slice, grey lines at segment changes. Blue (orange in the
+        bottom panel): the new window. Grey: the levels 35h is rendered with now.
+        <strong>1.</strong> Neuropil median grey, target 150 with a ±5% band.
+        <strong>2.</strong> Neuropil p5–p95 width, target 130. The new window holds it steady; the current
+        render varies much more, and is widest in the first two segments.
+        <strong>3.</strong> Tissue turned pure black or white, in percent. The dashed line is a 1% warning level;
+        35h's pitch-black granules keep most slices above it at any width, so treat the line as a guide. Flicker
+        between neighbouring slices is not shown here: judge it by scrolling through the rendered volume.</figcaption>
     </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>At the standard</th><th>Neuropil grey</th><th>Neuropil width</th><th>Tissue clipped, median slice</th></tr></thead>
+        <tbody>
+          <tr><td>35h, new window</td><td class="num">142–158</td><td class="num">128–133</td><td class="num">1.44%</td></tr>
+          <tr><td>35h, as rendered now</td><td class="num">–</td><td class="num">130–168 (median 143)</td><td class="num">2.0%</td></tr>
+          <tr><td>37i decurtained, new window</td><td class="num">147–153</td><td class="num">128–133</td><td class="num">0.22%</td></tr>
+          <tr><td>37i decurtained, as rendered now</td><td class="num">–</td><td class="num">118–147 (median 129)</td><td class="num">0.24%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Grey and width are the range across the sampled slices (their 5th to 95th percentile), so the narrow
+      ranges of the new window mean every part of the volume gets nearly the same contrast.</p>
   </section>
 
   <section aria-labelledby="gl">
