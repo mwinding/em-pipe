@@ -3,8 +3,10 @@
 A rendered volume is a linear map of the corrected data, and so is intensity.window: reference, so
 the reference window can be previewed on the rendered greys without re-rendering. For each listed
 (volume, z): the neuropil mask (pipeline/refmask, as tools/refmask_check.py draws it) is placed in the
-volume's plane, 8 nm pixels are pooled from windows wholly inside it (optionally within a region),
-and the neuropil's median and p5-p95 width measured. The preview maps every grey g to
+volume's plane, and the neuropil's median and p5-p95 width are measured from 8 nm pixels pooled over
+all of the slice's neuropil, eroded by one mask cell (optionally within a region): the same definition
+refstats and intensity.window: reference use (spec "measure": "windows" pools windows wholly inside
+the neuropil instead, which gives a narrower width). The preview maps every grey g to
 
     g' = median_std + (g - median) * width_std / width          (clipped to 0-255)
 
@@ -12,7 +14,7 @@ which puts that slice's neuropil at the standard (the slice's own numbers, no sm
 Two crops per slice are shown before and after: one inside the neuropil, one across the neuropil /
 cell-body border. Pixels already at 0 or 255 in the rendered volume stay at the ends.
 
-Spec (JSON): {"median": 150, "width": 150, "crop_um": 10, "windows": 24, "seed": 0,
+Spec (JSON): {"median": 150, "width": 150, "crop_um": 10, "windows": 24, "seed": 0, "measure": "slice",
               "items": [{"name": "35h", "config": "...yaml", "volume": "..._8nm.ome.zarr", "z": 8848,
                          "region": [x0, y0, x1, y1] or null}, ...]}
 
@@ -59,8 +61,27 @@ def window_fraction(a, size):
     return (S[size:, size:] - S[:-size, size:] - S[size:, :-size] + S[:-size, :-size]) / (size * size)
 
 
+def neuropil_numbers_slice(arr, plane, ok, erode_cells=1, cell=16, stride=4):
+    """As refstats measures (the definition intensity.window: reference uses): 8 nm greys pooled over all
+    the slice's neuropil, eroded by ``erode_cells`` mask cells (``cell`` px of the F grid), every
+    ``stride``-th px: (median, p5, p95, pixels used)."""
+    from scipy import ndimage
+    if erode_cells:
+        ok = ndimage.distance_transform_edt(ok) > erode_cells * cell
+    img = np.asarray(arr[plane].read().result())[::stride, ::stride]
+    iy = np.minimum(np.arange(img.shape[0]) * stride // F, ok.shape[0] - 1)
+    ix = np.minimum(np.arange(img.shape[1]) * stride // F, ok.shape[1] - 1)
+    sel = ok[np.ix_(iy, ix)] & (img > 0)
+    v = img[sel]
+    if not v.size:
+        return None
+    p5, med, p95 = np.percentile(v, [5, 50, 95])
+    return float(med), float(p5), float(p95), int(v.size)
+
+
 def neuropil_numbers(arr, plane, ok, n, rng):
-    """Pooled 8 nm greys of up to n windows inside ok: (median, p5, p95, windows used)."""
+    """Pooled 8 nm greys of up to n windows inside ok: (median, p5, p95, windows used). Narrower than the
+    slice-wide measure (windows deep inside the neuropil leave out its edges and between-area spread)."""
     s = WIN // F
     vals = []
     for y, x in place(ok, n, s, rng):
@@ -110,13 +131,16 @@ def main(argv=None):
         tissue = cov & ~bg & region_mask(mask.shape, it.get("region"), F)
         arr = omezarr.open_scale(ds.root, 0)
         plane = ds.planes[z]
-        num = neuropil_numbers(arr, plane, ok, int(spec.get("windows", 24)), rng)
+        if spec.get("measure", "slice") == "slice":
+            num = neuropil_numbers_slice(arr, plane, ok)
+        else:
+            num = neuropil_numbers(arr, plane, ok, int(spec.get("windows", 24)), rng)
         if num is None:
             print(f"{it['name']} z {z}: no neuropil windows", flush=True)
             continue
         med, p5, p95, nwin = num
         width = p95 - p5
-        res = {"name": it["name"], "z": z, "windows": nwin, "median": round(med, 1), "p5": round(p5, 1),
+        res = {"name": it["name"], "z": z, "measure": spec.get("measure", "slice"), "n": nwin, "median": round(med, 1), "p5": round(p5, 1),
                "p95": round(p95, 1), "width": round(width, 1), "scale": round(width_std / width, 3),
                "shift_at_median": round(med_std - med, 1), "crops": []}
         for kind, (y, x) in zip(("inside the neuropil", "neuropil / cell-body border"),
