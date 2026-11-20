@@ -135,6 +135,7 @@ class LevelsMap:
             raise ValueError("the config has no intensity.output: nothing to compare its levels with")
         self.old, self.new = window(self.old_path), window(self.new_path)
         self.segment = _segments(cfg)
+        self.ref = (cfg.get("intensity") or {}).get("reference")
 
     def __call__(self, g, z):
         Lo, Ho = self.old.loc[z, ["Lc", "Hc"]]
@@ -215,6 +216,9 @@ def main(argv=None):
             rows.append((it["name"], z, kind, g[::2, ::2], new[::2, ::2].astype(np.uint8), res, clip))
         results.append(res)
         print(json.dumps(res), flush=True)
+    if mode == "levels" and _maps:        # the standard the variants' levels were made with, for the title
+        ref = (next(iter(_maps.values())).ref or {})
+        med_std, width_std = float(ref.get("median", med_std)), float(ref.get("contrast", width_std))
     plot(rows, med_std, width_std, spec, a.out_png)
     if a.json:
         Path(a.json).write_text(json.dumps({"standard": {"median": med_std, "width": width_std},
@@ -242,8 +246,12 @@ def plot(rows, med_std, width_std, spec, out_png):
             k = "now" if j == 0 else "std"
             ax.set_title(f"{name} z {z}, {kind}\n{title}\nblack {100 * clip['dark_' + k]:.2f} %, "
                          f"white {100 * clip['bright_' + k]:.2f} % of the crop", fontsize=9.5, loc="left")
-    fig.suptitle(f"Neuropil standard: median {med_std:.0f}, p5-p95 width {width_std:.0f} "
-                 f"({spec.get('crop_um', 10)} um crops, shown at 16 nm)", fontsize=12, x=0.01, ha="left")
+    if spec.get("mode") == "levels":
+        head = (f"Before and after: reference contrast (neuropil median {med_std:.0f}, p5-p95 width {width_std:.0f}; "
+                f"contrast per segment, brightness per slice)")
+    else:
+        head = f"Neuropil standard: median {med_std:.0f}, p5-p95 width {width_std:.0f}"
+    fig.suptitle(f"{head}  ({spec.get('crop_um', 10)} um crops, shown at 16 nm)", fontsize=11, x=0.01, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.985))
     fig.savefig(out_png, dpi=90)
 
