@@ -20,6 +20,7 @@ brightness: tissue while the window's width changes slowly along z (the shift th
 width), so nothing has to be recomputed.
 
 Spec (JSON): {"widths": [130, 135, 140], "crop_um": 10, "seed": 0, "crop_kinds": ["inside", "border"],
+              "clahe": {"clip_limit": 1.5, "tile_px": 256} (optional: also OUT_clahe.png, the same crops after CLAHE),
               "items": [{"name": "35h", "config": "...yaml", "volume": "..._8nm.ome.zarr", "z": 8848,
                          "region": [x0, y0, x1, y1] or null}, ...]}
 
@@ -36,7 +37,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from reference_preview import F, Dataset, LevelsMap, pick_crops, region_mask  # noqa: E402
-from pipeline import intensity, omezarr, patchgrid, preview, refmask, refstats, shading  # noqa: E402
+from pipeline import intensity, omezarr, patchgrid, preview, refmask, refstats, render, shading  # noqa: E402
 from pipeline.config import deep_merge, load_config, qc_path  # noqa: E402
 
 
@@ -107,7 +108,8 @@ def main(argv=None):
     crop = int(round(float(spec.get("crop_um", 10)) / 0.008))
     rng = np.random.default_rng(int(spec.get("seed", 0)))
     kinds = spec.get("crop_kinds", ["inside", "border"])
-    defaults = deep_merge(deep_merge(refmask.DEFAULTS, preview.DEFAULTS), {"refmask": {"method": "classifier"}})
+    clahe = spec.get("clahe")     # e.g. {"clip_limit": 1.5, "tile_px": 256}: also OUT_clahe.png, as render would
+    defaults =deep_merge(deep_merge(refmask.DEFAULTS, preview.DEFAULTS), {"refmask": {"method": "classifier"}})
     for d in (intensity.DEFAULTS, shading.DEFAULTS, patchgrid.DEFAULTS, refstats.DEFAULTS):
         defaults = deep_merge(defaults, d)
     cols = []
@@ -138,9 +140,13 @@ def main(argv=None):
             for w in widths:
                 gw = other_width(new, med, width, w)
                 sd_w = sd * w / width
-                crops[kind]["rows"][w] = {"img": gw[::2, ::2].astype(np.uint8),
+                g8 = np.round(gw).astype(np.uint8)
+                crops[kind]["rows"][w] = {"img": g8[::2, ::2],
                                           "black": float((gw[data] <= 0).mean()), "white": float((gw[data] >= 255).mean()),
                                           "noise_sd": sd_w, "rounding_share": float(ROUNDING_SD ** 2 / sd_w ** 2)}
+                if clahe:
+                    crops[kind]["rows"][w]["img_clahe"] = render._clahe(
+                        g8.copy(), data, float(clahe["clip_limit"]), float(clahe["tile_px"]))[::2, ::2]
         cols.append({"name": it["name"], "z": z, "median": med, "width": width, "volume": vol, "crops": crops})
         print(it["name"], z, {w: {k: round(100 * v, 2) for k, v in c.items() if k != "samples"} for w, c in vol.items()},
               flush=True)
@@ -149,6 +155,9 @@ def main(argv=None):
                 f"width {w:g}: {rw['noise_sd']:.1f} (rounding adds {100 * rw['rounding_share']:.2f} % to the noise variance)"
                 for w, rw in cr["rows"].items()), flush=True)
     plot(cols, widths, kinds, spec, a.out_png)
+    if clahe:
+        out = Path(a.out_png)
+        plot(cols, widths, kinds, spec, out.with_name(out.stem + "_clahe" + out.suffix), clahe)
     if a.json:
         Path(a.json).write_text(json.dumps({"widths": widths, "items": [
             {"name": c["name"], "z": c["z"], "median": c["median"], "levels_width": c["width"],
@@ -162,7 +171,7 @@ def main(argv=None):
     return 0
 
 
-def plot(cols, widths, kinds, spec, out_png):
+def plot(cols, widths, kinds, spec, out_png, clahe=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -179,7 +188,7 @@ def plot(cols, widths, kinds, spec, out_png):
                 ax.set_axis_off()
                 continue
             rw, vol = cr["rows"][w], c["volume"][w]
-            ax.imshow(rw["img"], cmap="gray", vmin=0, vmax=255, interpolation="nearest")
+            ax.imshow(rw["img_clahe" if clahe else "img"], cmap="gray", vmin=0, vmax=255, interpolation="nearest")
             ax.set_title(f"{c['name']} z {c['z']}, {names[kind]}\nwidth {w:g}: crop black {100 * rw['black']:.2f} %, "
                          f"white {100 * rw['white']:.2f} %\nwhole volume (median slice): black "
                          f"{100 * vol['black_median']:.2f} %, white {100 * vol['white_median']:.2f} %\n"
@@ -188,8 +197,10 @@ def plot(cols, widths, kinds, spec, out_png):
             if j == 0:
                 ax.set_ylabel(f"p5-p95 width {w:g}", fontsize=11)
     med = cols[0]["median"] if cols else 150
+    then = (f"\nthen CLAHE as render applies it (clip {clahe['clip_limit']:g}, {clahe['tile_px']:g} px tiles; "
+            f"over each crop, so its tiles don't line up with the whole slice's)" if clahe else "")
     fig.suptitle(f"Neuropil median {med:g}, p5-p95 width {' / '.join(f'{w:g}' for w in widths)} (rows), "
-                 f"volumes side by side ({spec.get('crop_um', 10)} um crops, shown at 16 nm)", fontsize=12)
+                 f"volumes side by side ({spec.get('crop_um', 10)} um crops, shown at 16 nm){then}", fontsize=12)
     fig.savefig(out_png, dpi=90)
 
 
