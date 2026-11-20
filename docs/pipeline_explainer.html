@@ -1,16 +1,18 @@
 <title>How em-pipe Works</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <!--
-  A plain-language tour of the em-pipe pipeline for people new to it.
+  A plain-language tour of the em-pipe pipeline for people new to it, with "more detail" panels for
+  people who want to follow what the code does.
   The example images (img/*.jpg) are real data from the lab's volumes. They are kept out of this public
   repository and published with the page from a local, git-ignored qc/ folder; without them the page still
-  reads, with empty frames where the pictures go.
+  reads, with empty frames where the pictures go. Drawings marked "Diagram" are inline SVG in this file.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
 <style>
-  /* Layout: one reading column, a route map of the steps at the top, then one section per stage in pipeline order. */
+  /* Layout: one reading column; a route map and a flow diagram at the top, then one section per stage in
+     pipeline order, each with optional "more detail" panels, then the QC guide and a glossary. */
   :root {
     --bg: #f4f6f7;
     --surface: #ffffff;
@@ -55,6 +57,7 @@
   h2 { font-size: 1.65rem; font-weight: 600; }
   h3 { font-size: 1.15rem; font-weight: 600; }
   p { margin: 0; }
+  ul, ol { margin: 0; padding-left: 1.3rem; display: grid; gap: 6px; }
   .flow { display: grid; gap: 16px; }
   .lede { font-size: 1.12rem; color: var(--ink-2); }
   .eyebrow {
@@ -63,7 +66,7 @@
   }
   .eyebrow.is-new { color: var(--new); }
   code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
-  code { background: var(--accent-soft); padding: 0.05em 0.35em; border-radius: 3px; }
+  code { background: var(--accent-soft); padding: 0.05em 0.35em; border-radius: 3px; overflow-wrap: anywhere; }
   strong { font-weight: 600; }
   a { color: var(--accent); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -75,7 +78,7 @@
   .fact .v { font-size: 0.98rem; }
 
   /* route map */
-  .route { display: grid; gap: 10px; counter-reset: stage; padding: 0; margin: 0; list-style: none; }
+  .route { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }
   .route li { display: grid; grid-template-columns: 2.2rem 1fr; gap: 12px; align-items: start; }
   .route .n {
     font-family: var(--font-mono); font-size: 0.85rem; color: var(--surface); background: var(--ink);
@@ -97,7 +100,7 @@
   /* sections */
   section { display: grid; gap: 18px; }
   section > header { display: grid; gap: 6px; border-top: 1px solid var(--rule); padding-top: 22px; }
-  .step { display: grid; gap: 6px; }
+  .step { display: grid; gap: 8px; }
   .step h3 .mono { font-weight: 500; color: var(--muted); font-size: 0.8em; margin-left: 6px; }
 
   .callout {
@@ -106,6 +109,24 @@
   }
   .callout.is-new { border-color: var(--new); }
   .callout .label { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .callout.is-new .label { color: var(--new); }
+
+  /* more detail panels */
+  details.more { border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+  details.more > summary {
+    cursor: pointer; list-style: none; padding: 10px 14px; display: flex; gap: 10px; align-items: baseline;
+    font-family: var(--font-mono); font-size: 0.82rem; letter-spacing: 0.03em; color: var(--accent);
+  }
+  details.more > summary::-webkit-details-marker { display: none; }
+  details.more > summary::before { content: "+"; font-weight: 500; width: 0.8em; }
+  details.more[open] > summary::before { content: "\2212"; }
+  details.more > summary:hover { text-decoration: underline; }
+  .more-body { padding: 2px 16px 18px; display: grid; gap: 12px; font-size: 0.96rem; min-width: 0; }
+  .more-body h4 { margin: 6px 0 0; font-size: 0.98rem; font-weight: 600; }
+  .formula {
+    font-family: var(--font-mono); font-size: 0.9rem; background: var(--bg); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 10px 12px; overflow-x: auto; white-space: nowrap;
+  }
 
   figure { margin: 0; display: grid; gap: 8px; }
   figure img {
@@ -115,6 +136,7 @@
   figcaption { font-size: 0.86rem; color: var(--muted); }
   .diagram { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 12px; }
   .diagram svg { display: block; width: 100%; min-width: 560px; height: auto; }
+  .diagram svg text { font-family: var(--font-body); }
   .tag {
     font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase;
     color: var(--muted); border: 1px solid var(--rule); border-radius: 3px; padding: 0 5px; margin-right: 6px;
@@ -125,6 +147,7 @@
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
   th { font-family: var(--font-mono); font-size: 0.76rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
   td.num { font-variant-numeric: tabular-nums; font-family: var(--font-mono); white-space: nowrap; }
+  td.file { font-family: var(--font-mono); font-size: 0.85rem; overflow-wrap: anywhere; }
 
   dl.glossary { display: grid; grid-template-columns: minmax(7rem, 11rem) 1fr; gap: 10px 18px; margin: 0; }
   dl.glossary dt { font-weight: 600; }
@@ -134,6 +157,19 @@
     dl.glossary dd { margin-bottom: 10px; }
   }
   footer { font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 16px; }
+
+  /* SVG roles, all from the theme tokens */
+  .s-box { fill: var(--surface); stroke: var(--ink-2); stroke-width: 1.3; }
+  .s-box-new { fill: var(--new-soft); stroke: var(--new); stroke-width: 1.5; }
+  .s-label { fill: var(--ink); font-size: 13px; }
+  .s-small { fill: var(--muted); font-size: 12px; }
+  .s-cap { fill: var(--muted); font-size: 11.5px; font-family: var(--font-mono); letter-spacing: 0.06em; }
+  .s-line { fill: none; stroke: var(--ink-2); stroke-width: 1.4; }
+  .s-accent { fill: none; stroke: var(--accent); stroke-width: 2.2; }
+  .s-grey { fill: none; stroke: var(--muted); stroke-width: 2.2; }
+  .s-tile { fill: var(--ink); stroke: var(--ink-2); stroke-width: 1; }
+  .s-head { fill: var(--ink-2); }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 </style>
 
 <main class="page">
@@ -144,6 +180,8 @@
     <p class="lede">The microscope gives us thousands of thin slices of a brain, each photographed as a
       mosaic of overlapping pictures. em-pipe turns that pile of pictures into one clean 3D volume you can
       scroll through in neuroglancer, with the same brightness and contrast in every volume we make.</p>
+    <p>Each part starts with the simple version. Panels marked <strong>+ More detail</strong> open up what the
+      code actually does, for anyone who wants to follow a run or read its QC plots.</p>
     <div class="facts" role="list">
       <div class="fact" role="listitem"><span class="k">Goes in</span><span class="v">Raw tiles: a 3×3 or 2×2 grid of pictures per slice, 8 nm pixels, 16-bit values</span></div>
       <div class="fact" role="listitem"><span class="k">How many</span><span class="v">35h has 17,689 slices; A1001 has 487</span></div>
@@ -176,6 +214,52 @@
       <span><span class="chip opt">step</span> optional, used for our volumes</span>
       <span><span class="chip is-new">step</span> new reference contrast</span>
     </div>
+
+    <figure>
+      <div class="diagram" role="img" aria-label="Diagram: raw tiles go through check and preview, then split into two tracks. The geometry track is stitch then align. The brightness track is flat-field and patch maps, tile balance, the neuropil mask and statistics, and the window. Both tracks meet at render, which also makes the pyramid.">
+        <svg viewBox="0 0 900 252" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" class="s-head"/>
+            </marker>
+          </defs>
+          <text x="300" y="26" class="s-cap">WHERE EACH TILE GOES</text>
+          <text x="270" y="240" class="s-cap">HOW BRIGHT EACH PIXEL BECOMES</text>
+          <rect x="10" y="105" width="100" height="40" rx="4" class="s-box"/>
+          <text x="60" y="130" text-anchor="middle" class="s-label">raw tiles</text>
+          <rect x="135" y="105" width="110" height="40" rx="4" class="s-box"/>
+          <text x="190" y="130" text-anchor="middle" class="s-label">check · preview</text>
+          <rect x="300" y="40" width="90" height="40" rx="4" class="s-box"/>
+          <text x="345" y="65" text-anchor="middle" class="s-label">stitch</text>
+          <rect x="410" y="40" width="90" height="40" rx="4" class="s-box"/>
+          <text x="455" y="65" text-anchor="middle" class="s-label">align</text>
+          <rect x="270" y="178" width="130" height="40" rx="4" class="s-box"/>
+          <text x="335" y="203" text-anchor="middle" class="s-label">flat-field · patches</text>
+          <rect x="415" y="178" width="100" height="40" rx="4" class="s-box"/>
+          <text x="465" y="203" text-anchor="middle" class="s-label">tile balance</text>
+          <rect x="530" y="178" width="125" height="40" rx="4" class="s-box-new"/>
+          <text x="592" y="203" text-anchor="middle" class="s-label">neuropil mask · stats</text>
+          <rect x="670" y="178" width="72" height="40" rx="4" class="s-box-new"/>
+          <text x="706" y="203" text-anchor="middle" class="s-label">window</text>
+          <rect x="760" y="100" width="100" height="50" rx="4" class="s-box"/>
+          <text x="810" y="121" text-anchor="middle" class="s-label">render</text>
+          <text x="810" y="139" text-anchor="middle" class="s-small">+ pyramid</text>
+          <text x="810" y="170" text-anchor="middle" class="s-small">the volume</text>
+          <path d="M110 125 L133 125" class="s-line" marker-end="url(#arrA)"/>
+          <path d="M245 118 C 272 100, 274 60, 298 60" class="s-line" marker-end="url(#arrA)"/>
+          <path d="M390 60 L408 60" class="s-line" marker-end="url(#arrA)"/>
+          <path d="M500 60 C 700 60, 810 60, 810 98" class="s-line" marker-end="url(#arrA)"/>
+          <path d="M245 132 C 258 165, 252 198, 268 198" class="s-line" marker-end="url(#arrA)"/>
+          <path d="M400 198 L413 198" class="s-line" marker-end="url(#arrA)"/>
+          <path d="M515 198 L528 198" class="s-line" marker-end="url(#arrA)"/>
+          <path d="M655 198 L668 198" class="s-line" marker-end="url(#arrA)"/>
+          <path d="M742 198 C 795 198, 810 185, 810 152" class="s-line" marker-end="url(#arrA)"/>
+        </svg>
+      </div>
+      <figcaption><span class="tag">Diagram</span>Simplified. Two kinds of information are worked out separately:
+        where each tile goes (top) and how bright each pixel should become (bottom). Render is the only step that
+        writes the final image, and it uses both. The steps in the coloured boxes are the new reference contrast.</figcaption>
+    </figure>
   </section>
 
   <section aria-labelledby="s1">
@@ -194,8 +278,9 @@
     <div class="step">
       <h3>Make small previews <span class="mono">preview</span></h3>
       <p>Every tile is shrunk 16 times (8 nm pixels become 128 nm pixels) into a thumbnail, with a few
-        brightness numbers per tile. Later steps use these thumbnails when they need a quick look at
-        everything without reading the full-size data again.</p>
+        brightness numbers per tile, such as the median and percentiles of its tissue (resin left out). Later
+        steps use these thumbnails when they need a quick look at everything without reading the full-size data
+        again.</p>
     </div>
     <figure>
       <img src="img/segments.jpg" alt="Six slices of the 35h volume, one per segment, with coloured outlines showing where each tile sits. The first two segments use 3 by 3 tiles, the last four use 2 by 2 tiles of different sizes." loading="lazy">
@@ -213,8 +298,7 @@
     <div class="step">
       <h3>Stitch the tiles of each slice <span class="mono">stitch</span></h3>
       <p>Neighbouring tiles overlap a little, like photos for a panorama. em-pipe finds the same small features
-        in both tiles where they overlap and works out where each tile sits so the features line up. It does
-        this on every 50th slice, and on more slices wherever the tiles moved suddenly in between.</p>
+        in both tiles where they overlap and works out where each tile sits so the features line up.</p>
     </div>
     <div class="step">
       <h3>Line the slices up with each other <span class="mono">align</span></h3>
@@ -222,6 +306,70 @@
         and all the shifts are solved together. Where the tile layout changes between segments, it also works
         out how the two layouts fit, including a gentle warp where a simple shift is not enough.</p>
     </div>
+    <figure>
+      <div class="diagram" role="img" aria-label="Diagram: nine separate tile pictures, then the same nine tiles placed so that they overlap slightly at their edges, then a stack of slices lined up with each other.">
+        <svg viewBox="0 0 700 215" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" class="s-head"/>
+            </marker>
+          </defs>
+          <g>
+            <rect x="20" y="30" width="48" height="48" class="s-tile" style="fill-opacity: 0.30"/>
+            <rect x="78" y="30" width="48" height="48" class="s-tile" style="fill-opacity: 0.38"/>
+            <rect x="136" y="30" width="48" height="48" class="s-tile" style="fill-opacity: 0.26"/>
+            <rect x="20" y="88" width="48" height="48" class="s-tile" style="fill-opacity: 0.34"/>
+            <rect x="78" y="88" width="48" height="48" class="s-tile" style="fill-opacity: 0.28"/>
+            <rect x="136" y="88" width="48" height="48" class="s-tile" style="fill-opacity: 0.40"/>
+            <rect x="20" y="146" width="48" height="48" class="s-tile" style="fill-opacity: 0.27"/>
+            <rect x="78" y="146" width="48" height="48" class="s-tile" style="fill-opacity: 0.35"/>
+            <rect x="136" y="146" width="48" height="48" class="s-tile" style="fill-opacity: 0.31"/>
+          </g>
+          <text x="102" y="212" text-anchor="middle" class="s-small">9 separate pictures</text>
+          <text x="262" y="84" text-anchor="middle" class="s-small">match features</text>
+          <text x="262" y="99" text-anchor="middle" class="s-small">in the overlaps</text>
+          <path d="M205 112 L320 112" class="s-line" marker-end="url(#arrB)"/>
+          <g>
+            <rect x="340" y="35" width="48" height="48" class="s-tile" style="fill-opacity: 0.22"/>
+            <rect x="383" y="34" width="48" height="48" class="s-tile" style="fill-opacity: 0.22"/>
+            <rect x="426" y="36" width="48" height="48" class="s-tile" style="fill-opacity: 0.22"/>
+            <rect x="339" y="78" width="48" height="48" class="s-tile" style="fill-opacity: 0.22"/>
+            <rect x="382" y="77" width="48" height="48" class="s-tile" style="fill-opacity: 0.22"/>
+            <rect x="425" y="79" width="48" height="48" class="s-tile" style="fill-opacity: 0.22"/>
+            <rect x="341" y="120" width="48" height="48" class="s-tile" style="fill-opacity: 0.22"/>
+            <rect x="383" y="121" width="48" height="48" class="s-tile" style="fill-opacity: 0.22"/>
+            <rect x="426" y="119" width="48" height="48" class="s-tile" style="fill-opacity: 0.22"/>
+          </g>
+          <text x="406" y="196" text-anchor="middle" class="s-small">one slice, tiles placed</text>
+          <text x="406" y="211" text-anchor="middle" class="s-small">(darker strips: overlaps)</text>
+          <path d="M490 102 L548 102" class="s-line" marker-end="url(#arrB)"/>
+          <rect x="590" y="40" width="80" height="80" class="s-box" style="fill-opacity: 0.6"/>
+          <rect x="580" y="52" width="80" height="80" class="s-box" style="fill-opacity: 0.8"/>
+          <rect x="570" y="64" width="80" height="80" class="s-box"/>
+          <text x="620" y="178" text-anchor="middle" class="s-small">slices lined up</text>
+          <text x="620" y="193" text-anchor="middle" class="s-small">(align)</text>
+        </svg>
+      </div>
+      <figcaption><span class="tag">Diagram</span>Stitch places the tiles of each slice; align then lines up
+        the slices with each other.</figcaption>
+    </figure>
+    <details class="more">
+      <summary>More detail: how stitch and align work</summary>
+      <div class="more-body">
+        <p><strong>Stitch</strong> uses SIFT feature matches. It first searches whole tiles shrunk 8 times to find
+          the overlap, then matches the overlap strips again at higher resolution. One least-squares solve over
+          all tile pairs gives each tile's position (by default an affine transform held close to rigid). It does this on
+          every 50th slice of a segment. Where a tile moves by more than 5 px between two of those, it also
+          stitches the slices in between, halving the gap each time, so a sudden jump is placed at the right slice
+          instead of being smeared over 50 slices.</p>
+        <p><strong>Align</strong> matches each slice with its next few slices, keeps only matches that agree
+          (RANSAC) and then finds one transform per slice that fits all the matches at once (a global sparse
+          least-squares solve, as in Janelia's render pipeline). Solving globally avoids the slow random walk you
+          get by chaining one slice to the next. At a change of tile layout it first fits one transform between
+          the two layouts; if a median mismatch of more than 5 px is left, it adds a smooth warp to the slices
+          before the change.</p>
+      </div>
+    </details>
   </section>
 
   <section aria-labelledby="s3">
@@ -233,15 +381,41 @@
       picture instead of a patchwork.</p>
     <div class="step">
       <h3>Correct the uneven lighting inside each tile <span class="mono">shading</span></h3>
-      <p>The microscope's picture is a little brighter in some parts of a tile than others. Averaged over many
-        slices, that pattern shows up clearly, so em-pipe measures it for each tile position and segment
-        (a "flat-field") and divides it out.</p>
+      <p>The microscope's picture is a little brighter in some parts of a tile than others (in 35h, about 8%
+        darker towards one side of the right-hand tiles, the same in every slice). Averaged over many slices,
+        the anatomy averages out and that pattern is left, so em-pipe measures it for each tile position and
+        segment (a <strong>flat-field</strong>) and divides it out.</p>
     </div>
+    <figure>
+      <div class="diagram" role="img" aria-label="Diagram: a tile that gets darker towards the right, divided by a flat-field with the same fall-off, gives an evenly bright tile.">
+        <svg viewBox="0 0 640 190" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="ffTile" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="#c9c9c9"/><stop offset="1" stop-color="#8f8f8f"/>
+            </linearGradient>
+            <linearGradient id="ffField" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#b6b6b6"/>
+            </linearGradient>
+          </defs>
+          <rect x="30" y="20" width="120" height="120" fill="url(#ffTile)" style="stroke: var(--rule)"/>
+          <text x="215" y="90" text-anchor="middle" style="fill: var(--ink); font-size: 30px">÷</text>
+          <rect x="260" y="20" width="120" height="120" fill="url(#ffField)" style="stroke: var(--rule)"/>
+          <text x="445" y="90" text-anchor="middle" style="fill: var(--ink); font-size: 30px">=</text>
+          <rect x="490" y="20" width="120" height="120" fill="#c9c9c9" style="stroke: var(--rule)"/>
+          <text x="90" y="165" text-anchor="middle" class="s-label">tile as recorded</text>
+          <text x="320" y="165" text-anchor="middle" class="s-label">flat-field</text>
+          <text x="320" y="182" text-anchor="middle" class="s-small">(the fall-off, from many slices)</text>
+          <text x="550" y="165" text-anchor="middle" class="s-label">corrected tile</text>
+        </svg>
+      </div>
+      <figcaption><span class="tag">Diagram</span>The fall-off is exaggerated here so it is easy to see.</figcaption>
+    </figure>
     <div class="step">
       <h3>Compare tiles where they overlap <span class="mono">overlaps</span> <span class="mono">patchgrid</span></h3>
       <p>Where two tiles overlap they show the same tissue, so they should have the same brightness. em-pipe
-        compares them pixel by pixel (at 32 nm) in every slice. With patchgrid, each tile is also cut into a
-        grid of patches, which catches the leftover differences near tile edges and corners.</p>
+        compares them pixel by pixel in every slice and writes down how one tile's values relate to the other's.
+        With patchgrid, each tile is also cut into a grid of patches, which catches the leftover differences near
+        tile edges and corners that the flat-field misses.</p>
     </div>
     <div class="step">
       <h3>Balance the tiles <span class="mono">intensity</span></h3>
@@ -249,6 +423,70 @@
         tiles of a slice sit on one shared scale with no visible seams. Everything after this point works on
         that shared scale.</p>
     </div>
+    <figure>
+      <div class="diagram" role="img" aria-label="Diagram: two overlapping tiles A and B of different brightness. The pixels in the overlap are plotted as A's value against B's value and fall along a straight line, A about equal to gain times B plus offset.">
+        <svg viewBox="0 0 690 225" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" class="s-head"/>
+            </marker>
+          </defs>
+          <rect x="30" y="40" width="150" height="130" class="s-tile" style="fill-opacity: 0.18"/>
+          <rect x="150" y="52" width="150" height="130" class="s-tile" style="fill-opacity: 0.38"/>
+          <rect x="150" y="52" width="30" height="118" style="fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 5 4"/>
+          <text x="45" y="62" class="s-label">tile A</text>
+          <text x="285" y="74" text-anchor="end" class="s-label">tile B</text>
+          <text x="165" y="205" text-anchor="middle" class="s-small">overlap: the same tissue in both</text>
+          <path d="M190 112 L338 112" class="s-line" marker-end="url(#arrD)"/>
+          <line x1="370" y1="182" x2="565" y2="182" style="stroke: var(--ink-2); stroke-width: 1.2"/>
+          <line x1="370" y1="182" x2="370" y2="40" style="stroke: var(--ink-2); stroke-width: 1.2"/>
+          <text x="468" y="202" text-anchor="middle" class="s-small">B's value</text>
+          <text x="360" y="112" text-anchor="middle" class="s-small" transform="rotate(-90 360 112)">A's value</text>
+          <path d="M380 170 L558 62" class="s-accent"/>
+          <g style="fill: var(--ink-2)">
+            <circle cx="392" cy="160" r="3"/><circle cx="404" cy="155" r="3"/><circle cx="418" cy="146" r="3"/>
+            <circle cx="430" cy="141" r="3"/><circle cx="441" cy="131" r="3"/><circle cx="455" cy="126" r="3"/>
+            <circle cx="468" cy="115" r="3"/><circle cx="480" cy="110" r="3"/><circle cx="494" cy="100" r="3"/>
+            <circle cx="506" cy="95" r="3"/><circle cx="519" cy="84" r="3"/><circle cx="533" cy="79" r="3"/>
+            <circle cx="545" cy="68" r="3"/>
+          </g>
+          <text x="470" y="40" text-anchor="middle" class="s-label">A ≈ gain × B + offset</text>
+          <text x="585" y="96" class="s-small">then, per slice:</text>
+          <text x="585" y="113" class="s-small">one gain and</text>
+          <text x="585" y="130" class="s-small">offset per tile</text>
+          <text x="585" y="147" class="s-small">so all overlaps</text>
+          <text x="585" y="164" class="s-small">agree</text>
+        </svg>
+      </div>
+      <figcaption><span class="tag">Diagram</span>Each overlap gives one straight-line relation between two tiles.
+        One solve per slice then finds the correction for every tile at once.</figcaption>
+    </figure>
+    <details class="more">
+      <summary>More detail: tile balance and per-slice jumps</summary>
+      <div class="more-body">
+        <h4>The relations</h4>
+        <p>The <code>overlaps</code> step reads each overlap from both raw tiles in every slice, divides out the
+          flat-fields, shrinks it to 32 nm and fits a straight line through the pixel pairs, A = gain × B + offset,
+          throwing out pairs far off the line. Tissue and resin both count: resin is a clean reference for the
+          bright end. With <code>overlaps.patch_grid: 8</code> (our setting) each tile is also cut into 8×8 patches
+          and there is one relation per pair of overlapping patches; <code>patchgrid</code> turns those into a
+          smooth brightness map inside each tile, after Janelia's tile intensity correction.</p>
+        <h4>The solve</h4>
+        <p>For each slice, <code>intensity</code> finds one gain g and offset o per tile so that, in every overlap,
+          g<sub>A</sub>·A + o<sub>A</sub> = g<sub>B</sub>·B + o<sub>B</sub> as nearly as possible. The equations are
+          weighted by how many pixels each overlap has; the gains are solved as logarithms and pulled weakly
+          towards 1, and the average gain is fixed at 1 and the average offset at 0. Each tile's corrected values
+          u (flat-fielded, patch map applied) then go onto the slice's <strong>common scale</strong>:</p>
+        <p class="formula">common value = g × u + o</p>
+        <p>Every window from here on is a window on the common scale. Our configs solve every slice on its own
+          (<code>balance_smooth_slices: 1</code>).</p>
+        <h4>Per-slice jumps</h4>
+        <p>Raw tiles jump up or down by 1–2% of the display range from one slice to the next, while the tissue
+          itself changes slowly. So the difference between a tile's median and its running median over 51 slices
+          is taken as that slice's jump, and the window moves with the jump. With <code>per_slice: slice</code>
+          (our setting) one jump is used per slice, the median over its tiles, so the tiles stay matched.</p>
+      </div>
+    </details>
   </section>
 
   <section aria-labelledby="s4">
@@ -258,7 +496,7 @@
     </header>
     <p>The raw values are 16-bit numbers. The final volume has greys from 0 to 255. Somewhere we have to choose
       which raw value becomes black, which becomes white, and how everything in between is spread out. That
-      choice is called the <strong>window</strong>. Its middle sets the <strong>brightness</strong> and its
+      choice is called the <strong>window</strong>. Its position sets the <strong>brightness</strong> and its
       width sets the <strong>contrast</strong>: a narrow window stretches small differences into big ones.</p>
 
     <div class="callout">
@@ -280,8 +518,8 @@
       <h3>Find the neuropil <span class="mono">refmask</span></h3>
       <p>A small trained classifier looks at the 128 nm thumbnails in squares of about 2 µm and decides,
         square by square, whether it is neuropil or not. It goes by texture: neuropil is a fine, even texture,
-        while cell bodies are coarser with smooth insides. It was trained on example boxes that were checked by
-        hand, one by one. The mask only decides <em>where to measure</em>. It is never applied to the image.</p>
+        while cell bodies are coarser with smooth insides. It was trained on example boxes that a person checked
+        by eye, one by one. The mask only decides <em>where to measure</em>. It is never applied to the image.</p>
     </div>
     <figure>
       <img src="img/mask.jpg" alt="A 35h slice at 128 nm with the neuropil region tinted yellow, background resin tinted blue, and the cell body rind around it left untinted." loading="lazy">
@@ -289,16 +527,82 @@
         (18% of the tissue here). Blue: background (resin). Magenta squares: neuropil patches used to test the
         mask. The colours are an overlay to show the mask; the image underneath is unchanged.</figcaption>
     </figure>
+    <details class="more">
+      <summary>More detail: the classifier and its training boxes</summary>
+      <div class="more-body">
+        <p>Each tile's thumbnail (raw values, before any contrast step) is cut into 16×16-pixel squares, about
+          2 µm across. For every square the code computes 47 numbers, all chosen so they do not change when the
+          brightness or contrast of the picture changes, or when the picture is rotated:</p>
+        <ul>
+          <li>how much texture there is at six scales, from very fine to coarse, relative to each other, and a
+            fine-versus-coarse texture score;</li>
+          <li>the square's brightness and texture compared with the rest of the tile's tissue, and how many of its
+            pixels are very dark or very light;</li>
+          <li>whether its structures are line-like or blob-like (coherence, roundness at about 0.4 and 1 µm);</li>
+          <li>each of those again, averaged over the surroundings (about 4 and 8 µm), so a square is judged in
+            context.</li>
+        </ul>
+        <p>The model is a set of 150 small gradient-boosted decision trees (written in plain numpy,
+          <code>pipeline/boost.py</code>). Squares with a probability above 0.5 are candidates; a connected area
+          is kept only if it has at least 12 squares and contains a "seed" whose wider average is above 0.8, and
+          holes of up to 4 squares are filled. Squares that are mostly resin never count.</p>
+        <p><strong>Training boxes.</strong> 10 µm boxes on 35h, 37i and A1001, proposed by the tool and then
+          checked by a person on pictures like the one below, box by box (19 November 2026). 101 boxes were
+          confirmed (53 neuropil, 48 cell-body rind) and 4 rejected: one wrong box each in 35h and 37i, and two in
+          A1001 that sat on the oesophagus. The rule is that "other" boxes are cell bodies only, never gut,
+          oesophagus or trachea. The confirmed boxes and the rejected ones are recorded in
+          <code>pipeline/refmask_neuropil_labels.json</code>.</p>
+        <figure>
+          <img src="img/labels.jpg" alt="35h slice 5328 with two green boxes inside the neuropil labelled N1 and N2, six red boxes on cell bodies labelled C1 to C6, and the neuropil mask outlined in yellow." loading="lazy">
+          <figcaption><span class="tag">Real data</span>35h, slice 5328, the picture used to check its boxes.
+            Green: neuropil boxes. Red: cell-body boxes. Yellow: the mask's outline. Boxes and outline are drawn on
+            top of the image.</figcaption>
+        </figure>
+        <p><strong>Known weakness.</strong> Tightly packed small cell bodies (2–3 µm, little contrast in the
+          nucleus) can look like neuropil at this resolution and get included.</p>
+      </div>
+    </details>
 
     <div class="step">
       <h3>Measure the neuropil <span class="mono">refstats</span></h3>
       <p>On a sample of slices (by default every 32nd slice of each segment; every 64th for our large
-        volumes), em-pipe reads the full-size tiles,
-        applies exactly what the final render will apply (decurtaining, the lighting fix and the tile balance),
-        and takes the histogram of the neuropil pixels. From that histogram it keeps three numbers: the
-        <strong>median</strong> (the middle value), and the <strong>5th and 95th percentiles</strong>. The gap
-        between those two is the neuropil's <strong>p5–p95 width</strong>, a simple measure of its contrast.</p>
+        volumes), em-pipe reads the full-size tiles, applies exactly what the final render will apply
+        (decurtaining, the lighting fixes and the tile balance) and takes the histogram of the neuropil pixels.
+        From that histogram it keeps the <strong>median</strong> (the middle value) and the <strong>5th and
+        95th percentiles</strong>. The gap between those two is the neuropil's <strong>p5–p95 width</strong>, a
+        simple measure of its contrast.</p>
     </div>
+    <details class="more">
+      <summary>More detail: what refstats measures</summary>
+      <div class="more-body">
+        <ul>
+          <li><strong>Which slices.</strong> Every N-th selected slice of each segment, plus each segment's last
+            (<code>refstats.every</code>: 32 by default, 64 for 35h and 37i).</li>
+          <li><strong>Which values.</strong> Full-resolution tiles, decurtained when render will decurtain them,
+            divided by the flat-field, with the patch map applied, then put on the common scale with the tile's
+            gain and offset (g × u + o). So the numbers describe exactly the values the window will see.</li>
+          <li><strong>Which pixels.</strong> Inside the neuropil squares, shrunk by one square all round so the
+            edge of the neuropil does not count. Optionally only inside a <code>region</code> box (A1001 uses one
+            to leave out nerve cord that the other volumes do not have).</li>
+          <li><strong>Pooled per slice.</strong> The neuropil pixels of all tiles of the slice (every 4th pixel at
+            8 nm) go into one histogram, which gives the median and the percentiles 1, 5, 25, 75, 95 and 99. The
+            width is p95 − p5.</li>
+          <li><strong>Cross-check.</strong> lc32, a local-contrast measure (the average standard deviation in small
+            windows at 32 nm), per square and then the median over squares. It is reported but not used to set
+            the window.</li>
+          <li><strong>For the clipping estimate.</strong> Percentiles of all the tissue (every 8th pixel), so the
+            QC can predict how much tissue a window will turn pure black or white.</li>
+          <li>A sample with fewer than 20 neuropil squares does not count.</li>
+        </ul>
+        <figure>
+          <img src="img/raw_neuropil_35h.jpg" alt="Four panels over z for 35h: neuropil median, p5 to p95 width, lc32, and number of squares measured. The width drops sharply at z 3279, where the tiles change from 3 by 3 to 2 by 2, and drifts slowly down within the long segment 2." loading="lazy">
+          <figcaption><span class="tag">Real data</span>35h's <code>refstats.png</code>: the neuropil on the common
+            scale, before any window, one dot per sampled slice ("cells" are the 2 µm squares). Look at the second
+            panel: the width is steady within the short segments but jumps by 27% at z 3279 (3×3 → 2×2 tiles), and
+            within the long segment 2 it drifts down by about 7%.</figcaption>
+        </figure>
+      </div>
+    </details>
 
     <div class="step">
       <h3>The standard</h3>
@@ -316,7 +620,7 @@
               <stop offset="1" stop-color="#ffffff"/>
             </linearGradient>
           </defs>
-          <text x="40" y="22" style="fill: var(--muted); font: 500 12px var(--font-mono); letter-spacing: 0.06em">RAW VALUES (16-BIT), NEUROPIL OF ONE SLICE</text>
+          <text x="40" y="22" class="s-cap">RAW VALUES (COMMON SCALE), NEUROPIL OF ONE SLICE</text>
           <path d="M170 140 C 255 138, 300 52, 370 52 C 432 52, 470 130, 570 140 Z" style="fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2"/>
           <line x1="40" y1="140" x2="680" y2="140" style="stroke: var(--ink-2); stroke-width: 1.5"/>
           <line x1="258" y1="40" x2="258" y2="140" style="stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 4 4"/>
@@ -328,7 +632,7 @@
           <line x1="258" y1="140" x2="211" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
           <line x1="366" y1="140" x2="417" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
           <line x1="480" y1="140" x2="562" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
-          <text x="560" y="190" style="fill: var(--muted); font: 400 12.5px var(--font-body)">the window maps raw values to greys</text>
+          <text x="560" y="190" class="s-small">the window maps raw values to greys</text>
           <rect x="40" y="232" width="640" height="24" fill="url(#ramp)" style="stroke: var(--rule); stroke-width: 1"/>
           <line x1="211" y1="226" x2="211" y2="262" style="stroke: var(--accent); stroke-width: 2"/>
           <line x1="417" y1="226" x2="417" y2="262" style="stroke: var(--accent); stroke-width: 2.5"/>
@@ -340,7 +644,7 @@
           <text x="562" y="280" text-anchor="middle" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">≈208</text>
           <path d="M211 296 L211 304 L562 304 L562 296" style="fill: none; stroke: var(--accent); stroke-width: 1.5"/>
           <text x="386" y="322" text-anchor="middle" style="fill: var(--ink); font: 500 13px var(--font-body)">p5 to p95 spans 140 greys</text>
-          <text x="40" y="216" style="fill: var(--muted); font: 500 12px var(--font-mono); letter-spacing: 0.06em">GREYS IN THE VOLUME</text>
+          <text x="40" y="216" class="s-cap">GREYS IN THE VOLUME</text>
         </svg>
       </div>
       <figcaption><span class="tag">Diagram</span>The window puts the neuropil's median at grey 150 and stretches
@@ -350,25 +654,124 @@
     </figure>
 
     <div class="step">
-      <h3>Contrast once per segment, brightness slice by slice <span class="mono">intensity, window: reference</span></h3>
-      <p>Measured before any window, the neuropil's width hardly changes within a segment (about 2–3%) but can
-        jump between segments: in 35h it fell by about a quarter where the tiles changed from 3×3 to 2×2.
-        So the <strong>contrast</strong> is set once per segment, from all the neuropil measured in it. Nothing
-        about the contrast changes from slice to slice inside a segment.</p>
-      <p>Overall brightness is different: it wanders by about 1% over tens of slices, which would be 15–30 greys
-        on screen if left alone. So the <strong>brightness</strong> follows every slice, the same way the
-        previous method did (from all the tissue in the slice, which the previews measure in every slice; the
-        neuropil is only measured on sampled slices). It is then shifted so that, across the segment, the neuropil's median comes out at 150.</p>
+      <h3>Fast changes from the tissue, slow changes from the neuropil <span class="mono">intensity, window: reference</span></h3>
+      <p>Two kinds of change need different handling.</p>
+      <ul>
+        <li><strong>Fast changes.</strong> The overall brightness of the raw pictures wobbles by about 1% over
+          tens of slices, which would be 15–30 greys on screen, and jumps a little from one slice to the next.
+          The window follows these slice by slice, from all the tissue in the slice, which the previews measure
+          in every slice. This is what the earlier windows did too.</li>
+        <li><strong>Slow changes.</strong> On top of that, two things follow the neuropil, slowly: the window's
+          <strong>width</strong> (contrast) and a <strong>brightness shift</strong> that puts the neuropil's median
+          at 150. Both come from the sampled slices and are smoothed over about 2,000 slices, starting afresh at
+          every segment change.</li>
+      </ul>
+      <p>Why slowly? The neuropil is only measured on sampled slices, and its numbers vary a little from sample
+        to sample as the view changes. Following each sample would add flicker; following them slowly corrects
+        drifts without ever causing flicker. Why start afresh at each segment change? Because the raw pictures
+        really do change there: in 35h the neuropil's raw width jumped by 27% where the tiles went from 3×3 to
+        2×2.</p>
     </div>
 
-    <div class="callout is-new">
-      <p class="label">Being tested (November 2026)</p>
-      <p>In one long 35h segment, the mix of tissue changed slowly from start to end, which pulled the neuropil
-        from about 156 in the segment's first quarter to about 142 in its last, and left a step of 13 greys where the
-        next segment began. The fix being tested lets that shift change slowly along a segment (smoothed over
-        about 2,000 slices), so the neuropil stays near 150 all the way along. It is far too slow to cause
-        flicker from one slice to the next.</p>
+    <figure>
+      <div class="diagram" role="img" aria-label="Diagram: neuropil grey along z across one long segment and the start of the next. With one value per segment the grey slopes from about 156 down to about 139 and then steps up at the segment change. With the slow follow it stays near 150 throughout.">
+        <svg viewBox="0 0 720 285" xmlns="http://www.w3.org/2000/svg">
+          <line x1="60" y1="40" x2="60" y2="230" style="stroke: var(--ink-2); stroke-width: 1.2"/>
+          <line x1="60" y1="230" x2="700" y2="230" style="stroke: var(--ink-2); stroke-width: 1.2"/>
+          <text x="52" y="189" text-anchor="end" class="s-small">140</text>
+          <text x="52" y="144" text-anchor="end" class="s-small">150</text>
+          <text x="52" y="99" text-anchor="end" class="s-small">160</text>
+          <text x="20" y="135" text-anchor="middle" class="s-small" transform="rotate(-90 20 135)">neuropil grey</text>
+          <line x1="60" y1="140" x2="700" y2="140" style="stroke: var(--muted); stroke-width: 1; stroke-dasharray: 5 5"/>
+          <text x="700" y="133" text-anchor="end" class="s-small">target 150</text>
+          <line x1="520" y1="40" x2="520" y2="230" style="stroke: var(--rule); stroke-width: 2"/>
+          <text x="290" y="252" text-anchor="middle" class="s-small">one long segment (35h segment 2: about 9,000 slices)</text>
+          <text x="610" y="252" text-anchor="middle" class="s-small">next segment</text>
+          <text x="700" y="275" text-anchor="end" class="s-cap">SLICES (Z) →</text>
+          <path d="M60 113 C 200 117, 380 143, 520 189" class="s-grey"/>
+          <path d="M520 128 C 590 135, 650 150, 700 161" class="s-grey"/>
+          <path d="M520 189 L520 128" style="stroke: var(--muted); stroke-width: 2; stroke-dasharray: 3 3"/>
+          <path d="M60 140 C 140 136, 220 143, 300 139 S 440 141, 520 138" class="s-accent"/>
+          <path d="M520 141 C 580 138, 640 142, 700 140" class="s-accent"/>
+          <text x="66" y="104" class="s-label" style="fill: var(--ink-2)">one value per segment</text>
+          <text x="66" y="160" class="s-label" style="fill: var(--accent); font-weight: 600">slow follow (adopted)</text>
+          <text x="512" y="212" text-anchor="end" class="s-small">13-grey step</text>
+        </svg>
+      </div>
+      <figcaption><span class="tag">Diagram</span>Illustrative curves shaped like 35h's segment 2, not data. The
+        first version set one width and one shift per segment. That hit 150 on average, but along 35h's long
+        segment 2 the mix of tissue changed, so the neuropil drifted from about 156 to about 139 and stepped by 13
+        greys into the next segment. Following the neuropil slowly keeps it near 150 all the way along. The real
+        plots are in "More detail" below.</figcaption>
+    </figure>
+
+    <div class="step">
+      <h3>What it changed in 35h</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>35h, neuropil</th><th>One value per segment</th><th>Slow follow (adopted)</th></tr></thead>
+          <tbody>
+            <tr><td>Brightness step at z 12529</td><td class="num">12.8 greys</td><td class="num">2.0 greys</td></tr>
+            <tr><td>Width step at z 12529</td><td class="num">5.1 greys</td><td class="num">0.4 greys</td></tr>
+            <tr><td>Median grey across slices (p5–p95)</td><td class="num">139–159</td><td class="num">142–158</td></tr>
+            <tr><td>Width across slices (p5–p95)</td><td class="num">135–144</td><td class="num">138–143</td></tr>
+            <tr><td>Most tissue clipped in one slice</td><td class="num">2.6%</td><td class="num">3.0%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The steps at 35h's other segment changes are small with the slow follow: 1.7, 0.7, 3.6 and 4.2 greys in
+        brightness and 0.9, −2.8, −1.6 and −0.1 greys in width. The price is a little more clipping at the end of
+        segment 2. Segments shorter than about 2,000 slices come out almost constant, the same as one value per
+        segment. The one-value-per-segment setting (<code>per: segment</code>) is still available; the A1001
+        test render used it.</p>
     </div>
+
+    <details class="more">
+      <summary>More detail: the window maths</summary>
+      <div class="more-body">
+        <p>All values are on the slice's common scale (see stage 3). A value v becomes the grey</p>
+        <p class="formula">grey = 255 × (v − L) ÷ W</p>
+        <p>clipped to 0–255. <strong>W</strong> is the window's width and <strong>L</strong> its low end.</p>
+        <h4>Width (contrast)</h4>
+        <p class="formula">W = 255 × c ÷ 140</p>
+        <p>where c is the neuropil's p5–p95 width, smoothed along z. Then the neuropil's p5–p95 spans exactly 140
+          greys.</p>
+        <h4>Low end (brightness)</h4>
+        <p class="formula">L = M + J − a</p>
+        <ul>
+          <li><strong>M</strong>: the slice's all-tissue median on the common scale, as the earlier median window
+            placed it (tissue medians from the previews, running median over 51 slices). This is the fast
+            part that follows every slice.</li>
+          <li><strong>J</strong>: the slice's jump (stage 3).</li>
+          <li><strong>a</strong>: the slow brightness shift. At each sampled slice with neuropil median m, the shift
+            that would put that median at exactly 150 is</li>
+        </ul>
+        <p class="formula">a = 150 × W ÷ 255 − (m − M − J)</p>
+        <p>Check: with that shift, the neuropil median's grey is 255 × (m − M − J + a) ÷ W = 150.</p>
+        <h4>How c and a are smoothed</h4>
+        <p>Within each block (a segment, or part of one when a <code>breaks</code> entry splits it, as at A1001's
+          z 127, where the slice interval and the raw neuropil changed mid-run), the sampled values of c and of a each get a running median
+          over 2,001 slices (±1,000), are interpolated linearly between samples (held at the block's ends), and
+          then get a running mean over 129 slices so there are no kinks. Settings:
+          <code>intensity.reference.per: slice</code>, <code>smooth_slices: 2001</code>,
+          <code>ramp_slices: 129</code>. With <code>per: segment</code>, c and a are instead the medians over the
+          block's samples.</p>
+        <h4>Back to each tile</h4>
+        <p>The window L to L + W is mapped back through each tile's gain and offset, lo = (L − o) ÷ g and
+          hi = (L + W − o) ÷ g, and written to <code>work/intensity/levels.csv</code> (one lo and hi per slice and
+          tile), which render reads.</p>
+        <h4>The real plots</h4>
+        <figure>
+          <img src="img/step_brightness.jpg" alt="35h QC plot, neuropil median grey per sampled slice. Grey dots, one shift per segment, slope down to about 131 to 140 near z 12500; blue dots, the slow shift, stay around 150." loading="lazy">
+          <img src="img/step_width.jpg" alt="35h QC plot, neuropil p5 to p95 width in greys per sampled slice. Grey dots, one width per segment, drift from about 143 down to 134 along segment 2; blue dots, the slow width, stay near 140." loading="lazy">
+          <figcaption><span class="tag">Real data</span>35h QC, one dot per sampled slice, z from 0 to 17,689 left to
+            right, grey lines at segment changes, green band ±5% around the target. Top, brightness: grey dots are
+            one shift per segment, blue dots the slow shift. Bottom, width: grey dots are one width per segment,
+            blue dots the slow width. The grey dots drift away from the target towards the end of segment 2
+            (just before z 12529); the blue dots stay on it.</figcaption>
+        </figure>
+      </div>
+    </details>
 
     <div class="step">
       <h3>What it did to our volumes</h3>
@@ -382,6 +785,8 @@
           </tbody>
         </table>
       </div>
+      <p>These factors come from the before/after panel below, made with one value per segment. The slow follow
+        moves 35h's contrast by a few percent at most.</p>
     </div>
     <figure>
       <img src="img/before_after_35h.jpg" alt="35h slice 8848 inside the neuropil: before and after the reference contrast. The two look nearly identical." loading="lazy">
@@ -410,10 +815,25 @@
         render removes them from each tile before anything else. If the microscope also recorded a second
         detector that hardly sees curtains (backscatter), the stripy part is swapped in from that detector
         instead of being filtered away. The neuropil is measured after decurtaining too, so the contrast is set on
-        the same image that ends up in the volume. On 37i this made the measured neuropil width about 1%
-        narrower (2–3% in the most curtained early segments), with the median unchanged. The curtain work has
-        its own, fuller explanation.</p>
+        the same image that ends up in the volume. The curtain work has its own, fuller explanation.</p>
     </div>
+    <details class="more">
+      <summary>More detail: what decurtaining did to the neuropil numbers (37i)</summary>
+      <div class="more-body">
+        <p>37i's neuropil was measured twice on the same sampled slices, once on the plain tiles and once on the
+          decurtained ones. The median did not change (ratio 0.9998). The p5–p95 width came out about 1% narrower
+          overall and 2–3% in the early segments where the curtains are strongest: curtains are dark and light
+          stripes, and they widen the histogram. A couple of slices with strong curtains (near z 5100 and 5750)
+          had a much wider neuropil without decurtaining and a normal one with it. So a decurtained volume gets a
+          window about 1% narrower, slightly more contrast.</p>
+        <figure>
+          <img src="img/decurtain_37i.jpg" alt="Three panels over z for 37i: the neuropil width with and without decurtaining, their ratio, mostly 0.98 to 1.0, and the median ratio, very close to 1." loading="lazy">
+          <figcaption><span class="tag">Real data</span>37i, plain (grey) against decurtained (blue). Middle panel:
+            width ratio per sampled slice, with each segment's median ratio. Made with
+            <code>tools/refstats_compare.py</code>.</figcaption>
+        </figure>
+      </div>
+    </details>
     <div class="step">
       <h3>The CLAHE copy</h3>
       <p>CLAHE is local contrast boosting. It splits each slice into small squares (256 pixels, about 2 µm, for our
@@ -431,6 +851,41 @@
     </div>
   </section>
 
+  <section aria-labelledby="qc">
+    <header>
+      <p class="eyebrow">Checking a run</p>
+      <h2 id="qc">What the QC files show</h2>
+    </header>
+    <p>Every step writes plots into the volume's <code>qc/</code> folder. You don't need to open them all.
+      For the contrast, the last row of the table is the one that matters most.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>File</th><th>What it shows</th><th>What to look for</th></tr></thead>
+        <tbody>
+          <tr><td class="file">check_report.md</td><td>Problems found in the raw files</td><td>Anything not acknowledged in the config stops the pipeline.</td></tr>
+          <tr><td class="file">preview_stats.png, daily sheets</td><td>Brightness per slice; one contact sheet of thumbnails per day</td><td>Odd days, empty tiles, focus problems.</td></tr>
+          <tr><td class="file">stitch.png, align_drift.png</td><td>Tile positions and slice drift along z</td><td>Sudden jumps that don't match a known event.</td></tr>
+          <tr><td class="file">shading.png, overlaps.png, patchgrid.png</td><td>The flat-fields, the tile-to-tile relations and the patch maps</td><td>Smooth fields; no tile pair far off the others.</td></tr>
+          <tr><td class="file">intensity.png</td><td>Each tile's levels and gain along z</td><td>Tiles moving together, no sudden splits.</td></tr>
+          <tr><td class="file">refmask.png</td><td>The neuropil's share of the tissue per slice</td><td>A smooth curve. A sudden jump means the mask went wrong somewhere: draw it over the slice with <code>tools/refmask_check.py</code>.</td></tr>
+          <tr><td class="file">refstats.png</td><td>The raw neuropil per sampled slice: median, width, lc32 and squares measured</td><td>Steady within segments; steps at segment changes are normal. Very few squares means no reliable measurement there.</td></tr>
+          <tr><td class="file">intensity_reference.png, .json</td><td>The predicted result of the new window (figure below)</td><td>Dots inside the green band, no steps at the grey lines, clipping a few percent at most. The .json lists the step at every segment change and any warnings.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figure>
+      <img src="img/qc_35h.jpg" alt="35h intensity reference QC plot with four panels over z: neuropil median grey around 150, neuropil p5 to p95 width around 140, percent of tissue clipped between about 1 and 3 percent, and the window's change between slices." loading="lazy">
+      <figcaption><span class="tag">Real data</span>35h's <code>intensity_reference</code> plot for the adopted
+        slow follow. Blue: the new window; grey: the version it is compared with (here, one width per segment).
+        <strong>1.</strong> Neuropil median grey per sampled slice, target 150 with a ±5% band.
+        <strong>2.</strong> Neuropil p5–p95 width, target 140. <strong>3.</strong> Tissue turned pure black or
+        white, in percent; the dashed line is a 1% warning level that 35h is above everywhere, so treat it as a
+        guide. <strong>4.</strong> How far the window itself moves between neighbouring slices. Most of that is the
+        window following real slice-to-slice jumps in the raw data, so judge flicker by scrolling through the
+        rendered volume, not from this panel.</figcaption>
+    </figure>
+  </section>
+
   <section aria-labelledby="gl">
     <header>
       <p class="eyebrow">Words used here</p>
@@ -440,10 +895,14 @@
       <dt>Slice (z)</dt><dd>One layer of the sample, cut away by the ion beam and imaged. Slices are numbered from 0 in the order they were taken.</dd>
       <dt>Tile</dt><dd>One picture in the grid that covers a slice, named by row and column, such as <code>1-0</code>.</dd>
       <dt>Segment</dt><dd>A stretch of slices imaged with one tile layout. A new segment starts whenever the grid or tile size changes.</dd>
+      <dt>Block</dt><dd>What the window's slow smoothing restarts at: a segment, or part of one when the config adds a break.</dd>
+      <dt>Sampled slice</dt><dd>One of the slices refstats measures (every 32nd or 64th of a segment).</dd>
       <dt>Neuropil</dt><dd>The dense tangle of neurites (axons and dendrites) between the cell bodies, fibre tracts included.</dd>
+      <dt>Common scale</dt><dd>The values of all tiles of a slice after each tile's gain and offset, so that they agree in the overlaps.</dd>
       <dt>Window</dt><dd>The rule that turns raw values into greys: everything below its low end is black, above its high end is white, linear in between.</dd>
       <dt>Grey</dt><dd>A value from 0 (black) to 255 (white) in the final volume.</dd>
       <dt>Percentile</dt><dd>The 5th percentile (p5) is the value that 5% of pixels are darker than; p95 is the value 95% are darker than; the median is p50.</dd>
+      <dt>Jump</dt><dd>A small, sudden brightness change of the raw pictures from one slice to the next, which the window follows.</dd>
       <dt>Flat-field</dt><dd>The map of how much brighter or darker each part of a tile is than average, from the microscope's uneven lighting.</dd>
       <dt>CLAHE</dt><dd>Contrast-limited adaptive histogram equalisation: local contrast boosting, square by square.</dd>
       <dt>OME-Zarr</dt><dd>The file format of the volume: many small chunks plus the zoomed-out copies, which neuroglancer reads directly.</dd>
@@ -451,9 +910,9 @@
   </section>
 
   <footer>
-    Pictures marked "Real data" come from the lab's 35h and A1001 volumes; outlines and coloured overlays on them
-    are labels drawn on top. Pictures marked "Diagram" are drawings. Step names in grey type are the names used by
-    <span class="mono">run_pipeline.sh</span>; every setting mentioned is listed in
-    <span class="mono">configs/example.yaml</span>.
+    Pictures marked "Real data" come from the lab's 35h, 37i and A1001 volumes and their QC plots; outlines,
+    boxes and coloured overlays on them are labels drawn on top. Pictures marked "Diagram" are drawings. Step names
+    in grey type are the names used by <span class="mono">run_pipeline.sh</span>; every setting mentioned is
+    listed in <span class="mono">configs/example.yaml</span>.
   </footer>
 </main>
