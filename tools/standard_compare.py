@@ -36,6 +36,14 @@ from pipeline import intensity, omezarr, patchgrid, preview, refmask, refstats, 
 from pipeline.config import deep_merge, load_config, qc_path  # noqa: E402
 
 
+def unclipped(lmap, g, z):
+    """Greys of rendered values g under the variant's levels (LevelsMap's map, before clipping to 0-255)."""
+    Lo, Ho = lmap.old.loc[z, ["Lc", "Hc"]]
+    Ln, Hn = lmap.new.loc[z, ["Lc", "Hc"]]
+    u = Lo + np.asarray(g, np.float64) * (Ho - Lo) / 255.0
+    return 255.0 * (u - Ln) / (Hn - Ln)
+
+
 def other_width(g, med, width, width_to):
     """Greys under reference levels made for p5-p95 width ``width``, as levels made for ``width_to`` would
     give them: a stretch around the median grey (unclipped in, clipped to 0-255 out)."""
@@ -99,7 +107,7 @@ def main(argv=None):
                 continue
             y, x = picks[kind][0] * F, picks[kind][1] * F
             g = np.asarray(arr[ds.planes[z], y:y + crop, x:x + crop].read().result())
-            new, _ = lmap(g, z, clip=False)
+            new = unclipped(lmap, g, z)
             data = g > 0
             crops[kind] = {"y": y, "x": x, "rows": {}}
             for w in widths:
