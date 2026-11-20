@@ -11,16 +11,19 @@ Raw data is never written to.
 |---|---|---|---|---|
 | check | `pipeline.check` | no | raw TIFF headers | `check/` |
 | preview | `pipeline.preview` | array over z-chunks, then `merge` | raw pixels | `preview/` |
+| refmask | `pipeline.refmask` | array over z-chunks, then `merge` | `preview/` thumbnails | `refmask/` |
 | stitch | `pipeline.stitch` | array over sampled slices, then `merge` | raw pixels (sampled slices) | `stitch/` |
 | align | `pipeline.align` | array over z-chunks (`run`), then `solve` | raw pixels, `stitch/` | `align/` |
-| intensity | `pipeline.intensity` | no | `preview/`, `stitch/` | `intensity/` |
+| refstats | `pipeline.refstats` | array over chunks of sampled slices, then `merge` | raw pixels (sampled slices), `refmask/`, the shading, patchgrid and balance inputs | `refstats/` |
+| intensity | `pipeline.intensity` | no | `preview/`, `stitch/` (`refstats/` with window: reference) | `intensity/` |
 | destreak | `pipeline.destreak` | no (`test` only; applied inside render) | raw pixels | `destreak/` |
 | zcorrect | `pipeline.zcorrect` | array over z-chunks (`run`), then `solve` | raw pixels, `stitch/`, `align/` | `zcorrect/` |
 | render | `pipeline.render` | `init`, then array over z-slabs (`run`) | everything above | `render/volume.ome.zarr` (scale 0) |
 | pyramid | `pipeline.pyramid` | array over shards, one job per scale | `render/` | `render/volume.ome.zarr` (scales 1..N) |
 | serve | `pipeline.serve` | interactive | `render/` | – |
 
-Order: check → preview → stitch → align → intensity → zcorrect (optional) → render → pyramid.
+Order: check → preview → refmask (optional) → stitch → align → shading, overlaps, patchgrid (optional)
+→ refstats (optional) → intensity → zcorrect (optional) → render → pyramid.
 destreak has no batch stage: it is a function applied per tile inside render when
 `destreak.enabled: true`; its CLI only writes before/after test images for tuning.
 
@@ -146,7 +149,21 @@ as do the Slurm logs (`work/logs/`).
   when fewer than half its points survive outlier rejection.
 - `drift.png` — tx, ty vs z with seams marked; residuals vs z.
 
-### work/intensity/
+### work/refmask/
+- `masks/` — the cell codes as numpy stacks, one per chunk and tile (`z<z0>-<z1>_tile<r>-<c>.npy`);
+  a (z, tile)'s mask is row `i` of file `npy`.
+- `chunks/chunk_<z0>-<z1>.csv` — per (z, tile) of the chunk: `z, tile, npy, i, threshold,
+  tissue_cells, reference_cells` and a `digest` of the settings and model; `merge` refuses chunks whose
+  digest doesn't match. `index.csv` — all of them, plus `qc/refmask.png` (reference share of the
+  tissue per slice). Read them through `refmask.Cells`.
+
+### work/refstats/ (or work/refstats/<output>/)
+- `chunks/chunk_<z0>-<z1>.csv`, merged into `stats.csv` — per sampled slice: `z, segment, n_tiles,
+  n_cells`, the reference tissue's `median`, `lc32` (local contrast), quantiles `rq_1 … rq_99` and the
+  tissue's quantiles `tq_*` (for the clipping estimate), all on the common scale, and a `digest` of
+  every input (refmask, shading, patchgrid, destreak settings, balance). `qc/refstats[_<output>].png`.
+
+### work/intensity/ (or work/intensity/<output>/ with intensity.output)
 - `levels.csv` — per (z, tile): `z, tile, lo, hi` — uint16 values that render maps to 0 and 255
   (before CLAHE). Smooth over z.
 

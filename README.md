@@ -6,19 +6,23 @@ slice-to-slice drift, normalises intensity and writes a multi-resolution volume 
 [neuroglancer](https://github.com/google/neuroglancer). It runs as Slurm jobs on an HPC cluster.
 
 ```
-check → preview → stitch → align → [shading] → [overlaps] → [patchgrid] → intensity → [zcorrect] → render → pyramid
+check → preview → [refmask] → stitch → align → [shading] → [overlaps] → [patchgrid] → [refstats] → intensity → [zcorrect] → render → pyramid
 ```
+
+A plain-language walk through the whole pipeline, with pictures: `docs/pipeline_explainer.html`.
 
 | Step | What it does |
 |---|---|
 | check | Inventory of the raw files: truncated or unreadable files, copied tiles, label/filename mismatches, missing tiles, time gaps, restarts and grid changes. Writes the global slice list every later step uses. |
 | preview | Per-slice intensity statistics and thumbnails (contact sheet per day). |
+| refmask | Optional (for `intensity.window: reference`): where the reference tissue (neuropil, with tracts) is, as a yes/no per ~2 µm square of each thumbnail, from a small trained classifier (`qc/refmask.png`). Never applied to the image; it only chooses where refstats measures. See *Consistent contrast across volumes* below. |
 | stitch | Tile layout within each slice: SIFT matches in the tile overlaps (overlap found automatically) and a least-squares solve, on every 50th slice. Where tiles move between two of those by more than `stitch.refine_px` (5 px), the slices in between are stitched too (bisection), so a sudden tile jump is placed at the right slice instead of being interpolated. |
 | align | Slice-to-slice drift: SIFT matches between each slice and its next few neighbours, then one global least-squares solve. Where the tile layout changes (e.g. 3×3 → 2×2 tiles), one affine transform between the two montage frames is fitted first (`align.segment_change_model`; results in `work/align/segment_changes.csv`). Where that leaves a median mismatch above `align.elastic_min_px` (5 px), a smooth displacement field is fitted to the matches across the change and applied to every slice before the change (`align.elastic_side`; across other layout changes up to the previous corrected one), warping them into the later layout's geometry (`pipeline/elastic.py`; `work/align/elastic_interfaces.csv` reports the mismatch before and after); render cuts sharply between tiles in those slices (`render.local_blend`). A tile-level affine solve (`align.local_*`, off by default) is also available; it leaves out matches across elastic interfaces. A slice whose own montage is off right at an interface (e.g. the first after a long pause) can be left out of those fits (`align.interface_skip_slices`) and its tiles fitted with a one-slice local window; `align.local_warp_px` adds a smooth warp per tile there, for a distortion within a tile that no affine captures, `align.local_seams: matched` holds the seams matched in the image instead of where the stitch put them, and `align.local_rematch` matches the window's slices again block by block, so a distorted tile gets matches over all of it. |
 | shading | Optional: a flat-field per tile position and acquisition segment (the SEM's brightness fall-off across a tile), estimated from the thumbnails as in BaSiC/CIDRE (`qc/shading.png`); overlaps, intensity and render divide it out of every tile slice. |
 | overlaps | Optional: the brightness relation (gain, offset) of every overlapping tile pair, measured on the raw tiles at 32 nm in every slice by a robust fit on pixel pairs, tissue and resin alike (`qc/overlaps.png`). With `overlaps.patch_grid` > 0 also one relation per pair of tile patches (each tile cut into a grid of patches), for patchgrid. |
 | patchgrid | Optional: smooth brightness maps within each tile for what the flat-field leaves near tile edges and corners (after Janelia's tile intensity correction, saalfeldlab/render): a gain and offset per patch, solved from the patch relations; their within-tile shape, the median over every 20th slice, per tile position and segment (`qc/patchgrid.png`). Intensity then balances the tiles on the patch relations with the shapes applied, and render applies flat-field and shape before each tile's window. |
-| intensity | Per-tile contrast levels, balanced across tile overlaps and smoothed over time. The balance comes from the preview thumbnails every few slices (`balance_source: thumbnails`) or from the overlaps step, slice by slice (`balance_source: overlaps`; with patchgrid, from the patch relations). |
+| refstats | Optional (for `intensity.window: reference`): the reference tissue's histogram (median, 5th–95th percentiles) at every `refstats.every`-th slice, measured inside the refmask on the 8 nm tiles with every correction render applies (flat-field, patch shapes, tile balance, and decurtaining when destreak is on), before any contrast window (`qc/refstats.png`). |
+| intensity | Per-tile contrast levels (the raw values render maps to 0 and 255), balanced across tile overlaps and smoothed over time. The balance comes from the preview thumbnails every few slices (`balance_source: thumbnails`) or from the overlaps step, slice by slice (`balance_source: overlaps`; with patchgrid, from the patch relations). The window: `median` (the tissue's median at a set grey), `percentile`, or `reference` (the reference tissue at a set grey and width, so volumes match; below). |
 | zcorrect | Optional slice-thickness correction (off by default). |
 | render | Applies everything in one pass and writes OME-Zarr (Zarr v3, sharded), optionally downsampled; CLAHE; optional destreaking (filter, or swap from a second detector). |
 | pyramid | Lower-resolution scales of the volume. |
@@ -74,7 +78,8 @@ python -m pipeline.check --config configs/lab/my_volume.yaml \
 ```
 <name>.ome.zarr        the stitched volume: open in neuroglancer (below)
 <name>_<voxel>nm.tif   quick look in Fiji (finest scale under export.max_gb)
-qc/                    check_report.md and plots: stitch, align_drift, intensity, preview_stats, daily sheets
+qc/                    check_report.md and plots: stitch, align_drift, intensity, preview_stats, daily sheets;
+                       with window: reference also refmask, refstats and intensity_reference (.png, .json)
 work/                  working files of every step and the Slurm logs (work/logs/); no need to open
 ```
 
@@ -169,12 +174,64 @@ timeline changed.
 `shading_before_after.py`; usage in each docstring). `qc/` in a clone is git-ignored: a place to
 copy a run's `qc/` plots and comparison stacks for looking at locally.
 
-## Reference tissue mask (in development)
+## Consistent contrast across volumes (`intensity.window: reference`)
+
+Volumes stained or imaged differently come out of the median or percentile windows looking different,
+because those windows follow all the tissue in a slice, whatever its mix. The reference window instead
+puts one tissue, neuropil, at a fixed standard in every volume: its median at grey `reference.median`
+and the width of its histogram between the 5th and 95th percentile at `reference.contrast` greys (e.g.
+150 and 140). Which percentiles the window clips at is not chosen; it follows from matching the
+neuropil, and the QC reports it. The standard is measured once on a reference volume
+(`tools/reference_from_volume.py`: its neuropil numbers under the levels it was rendered with) and
+then kept fixed.
+
+Three steps:
+
+1. **refmask** marks the neuropil per ~2 µm square of every preview thumbnail (`pipeline/refmask.py`,
+   below).
+2. **refstats** measures the neuropil's histogram inside that mask at every `refstats.every`-th slice
+   of each segment, on the common scale the tiles are balanced to, with every correction render
+   applies (decurtaining too, when `destreak.enabled`), before any window. `refstats.region` limits it
+   to part of the volume; `refstats.output` keeps a variant's statistics apart (e.g. with and without
+   decurtaining; `tools/refstats_compare.py` compares two).
+3. **intensity** sets each slice's window:
+   - its **width** is 255 × the neuropil's p5–p95 width / `reference.contrast`;
+   - its **position** follows every slice's tissue, as the median window places it, so fast changes
+     from slice to slice are followed exactly; it is shifted so the neuropil's median comes out at
+     `reference.median`;
+   - the width and that shift follow the neuropil **slowly** along z (`reference.per: slice`, the
+     default: a running median of the sampled slices over `reference.smooth_slices`, 2001), restarting
+     at every segment change (a change of tile layout) and at every z in `reference.breaks` (e.g. a
+     microscope setting changed mid-run). `per: segment` keeps one width and one shift per segment
+     instead.
+
+The QC (`qc/intensity_reference[_<output>].png`, `.json`, `_samples.csv`) predicts the neuropil's
+grey and width at every sampled slice, the tissue clipped at 0 or 255, and the step across every
+segment change, next to the same for the previous levels. To put a volume on the standard, add to a
+variant config (`base: my_volume.yaml`):
+
+```yaml
+refmask: {enabled: true}
+refstats: {enabled: true, every: 64}
+intensity:
+  window: reference
+  output: reference                  # own levels, next to the volume's existing ones
+  reference: {median: 150, contrast: 140}
+render:
+  name: my_volume_reference.ome.zarr
+```
+
+then `./run_pipeline.sh CONFIG --steps refmask,refstats,intensity`, look at the QC, and
+`--steps render,pyramid`. `tools/reference_preview.py` draws before/after crops of the new levels
+without rendering (`levels` mode maps the existing volume through the old and new windows exactly).
+
+### The neuropil mask
 
 `pipeline/refmask.py` marks a reference tissue (neuropil, with tracts) on the preview thumbnails, per
 ~2 µm cell, so that intensity statistics can be measured in the same tissue in every volume. It is a
-small trained classifier (`pipeline/refmask_neuropil.json`) on texture features that ignore gain,
-offset and rotation; `tools/refmask_check.py` draws it over a volume and measures neuropil statistics
+small trained classifier (`pipeline/refmask_neuropil.json`, gradient-boosted trees in
+`pipeline/boost.py`) on texture features that ignore gain, offset and rotation;
+`tools/refmask_check.py` draws it over a volume and measures neuropil statistics
 inside it, and `tools/refmask_train.py` rebuilds the model from labelled boxes
 (`pipeline/refmask_neuropil_labels.json`). `refmask_train.py propose` draws new label boxes from the
 current classifier's own mask (a box and a 10 µm margin all inside the mask, or all in tissue
