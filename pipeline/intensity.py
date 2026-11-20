@@ -27,12 +27,16 @@ p5_p95, the width between the 5th and 95th percentile of the slice's neuropil (i
 the default), or lc32, its local contrast (the mean SD in 8 px windows at 32 nm). The percentiles a
 window clips at are not chosen: they follow from matching the reference tissue, and the QC reports
 them. From the refstats step's per-slice neuropil median m and spread c on the common
-scale the tiles are balanced to (refstats measures it as render applies it), smoothed over z with a
-running median of ``reference.smooth_slices`` (restarting at segment changes), interpolated between
-the sampled slices (held at a segment's ends) and averaged over ``reference.ramp_slices``, so the
-window changes smoothly along z. The window is hi - lo = 255 c / C_ref, lo = m - median_ref (hi - lo)
-/ 255; tile balance and per-slice jumps as for the other windows. A segment without reference tissue
-keeps the median window. QC: qc/intensity_reference[_<output>].png and .json: predicted neuropil
+scale the tiles are balanced to (refstats measures it as render applies it): the window's width is
+hi - lo = 255 c / C_ref, with c followed slowly along z (``reference.per: slice``, the default: running
+median over ``reference.smooth_slices``, restarting at segment changes and ``breaks``, interpolated
+between the sampled slices, held at a block's ends, averaged over ``reference.ramp_slices``) or one c
+per block (``per: segment``). Its position (``reference.brightness: tissue``, the default) follows every
+slice's tissue as the median window places it, so fast slice-to-slice changes are followed exactly,
+shifted so the neuropil's median comes out at median_ref: the shift is followed slowly along z in the
+same way (or is one per block with per: segment). With ``brightness: reference`` the position comes
+from the neuropil alone, lo = m - median_ref (hi - lo) / 255. Tile balance and per-slice jumps as for
+the other windows. A segment without reference tissue keeps the median window. QC: qc/intensity_reference[_<output>].png and .json: predicted neuropil
 grey and contrast per sampled slice, clipped tissue fractions, the largest slice-to-slice change of
 the neuropil's grey and contrast (flicker), and the step across every segment change next to the
 step with the previous levels.
@@ -96,21 +100,19 @@ DEFAULTS = {
             # p5_p95: the width between the 5th and 95th percentile of the slice's reference tissue (its
             # histogram's width) | lc32: its local contrast, the mean SD in 8 px windows at 32 nm
             "measure": "p5_p95",
-            # segment: one window per block (a segment, split at ``breaks``) from the median of its sampled
-            # slices, so nothing changes from slice to slice within it | slice: follow the samples along z
-            # (running median over smooth_slices, interpolated, running mean over ramp_slices)
-            "per": "segment",
+            # slice: the window's width (contrast), and with brightness: tissue the shift that puts the reference
+            # tissue at reference.median, follow the reference tissue's samples slowly along z (running median
+            # over smooth_slices, restarting at every block, interpolated, running mean over ramp_slices), so a
+            # slow change within a long block doesn't leave its ends off target and a step at the next block |
+            # segment: one width and one shift per block (a segment, split at ``breaks``), from the median of
+            # its sampled slices
+            "per": "slice",
             "breaks": [],         # z where a new block starts within a segment (e.g. a setting changed mid-run)
-            # tissue: the window's position follows every slice's tissue (as the median window), shifted per
-            # block so the reference tissue's median is at reference.median | reference: set from the
-            # reference tissue's own median (per block, or along z with per: slice)
+            # tissue: the window's position follows every slice's tissue (as the median window), shifted so
+            # the reference tissue's median is at reference.median (per block, or slowly along z with
+            # per: slice) | reference: set from the reference tissue's own median
             "brightness": "tissue",
-            # brightness: tissue: the shift that puts the reference tissue at reference.median follows its
-            # samples slowly along z (running median over this many slices, restarting at every block, then a
-            # running mean over ramp_slices), so a slow change in the tissue mix within a long block doesn't
-            # move the reference tissue away from the target towards the block's ends | 0: one shift per block
-            "drift_slices": 2001,
-            "smooth_slices": 601,   # per: slice: running median of the sampled stats over z (slices)
+            "smooth_slices": 2001,  # per: slice: running median of the sampled stats over z (slices)
             "ramp_slices": 129,   # running mean over z after interpolation (no kinks at the samples)
             "min_cells": 20,      # samples with fewer reference cells don't count
             "boundary_slices": 300,   # QC: samples within this many slices each side of a segment change
@@ -391,8 +393,9 @@ def _tissue_brightness(cfg, df, per_z, r):
     """brightness: tissue. The window's width per block from the reference tissue (c_s, as for
     brightness: reference), its position following every slice's starting window (all tissue, as the
     median window places it), shifted so the reference tissue's median comes out at reference.median
-    (with the per-slice jumps render will add): by one shift per block (drift_slices 0), or by a shift
-    that follows the block's sampled slices slowly along z (running median over drift_slices)."""
+    (with the per-slice jumps render will add): by one shift per block (per: segment), or by a shift
+    that follows the block's sampled slices slowly along z (per: slice, as the width: running median
+    over smooth_slices)."""
     tm = float(cfg["intensity"]["target_median"])
     w0 = common_window(df)                                   # starting windows, before the jumps
     M = (w0["Lc"] + tm / 255.0 * (w0["Hc"] - w0["Lc"])).reindex(per_z["z"]).to_numpy()
@@ -401,7 +404,7 @@ def _tissue_brightness(cfg, df, per_z, r):
     else:
         J = np.zeros(len(per_z))
     W = 255.0 * per_z["c_s"].to_numpy(float) / float(r["contrast"])
-    drift = int(r.get("drift_slices") or 0)
+    follow = r.get("per", "segment") == "slice"
     L = np.full(len(per_z), np.nan)
     for b, g in per_z.groupby("block"):
         i = g.index.to_numpy()
@@ -410,9 +413,9 @@ def _tissue_brightness(cfg, df, per_z, r):
             continue
         # per sampled slice: the shift that would put its reference tissue exactly at reference.median
         need = float(r["median"]) * W[i][ok] / 255.0 - (g["median"].to_numpy()[ok] - M[i][ok] - J[i][ok])
-        if drift > 0:
+        if follow:
             pos = g["pos"].to_numpy(float)
-            a = smooth_samples(pos[ok], need, pos, drift, r.get("ramp_slices", 0))
+            a = smooth_samples(pos[ok], need, pos, r["smooth_slices"], r.get("ramp_slices", 0))
         else:
             a = np.median(need)
         L[i] = M[i] - a

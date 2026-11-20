@@ -1,0 +1,459 @@
+<title>How em-pipe Works</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!--
+  A plain-language tour of the em-pipe pipeline for people new to it.
+  The example images (img/*.jpg) are real data from the lab's volumes. They are kept out of this public
+  repository and published with the page from a local, git-ignored qc/ folder; without them the page still
+  reads, with empty frames where the pictures go.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+  /* Layout: one reading column, a route map of the steps at the top, then one section per stage in pipeline order. */
+  :root {
+    --bg: #f4f6f7;
+    --surface: #ffffff;
+    --ink: #15191d;
+    --ink-2: #434b55;
+    --muted: #6a737e;
+    --rule: #d6dbe0;
+    --accent: #0c6a73;
+    --accent-soft: #d9eeee;
+    --new: #8a5a00;
+    --new-soft: #f6ead2;
+    --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-head: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101316; --surface: #171b1f; --ink: #e7eaed; --ink-2: #b9c1c9; --muted: #8a939d;
+      --rule: #2a3036; --accent: #62c3ca; --accent-soft: #15353a; --new: #e0b45c; --new-soft: #3a2e14;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101316; --surface: #171b1f; --ink: #e7eaed; --ink-2: #b9c1c9; --muted: #8a939d;
+    --rule: #2a3036; --accent: #62c3ca; --accent-soft: #15353a; --new: #e0b45c; --new-soft: #3a2e14;
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16.5px;
+    line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 40px 64px;
+  }
+  .page { max-width: 46rem; margin: 0 auto; display: grid; gap: 56px; }
+  h1, h2, h3 { font-family: var(--font-head); text-wrap: balance; line-height: 1.2; margin: 0; }
+  h1 { font-size: clamp(2rem, 6vw, 2.8rem); font-weight: 600; letter-spacing: -0.01em; }
+  h2 { font-size: 1.65rem; font-weight: 600; }
+  h3 { font-size: 1.15rem; font-weight: 600; }
+  p { margin: 0; }
+  .flow { display: grid; gap: 16px; }
+  .lede { font-size: 1.12rem; color: var(--ink-2); }
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent);
+  }
+  .eyebrow.is-new { color: var(--new); }
+  code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
+  code { background: var(--accent-soft); padding: 0.05em 0.35em; border-radius: 3px; }
+  strong { font-weight: 600; }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* facts strip */
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 12px; }
+  .fact { border-top: 2px solid var(--ink); padding-top: 8px; display: grid; gap: 2px; }
+  .fact .k { font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+  .fact .v { font-size: 0.98rem; }
+
+  /* route map */
+  .route { display: grid; gap: 10px; counter-reset: stage; padding: 0; margin: 0; list-style: none; }
+  .route li { display: grid; grid-template-columns: 2.2rem 1fr; gap: 12px; align-items: start; }
+  .route .n {
+    font-family: var(--font-mono); font-size: 0.85rem; color: var(--surface); background: var(--ink);
+    width: 2.2rem; height: 2.2rem; display: grid; place-items: center; border-radius: 50%;
+  }
+  .route .n.is-new { background: var(--new); }
+  .route .what { display: grid; gap: 6px; min-width: 0; }
+  .route .what b { font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-family: var(--font-mono); font-size: 0.8rem; padding: 2px 8px; border-radius: 3px;
+    border: 1px solid var(--rule); background: var(--surface); color: var(--ink-2);
+  }
+  .chip.opt { border-style: dashed; }
+  .chip.is-new { border-color: var(--new); color: var(--new); background: var(--new-soft); }
+  .legend { font-size: 0.85rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 16px; }
+  .legend span { display: inline-flex; gap: 6px; align-items: center; }
+
+  /* sections */
+  section { display: grid; gap: 18px; }
+  section > header { display: grid; gap: 6px; border-top: 1px solid var(--rule); padding-top: 22px; }
+  .step { display: grid; gap: 6px; }
+  .step h3 .mono { font-weight: 500; color: var(--muted); font-size: 0.8em; margin-left: 6px; }
+
+  .callout {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px;
+    display: grid; gap: 8px;
+  }
+  .callout.is-new { border-color: var(--new); }
+  .callout .label { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+  figure { margin: 0; display: grid; gap: 8px; }
+  figure img {
+    width: 100%; height: auto; display: block; border: 1px solid var(--rule); background: var(--surface);
+    border-radius: 4px; min-height: 3rem;
+  }
+  figcaption { font-size: 0.86rem; color: var(--muted); }
+  .diagram { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 12px; }
+  .diagram svg { display: block; width: 100%; min-width: 560px; height: auto; }
+  .tag {
+    font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); border: 1px solid var(--rule); border-radius: 3px; padding: 0 5px; margin-right: 6px;
+  }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+  .table-wrap { overflow-x: auto; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-family: var(--font-mono); font-size: 0.76rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  td.num { font-variant-numeric: tabular-nums; font-family: var(--font-mono); white-space: nowrap; }
+
+  dl.glossary { display: grid; grid-template-columns: minmax(7rem, 11rem) 1fr; gap: 10px 18px; margin: 0; }
+  dl.glossary dt { font-weight: 600; }
+  dl.glossary dd { margin: 0; color: var(--ink-2); min-width: 0; }
+  @media (max-width: 34rem) {
+    dl.glossary { grid-template-columns: 1fr; gap: 2px; }
+    dl.glossary dd { margin-bottom: 10px; }
+  }
+  footer { font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 16px; }
+</style>
+
+<main class="page">
+
+  <header class="flow">
+    <p class="eyebrow">em-pipe · FIB-SEM processing</p>
+    <h1>How em-pipe Works</h1>
+    <p class="lede">The microscope gives us thousands of thin slices of a brain, each photographed as a
+      mosaic of overlapping pictures. em-pipe turns that pile of pictures into one clean 3D volume you can
+      scroll through in neuroglancer, with the same brightness and contrast in every volume we make.</p>
+    <div class="facts" role="list">
+      <div class="fact" role="listitem"><span class="k">Goes in</span><span class="v">Raw tiles: a 3×3 or 2×2 grid of pictures per slice, 8 nm pixels, 16-bit values</span></div>
+      <div class="fact" role="listitem"><span class="k">How many</span><span class="v">35h has 17,689 slices; A1001 has 487</span></div>
+      <div class="fact" role="listitem"><span class="k">Comes out</span><span class="v">One volume, greys 0 (black) to 255 (white), with zoomed-out copies for fast viewing</span></div>
+    </div>
+  </header>
+
+  <section aria-labelledby="map">
+    <header>
+      <p class="eyebrow">The route</p>
+      <h2 id="map">Five stages, in order</h2>
+    </header>
+    <p>Each name below is one step of the pipeline. They run one after another as cluster jobs, and each step
+      only starts when the one before it has finished. A step that already has its output skips the work, so
+      resubmitting picks up where it stopped.</p>
+    <ol class="route">
+      <li><span class="n">1</span><div class="what"><b>Take stock of the raw pictures</b>
+        <div class="chips"><span class="chip">check</span><span class="chip">preview</span></div></div></li>
+      <li><span class="n">2</span><div class="what"><b>Put the pieces together</b>
+        <div class="chips"><span class="chip">stitch</span><span class="chip">align</span></div></div></li>
+      <li><span class="n">3</span><div class="what"><b>Even out the brightness between and within tiles</b>
+        <div class="chips"><span class="chip opt">shading</span><span class="chip opt">overlaps</span><span class="chip opt">patchgrid</span><span class="chip">intensity (tile balance)</span></div></div></li>
+      <li><span class="n is-new">4</span><div class="what"><b>Set brightness and contrast to the lab standard</b>
+        <div class="chips"><span class="chip is-new">refmask</span><span class="chip is-new">refstats</span><span class="chip is-new">intensity (window: reference)</span></div></div></li>
+      <li><span class="n">5</span><div class="what"><b>Make the volume</b>
+        <div class="chips"><span class="chip">render</span><span class="chip opt">CLAHE copy</span><span class="chip">pyramid</span></div></div></li>
+    </ol>
+    <div class="legend">
+      <span><span class="chip">step</span> always runs</span>
+      <span><span class="chip opt">step</span> optional, used for our volumes</span>
+      <span><span class="chip is-new">step</span> new reference contrast</span>
+    </div>
+  </section>
+
+  <section aria-labelledby="s1">
+    <header>
+      <p class="eyebrow">Stage 1</p>
+      <h2 id="s1">Take stock of the raw pictures</h2>
+    </header>
+    <div class="step">
+      <h3>Check the raw files <span class="mono">check</span></h3>
+      <p>Before doing anything else, em-pipe makes a list of every picture: which slice it belongs to, which
+        tile of the grid it is, and when it was taken. It flags problems such as half-written files, missing
+        tiles, long pauses and restarts. It also notices when the tile grid changes during the run
+        (for example from 3×3 to 2×2 tiles). Each stretch of slices with one tile layout is called a
+        <strong>segment</strong>, and segments matter a lot later on.</p>
+    </div>
+    <div class="step">
+      <h3>Make small previews <span class="mono">preview</span></h3>
+      <p>Every tile is shrunk 16 times (8 nm pixels become 128 nm pixels) into a thumbnail, with a few
+        brightness numbers per tile. Later steps use these thumbnails when they need a quick look at
+        everything without reading the full-size data again.</p>
+    </div>
+    <figure>
+      <img src="img/segments.jpg" alt="Six slices of the 35h volume, one per segment, with coloured outlines showing where each tile sits. The first two segments use 3 by 3 tiles, the last four use 2 by 2 tiles of different sizes." loading="lazy">
+      <figcaption><span class="tag">Real data</span>35h has six segments. Each panel is one slice from a
+        segment, with the tiles outlined (the outlines are drawn on, they are not in the data). The tile grid and
+        tile size change between segments, and with them the brightness and contrast of the raw pictures.</figcaption>
+    </figure>
+  </section>
+
+  <section aria-labelledby="s2">
+    <header>
+      <p class="eyebrow">Stage 2</p>
+      <h2 id="s2">Put the pieces together</h2>
+    </header>
+    <div class="step">
+      <h3>Stitch the tiles of each slice <span class="mono">stitch</span></h3>
+      <p>Neighbouring tiles overlap a little, like photos for a panorama. em-pipe finds the same small features
+        in both tiles where they overlap and works out where each tile sits so the features line up. It does
+        this on every 50th slice, and on more slices wherever the tiles moved suddenly in between.</p>
+    </div>
+    <div class="step">
+      <h3>Line the slices up with each other <span class="mono">align</span></h3>
+      <p>The sample drifts slowly while it is being imaged, so each slice is matched to the next few slices
+        and all the shifts are solved together. Where the tile layout changes between segments, it also works
+        out how the two layouts fit, including a gentle warp where a simple shift is not enough.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s3">
+    <header>
+      <p class="eyebrow">Stage 3</p>
+      <h2 id="s3">Even out the brightness between and within tiles</h2>
+    </header>
+    <p>Even perfectly placed tiles do not match in brightness. These steps make the whole slice look like one
+      picture instead of a patchwork.</p>
+    <div class="step">
+      <h3>Correct the uneven lighting inside each tile <span class="mono">shading</span></h3>
+      <p>The microscope's picture is a little brighter in some parts of a tile than others. Averaged over many
+        slices, that pattern shows up clearly, so em-pipe measures it for each tile position and segment
+        (a "flat-field") and divides it out.</p>
+    </div>
+    <div class="step">
+      <h3>Compare tiles where they overlap <span class="mono">overlaps</span> <span class="mono">patchgrid</span></h3>
+      <p>Where two tiles overlap they show the same tissue, so they should have the same brightness. em-pipe
+        compares them pixel by pixel (at 32 nm) in every slice. With patchgrid, each tile is also cut into a
+        grid of patches, which catches the leftover differences near tile edges and corners.</p>
+    </div>
+    <div class="step">
+      <h3>Balance the tiles <span class="mono">intensity</span></h3>
+      <p>From all those comparisons, em-pipe gives each tile a small brightness correction so that all the
+        tiles of a slice sit on one shared scale with no visible seams. Everything after this point works on
+        that shared scale.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s4">
+    <header>
+      <p class="eyebrow is-new">Stage 4 · new in November 2026</p>
+      <h2 id="s4">Set brightness and contrast to the lab standard</h2>
+    </header>
+    <p>The raw values are 16-bit numbers. The final volume has greys from 0 to 255. Somewhere we have to choose
+      which raw value becomes black, which becomes white, and how everything in between is spread out. That
+      choice is called the <strong>window</strong>. Its middle sets the <strong>brightness</strong> and its
+      width sets the <strong>contrast</strong>: a narrow window stretches small differences into big ones.</p>
+
+    <div class="callout">
+      <p class="label">The idea in one line</p>
+      <p>Photographers put a grey card in the shot and set the exposure so the card always looks the same.
+        We use <strong>neuropil</strong> as our grey card: we set every volume's window so its neuropil comes out
+        the same as in 35h.</p>
+    </div>
+
+    <div class="step">
+      <h3>Why neuropil?</h3>
+      <p>Matching on "all tissue" depends on what happens to be in the picture: a slice with lots of cell
+        bodies, gut or empty resin gives a different result from one full of neuropil, even if the staining is
+        identical. Neuropil (the dense tangle of neurites, including fibre tracts) looks much the same in every
+        volume and is present in almost every slice, so it makes a fair yardstick.</p>
+    </div>
+
+    <div class="step">
+      <h3>Find the neuropil <span class="mono">refmask</span></h3>
+      <p>A small trained classifier looks at the 128 nm thumbnails in squares of about 2 µm and decides,
+        square by square, whether it is neuropil or not. It goes by texture: neuropil is a fine, even texture,
+        while cell bodies are coarser with smooth insides. It was trained on example boxes that were checked by
+        hand, one by one. The mask only decides <em>where to measure</em>. It is never applied to the image.</p>
+    </div>
+    <figure>
+      <img src="img/mask.jpg" alt="A 35h slice at 128 nm with the neuropil region tinted yellow, background resin tinted blue, and the cell body rind around it left untinted." loading="lazy">
+      <figcaption><span class="tag">Real data</span>35h, slice 5328. Yellow: squares the classifier calls neuropil
+        (18% of the tissue here). Blue: background (resin). Magenta squares: neuropil patches used to test the
+        mask. The colours are an overlay to show the mask; the image underneath is unchanged.</figcaption>
+    </figure>
+
+    <div class="step">
+      <h3>Measure the neuropil <span class="mono">refstats</span></h3>
+      <p>On a sample of slices (by default every 32nd slice of each segment; every 64th for our large
+        volumes), em-pipe reads the full-size tiles,
+        applies exactly what the final render will apply (decurtaining, the lighting fix and the tile balance),
+        and takes the histogram of the neuropil pixels. From that histogram it keeps three numbers: the
+        <strong>median</strong> (the middle value), and the <strong>5th and 95th percentiles</strong>. The gap
+        between those two is the neuropil's <strong>p5–p95 width</strong>, a simple measure of its contrast.</p>
+    </div>
+
+    <div class="step">
+      <h3>The standard</h3>
+      <p>Measured on 35h as it was already rendered, its neuropil had a median grey of 148 and a p5–p95 width of
+        143 greys. The lab standard rounds that to <strong>median 150, width 140</strong>. Every volume is set so
+        its neuropil hits those two numbers.</p>
+    </div>
+
+    <figure>
+      <div class="diagram" role="img" aria-label="Diagram: the neuropil histogram on raw values, with its 5th percentile, median and 95th percentile, mapped onto the grey scale from 0 to 255 so the median becomes 150 and the 5th to 95th percentile span becomes 140 greys.">
+        <svg viewBox="0 0 720 330" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="ramp" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="#000000"/>
+              <stop offset="1" stop-color="#ffffff"/>
+            </linearGradient>
+          </defs>
+          <text x="40" y="22" style="fill: var(--muted); font: 500 12px var(--font-mono); letter-spacing: 0.06em">RAW VALUES (16-BIT), NEUROPIL OF ONE SLICE</text>
+          <path d="M170 140 C 255 138, 300 52, 370 52 C 432 52, 470 130, 570 140 Z" style="fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2"/>
+          <line x1="40" y1="140" x2="680" y2="140" style="stroke: var(--ink-2); stroke-width: 1.5"/>
+          <line x1="258" y1="40" x2="258" y2="140" style="stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 4 4"/>
+          <line x1="366" y1="40" x2="366" y2="140" style="stroke: var(--ink); stroke-width: 2"/>
+          <line x1="480" y1="40" x2="480" y2="140" style="stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 4 4"/>
+          <text x="258" y="36" text-anchor="middle" style="fill: var(--ink); font: 500 13px var(--font-mono)">p5</text>
+          <text x="366" y="36" text-anchor="middle" style="fill: var(--ink); font: 500 13px var(--font-mono)">median</text>
+          <text x="480" y="36" text-anchor="middle" style="fill: var(--ink); font: 500 13px var(--font-mono)">p95</text>
+          <line x1="258" y1="140" x2="211" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
+          <line x1="366" y1="140" x2="417" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
+          <line x1="480" y1="140" x2="562" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
+          <text x="560" y="190" style="fill: var(--muted); font: 400 12.5px var(--font-body)">the window maps raw values to greys</text>
+          <rect x="40" y="232" width="640" height="24" fill="url(#ramp)" style="stroke: var(--rule); stroke-width: 1"/>
+          <line x1="211" y1="226" x2="211" y2="262" style="stroke: var(--accent); stroke-width: 2"/>
+          <line x1="417" y1="226" x2="417" y2="262" style="stroke: var(--accent); stroke-width: 2.5"/>
+          <line x1="562" y1="226" x2="562" y2="262" style="stroke: var(--accent); stroke-width: 2"/>
+          <text x="40" y="280" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">0 black</text>
+          <text x="680" y="280" text-anchor="end" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">255 white</text>
+          <text x="211" y="280" text-anchor="middle" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">≈68</text>
+          <text x="417" y="280" text-anchor="middle" style="fill: var(--ink); font: 600 13px var(--font-mono)">150</text>
+          <text x="562" y="280" text-anchor="middle" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">≈208</text>
+          <path d="M211 296 L211 304 L562 304 L562 296" style="fill: none; stroke: var(--accent); stroke-width: 1.5"/>
+          <text x="386" y="322" text-anchor="middle" style="fill: var(--ink); font: 500 13px var(--font-body)">p5 to p95 spans 140 greys</text>
+          <text x="40" y="216" style="fill: var(--muted); font: 500 12px var(--font-mono); letter-spacing: 0.06em">GREYS IN THE VOLUME</text>
+        </svg>
+      </div>
+      <figcaption><span class="tag">Diagram</span>The window puts the neuropil's median at grey 150 and stretches
+        its p5–p95 range over 140 greys. We never choose "clip at 1% and 99%" by hand: how much of the slice ends
+        up pure black or white simply follows from matching the neuropil, and the QC report says how much it is
+        (for 37i, about half a percent of the tissue in a typical slice).</figcaption>
+    </figure>
+
+    <div class="step">
+      <h3>Contrast once per segment, brightness slice by slice <span class="mono">intensity, window: reference</span></h3>
+      <p>Measured before any window, the neuropil's width hardly changes within a segment (about 2–3%) but can
+        jump between segments: in 35h it fell by about a quarter where the tiles changed from 3×3 to 2×2.
+        So the <strong>contrast</strong> is set once per segment, from all the neuropil measured in it. Nothing
+        about the contrast changes from slice to slice inside a segment.</p>
+      <p>Overall brightness is different: it wanders by about 1% over tens of slices, which would be 15–30 greys
+        on screen if left alone. So the <strong>brightness</strong> follows every slice, the same way the
+        previous method did (from all the tissue in the slice, which the previews measure in every slice; the
+        neuropil is only measured on sampled slices). It is then shifted so that, across the segment, the neuropil's median comes out at 150.</p>
+    </div>
+
+    <div class="callout is-new">
+      <p class="label">Being tested (November 2026)</p>
+      <p>In one long 35h segment, the mix of tissue changed slowly from start to end, which pulled the neuropil
+        from about 156 in the segment's first quarter to about 142 in its last, and left a step of 13 greys where the
+        next segment began. The fix being tested lets that shift change slowly along a segment (smoothed over
+        about 2,000 slices), so the neuropil stays near 150 all the way along. It is far too slow to cause
+        flicker from one slice to the next.</p>
+    </div>
+
+    <div class="step">
+      <h3>What it did to our volumes</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Volume</th><th>Contrast change</th><th>What that means</th></tr></thead>
+          <tbody>
+            <tr><td>35h</td><td class="num">×1.03</td><td>Almost unchanged, as expected: it is the reference.</td></tr>
+            <tr><td>37i</td><td class="num">×1.04</td><td>Very slightly stronger contrast.</td></tr>
+            <tr><td>A1001</td><td class="num">×0.64</td><td>Its old contrast was much stronger than 35h's; now it matches.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <figure>
+      <img src="img/before_after_35h.jpg" alt="35h slice 8848 inside the neuropil: before and after the reference contrast. The two look nearly identical." loading="lazy">
+      <img src="img/before_after_A1001.jpg" alt="A1001 slice 240 inside the neuropil: before, with harsh contrast, and after, with softer contrast matching 35h." loading="lazy">
+      <figcaption><span class="tag">Real data</span>Left: the previous levels. Right: the lab standard. 35h hardly
+        changes; A1001's harsh contrast is brought down to match.</figcaption>
+    </figure>
+  </section>
+
+  <section aria-labelledby="s5">
+    <header>
+      <p class="eyebrow">Stage 5</p>
+      <h2 id="s5">Make the volume</h2>
+    </header>
+    <div class="step">
+      <h3>Apply everything in one pass <span class="mono">render</span></h3>
+      <p>Render reads every raw tile once and, for each one: removes curtains (when switched on), divides out
+        the uneven lighting, applies the tile's brightness correction and window to get greys from 0 to 255,
+        and places the tile where stitch and align said it goes. The tiles of a slice are joined into one
+        picture and written into the volume (OME-Zarr format). Render first freezes its plan, so changing a
+        setting halfway through a render cannot mix two versions in one volume.</p>
+    </div>
+    <div class="step">
+      <h3>Decurtaining, in short</h3>
+      <p>The ion beam that cuts each slice leaves vertical stripes called curtains. When it is switched on,
+        render removes them from each tile before anything else. If the microscope also recorded a second
+        detector that hardly sees curtains (backscatter), the stripy part is swapped in from that detector
+        instead of being filtered away. The neuropil is measured after decurtaining too, so the contrast is set on
+        the same image that ends up in the volume. On 37i this made the measured neuropil width about 1%
+        narrower (2–3% in the most curtained early segments), with the median unchanged. The curtain work has
+        its own, fuller explanation.</p>
+    </div>
+    <div class="step">
+      <h3>The CLAHE copy</h3>
+      <p>CLAHE is local contrast boosting. It splits each slice into small squares (256 pixels, about 2 µm, for our
+        volumes) and stretches the contrast within each square separately, with a limit (1.5) so it does not
+        blow up the noise. Membranes stand out everywhere, which is nice for looking and tracing. The price is
+        that a given grey no longer means the same thing in different places. That is why the CLAHE version is
+        a separate volume, and the plain volume, with its consistent grey scale, is the one to use for
+        measurements and for training models.</p>
+    </div>
+    <div class="step">
+      <h3>Zoomed-out copies <span class="mono">pyramid</span></h3>
+      <p>Finally, em-pipe makes smaller copies of the volume, each half the size of the last in every direction
+        (averaging 2×2×2 blocks of voxels). neuroglancer shows the small copies when you are zoomed out and
+        the full resolution when you zoom in, so scrolling stays fast.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="gl">
+    <header>
+      <p class="eyebrow">Words used here</p>
+      <h2 id="gl">Glossary</h2>
+    </header>
+    <dl class="glossary">
+      <dt>Slice (z)</dt><dd>One layer of the sample, cut away by the ion beam and imaged. Slices are numbered from 0 in the order they were taken.</dd>
+      <dt>Tile</dt><dd>One picture in the grid that covers a slice, named by row and column, such as <code>1-0</code>.</dd>
+      <dt>Segment</dt><dd>A stretch of slices imaged with one tile layout. A new segment starts whenever the grid or tile size changes.</dd>
+      <dt>Neuropil</dt><dd>The dense tangle of neurites (axons and dendrites) between the cell bodies, fibre tracts included.</dd>
+      <dt>Window</dt><dd>The rule that turns raw values into greys: everything below its low end is black, above its high end is white, linear in between.</dd>
+      <dt>Grey</dt><dd>A value from 0 (black) to 255 (white) in the final volume.</dd>
+      <dt>Percentile</dt><dd>The 5th percentile (p5) is the value that 5% of pixels are darker than; p95 is the value 95% are darker than; the median is p50.</dd>
+      <dt>Flat-field</dt><dd>The map of how much brighter or darker each part of a tile is than average, from the microscope's uneven lighting.</dd>
+      <dt>CLAHE</dt><dd>Contrast-limited adaptive histogram equalisation: local contrast boosting, square by square.</dd>
+      <dt>OME-Zarr</dt><dd>The file format of the volume: many small chunks plus the zoomed-out copies, which neuroglancer reads directly.</dd>
+    </dl>
+  </section>
+
+  <footer>
+    Pictures marked "Real data" come from the lab's 35h and A1001 volumes; outlines and coloured overlays on them
+    are labels drawn on top. Pictures marked "Diagram" are drawings. Step names in grey type are the names used by
+    <span class="mono">run_pipeline.sh</span>; every setting mentioned is listed in
+    <span class="mono">configs/example.yaml</span>.
+  </footer>
+</main>

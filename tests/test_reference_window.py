@@ -115,7 +115,7 @@ def test_tissue_brightness_follows_slices_and_puts_neuropil_on_target():
 
 
 def test_tissue_brightness_follows_a_slow_drift_within_a_block():
-    """brightness: tissue with drift_slices: when the neuropil slowly moves against the rest of the tissue
+    """brightness: tissue with per: slice: when the neuropil slowly moves against the rest of the tissue
     within a long block (the tissue mix changes), one shift per block leaves the block's ends off target
     and a step at the next block; the slow shift keeps the neuropil on target along the whole block,
     while still following the fast slice-to-slice level of the tissue."""
@@ -133,9 +133,10 @@ def test_tissue_brightness_follows_a_slow_drift_within_a_block():
     per_z["median"] = np.where(sampled, neuropil, np.nan)
     per_z["c_s"] = 1500.0
     cfg = {"intensity": {"target_median": 140, "per_slice": "slice"}}
-    flat = intensity._tissue_brightness(cfg, df, per_z.copy(), {"median": 150.0, "contrast": 140.0})
-    slow = intensity._tissue_brightness(cfg, df, per_z.copy(), {"median": 150.0, "contrast": 140.0,
-                                                                 "drift_slices": 601, "ramp_slices": 65})
+    flat = intensity._tissue_brightness(cfg, df, per_z.copy(), {"median": 150.0, "contrast": 140.0,
+                                                                 "per": "segment"})
+    slow = intensity._tissue_brightness(cfg, df, per_z.copy(), {"median": 150.0, "contrast": 140.0, "per": "slice",
+                                                                 "smooth_slices": 601, "ramp_slices": 65})
     g_flat = intensity.grey(neuropil, flat["L"], flat["H"])
     g_slow = intensity.grey(neuropil, slow["L"], slow["H"])
     end = (z > 2800) & (z < 3000)
