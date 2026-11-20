@@ -274,19 +274,46 @@ def merge(cfg, args):
         raise RuntimeError(f"{len(missing)} refstats chunks missing or out of date, e.g. {missing[:3]}: run 'refstats run'")
     st = pd.concat(parts, ignore_index=True).sort_values("z")
     atomic_write(step_dir(cfg, "refstats", "stats.csv"), lambda f: st.to_csv(f, index=False, float_format="%.4f"))
-    fig, axes = plt.subplots(3, 1, sharex=True, figsize=(12, 8), layout="constrained")
-    for ax, col, label in zip(axes, ("median", "lc32", "n_cells"),
-                              ("median (common scale)", "lc32 (common scale)", "cells measured")):
-        ax.plot(st["z"], st[col], "o-", ms=3, lw=0.6, color="#2a78d6")
-        ax.set_ylabel(label)
-    for z in st.loc[st["segment"].ne(st["segment"].shift()), "z"].iloc[1:]:
-        for ax in axes:
-            ax.axvline(z, color="0.75", lw=0.6)
-    axes[0].set_title("Reference tissue on the common scale (before the window), sampled slices")
-    axes[-1].set_xlabel("z")
-    save(fig, qc_path(cfg, "refstats.png"))
+    plot_stats(st, qc_path(cfg, "refstats.png"))
     log.info("refstats: %d sampled slices, %d with reference tissue", len(st), int((st["n_cells"] > 0).sum()))
     return 0
+
+
+def plot_stats(st, path):
+    """Reference tissue along z before any window: median, p5-p95 width, lc32 and cells measured per
+    sampled slice, each segment shaded and labelled with its median values and spread within it."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from .preview import save
+    st = st.copy()
+    st["width"] = st["rq_95"] - st["rq_5"]
+    ok = st["n_cells"] > 0
+    panels = (("median", "neuropil median"), ("width", "neuropil p5-p95 width"), ("lc32", "neuropil lc32"),
+              ("n_cells", "cells measured"))
+    fig, axes = plt.subplots(len(panels), 1, sharex=True, figsize=(13, 10), layout="constrained")
+    segs = list(st.groupby("segment"))
+    for k, (seg, g) in enumerate(segs):
+        z0, z1 = g["z"].min(), g["z"].max()
+        for ax in axes:
+            if k % 2:
+                ax.axvspan(z0, z1, color="0.93", lw=0)
+            if k:
+                ax.axvline(z0, color="0.6", lw=0.8)
+        gg = g[g["n_cells"] > 0]
+        for ax, (col, _) in zip(axes[:3], panels[:3]):
+            if len(gg):
+                v = gg[col]
+                ax.hlines(v.median(), z0, z1, color="#eb6834", lw=1.5)
+                ax.text((z0 + z1) / 2, 1.0, f"seg {seg}\n{v.median():.0f}  (±{100 * v.std() / v.mean():.1f} %)",
+                        transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=8, color="#1a1a19")
+    for ax, (col, label) in zip(axes, panels):
+        ax.plot(st.loc[ok, "z"], st.loc[ok, col], "o", ms=3, color="#2a78d6")
+        ax.set_ylabel(label)
+    axes[0].set_title("Reference tissue before any contrast window (common scale), sampled slices. "
+                      "Orange: each segment's median; ± its variation within the segment", loc="left", fontsize=10)
+    axes[-1].set_xlabel("z")
+    save(fig, path)
 
 
 def main(argv=None):
