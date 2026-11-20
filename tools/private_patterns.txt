@@ -1,0 +1,12 @@
+# Generic patterns for site-specific or personal details (extended regex, case-insensitive).
+# Written with a character class so this file does not match itself. Add site-specific terms
+# (cluster, share and people names) to tools/private_patterns.local.txt, which git ignores.
+/[U]sers/
+/[h]ome/[a-z]
+/[p]rivate/tmp
+/[V]olumes/
+/[t]mp/claude
+[g]s://
+[s]3://
+[A-Za-z0-9._%+-]{2,}[@][A-Za-z0-9-]{2,}(\.[A-Za-z0-9-]{2,})*\.[A-Za-z]{2,6}\b
+[P][0-9]{3}_EM[0-9]{5}

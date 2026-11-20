@@ -19,3 +19,7 @@ qc/
 configs/*
 !configs/example.yaml
 slurm/site.sh
+
+# local, private settings for dev/ scripts and the privacy check: never commit
+dev/paths.local.sh
+tools/private_patterns.local.txt
