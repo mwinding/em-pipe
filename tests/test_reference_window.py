@@ -86,3 +86,29 @@ def test_blocks_split_at_segments_and_breaks():
     # a break on a slice that isn't selected starts the block at the next selected slice
     gappy = pd.DataFrame({"z": [0, 1, 5, 6, 9], "segment": 0})
     assert intensity.block_ids(gappy, [3]).tolist() == [0, 0, 1, 1, 1]
+
+
+def test_tissue_brightness_follows_slices_and_puts_neuropil_on_target():
+    """brightness: tissue: the window moves with every slice's tissue level, its width is set per block from
+    the neuropil's spread, and the neuropil's median lands on the target over the block."""
+    n = 400
+    z = np.arange(n)
+    level = 30000 + 300 * np.sin(z / 20.0)            # the slice's tissue level drifts (acquisition)
+    df = pd.DataFrame({"z": z, "tile": "0-0", "segment": (z >= 200).astype(int), "pos": z.astype(float),
+                       "lo": level - 2000.0, "hi": level + 2000.0, "g": 1.0, "o": 0.0, "jump": 0.0})
+    per_z = pd.DataFrame({"z": z, "segment": df["segment"], "pos": df["pos"]})
+    per_z["block"] = intensity.block_ids(per_z)
+    sampled = z % 32 == 0
+    # neuropil sits 200 below the tissue level; its p5-p95 spread differs per segment
+    per_z["median"] = np.where(sampled, level - 200, np.nan)
+    spread_seg = np.where(per_z["segment"] == 0, 1800.0, 1300.0)
+    per_z["c_s"] = spread_seg
+    cfg = {"intensity": {"target_median": 140, "per_slice": "slice"}}
+    r = {"median": 150.0, "contrast": 140.0}
+    out = intensity._tissue_brightness(cfg, df, per_z, r)
+    width = out["H"] - out["L"]
+    assert np.allclose(width, 255 * spread_seg / 140)                  # contrast per segment
+    g = intensity.grey(level - 200, out["L"], out["H"])
+    assert np.allclose(g, 150, atol=1e-6)                             # neuropil on target in every slice
+    # the window follows the drifting tissue: its position changes with the level
+    assert np.corrcoef(out["L"][:200], level[:200])[0, 1] > 0.99

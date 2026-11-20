@@ -161,6 +161,8 @@ intensity:
     per: segment             # segment: one window per block (a segment, split at breaks): the median of its samples |
                              # slice: follow the samples along z (smooth_slices, ramp_slices)
     breaks: []               # z where a new block starts within a segment (e.g. a setting changed mid-run)
+    brightness: tissue       # tissue: position follows every slice's tissue (as the median window), shifted per block
+                             # so the reference tissue's median is at median | reference: from the reference tissue itself
     smooth_slices: 601       # per: slice: running median of the sampled stats over z (slices)
     ramp_slices: 129         # running mean over z after interpolation (no kinks at the samples)
     min_cells: 20            # samples with fewer reference cells don't count

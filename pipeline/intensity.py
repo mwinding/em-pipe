@@ -101,6 +101,10 @@ DEFAULTS = {
             # (running median over smooth_slices, interpolated, running mean over ramp_slices)
             "per": "segment",
             "breaks": [],         # z where a new block starts within a segment (e.g. a setting changed mid-run)
+            # tissue: the window's position follows every slice's tissue (as the median window), shifted per
+            # block so the reference tissue's median is at reference.median | reference: set from the
+            # reference tissue's own median (per block, or along z with per: slice)
+            "brightness": "tissue",
             "smooth_slices": 601,   # per: slice: running median of the sampled stats over z (slices)
             "ramp_slices": 129,   # running mean over z after interpolation (no kinks at the samples)
             "min_cells": 20,      # samples with fewer reference cells don't count
@@ -173,11 +177,13 @@ def compute_levels(cfg):
     if c["window"] not in WINDOWS:
         raise ValueError(f"intensity.window must be one of {WINDOWS}, not {c['window']!r}")
     df = balanced_scale(cfg)
-    if c["window"] == "reference":
-        df = reference_windows(cfg, df)
+    # One jump per slice, relative to the starting windows: a shift in the tiles' own values, settled before
+    # window: reference changes the windows' width (it follows the raw level, not the contrast).
     if c["per_slice"] == "slice":
         rel = df["jump"] / (df["hi"] - df["lo"])
         df["jump"] = rel.groupby(df["z"]).transform("median") * (df["hi"] - df["lo"])
+    if c["window"] == "reference":
+        df = reference_windows(cfg, df)
     if c["per_slice"]:
         df["lo"] += df["jump"]
         df["hi"] += df["jump"]
@@ -257,6 +263,8 @@ def reference_settings(cfg):
     if r["per"] not in ("segment", "slice"):
         raise ValueError(f"intensity.reference.per must be segment or slice, not {r['per']!r}")
     r["breaks"] = sorted(int(b) for b in (r.get("breaks") or []))
+    if r["brightness"] not in ("tissue", "reference"):
+        raise ValueError(f"intensity.reference.brightness must be tissue or reference, not {r['brightness']!r}")
     if not 0 < float(r["median"]) < 255:
         raise ValueError("intensity.reference.median must be in (0, 255)")
     return r
@@ -357,7 +365,10 @@ def reference_windows(cfg, df):
             cc = smooth_samples(g["pos"], g["spread"], g["pos"].to_numpy(float), r["smooth_slices"], r["ramp_slices"])
         cols["m_s"][g.index], cols["c_s"][g.index] = m, cc
     per_z["m_s"], per_z["c_s"] = cols["m_s"], cols["c_s"]
-    per_z["L"], per_z["H"] = window_from_stats(per_z["m_s"], per_z["c_s"], r["median"], r["contrast"])
+    if r["brightness"] == "tissue":
+        per_z = _tissue_brightness(cfg, df, per_z, r)
+    else:
+        per_z["L"], per_z["H"] = window_from_stats(per_z["m_s"], per_z["c_s"], r["median"], r["contrast"])
     df = df.drop(columns=[c for c in ("m_s", "c_s", "L", "H") if c in df]).merge(
         per_z[["z", "m_s", "c_s", "L", "H"]], on="z", how="left")
     df["ref"] = df["L"].notna()
@@ -368,6 +379,32 @@ def reference_windows(cfg, df):
     log.info("reference windows for %d of %d slices (median %g, %s %g)", int(per_z["L"].notna().sum()), len(per_z),
              float(r["median"]), r["measure"], float(r["contrast"]))
     return df
+
+
+def _tissue_brightness(cfg, df, per_z, r):
+    """brightness: tissue. The window's width per block from the reference tissue (c_s, as for
+    brightness: reference), its position following every slice's starting window (all tissue, as the
+    median window places it), shifted once per block so the reference tissue's median comes out at
+    reference.median over the block's sampled slices (with the per-slice jumps render will add)."""
+    tm = float(cfg["intensity"]["target_median"])
+    w0 = common_window(df)                                   # starting windows, before the jumps
+    M = (w0["Lc"] + tm / 255.0 * (w0["Hc"] - w0["Lc"])).reindex(per_z["z"]).to_numpy()
+    if cfg["intensity"]["per_slice"]:
+        J = (df["g"].fillna(1.0) * df["jump"]).groupby(df["z"]).median().reindex(per_z["z"]).to_numpy()
+    else:
+        J = np.zeros(len(per_z))
+    W = 255.0 * per_z["c_s"].to_numpy(float) / float(r["contrast"])
+    L = np.full(len(per_z), np.nan)
+    for b, g in per_z.groupby("block"):
+        i = g.index.to_numpy()
+        ok = g["median"].notna().to_numpy() & np.isfinite(W[i])
+        if not ok.any():
+            continue
+        a = np.median(float(r["median"]) * W[i][ok] / 255.0 - (g["median"].to_numpy()[ok] - M[i][ok] - J[i][ok]))
+        L[i] = M[i] - a
+    per_z["L"], per_z["H"] = L, L + W
+    per_z["m_s"] = per_z["L"] + float(r["median"]) * W / 255.0     # the value each window puts at reference.median
+    return per_z
 
 
 def common_window(df):
@@ -476,9 +513,10 @@ def reference_qc(cfg, df, old=None):
     out["segment_changes"] = steps
     out["flags"] = [f"segment change at z {s['z']}: neuropil step {s['step_grey_new']} greys (old {s['step_grey_old']})"
                     for s in steps if s.get("bigger_than_old")]
-    if out["flicker_new"]["max_d_median"] is not None and out["flicker_new"]["max_d_median"] > float(r["flicker_warn"]):
-        out["flags"].append(f"slice-to-slice change of the neuropil grey up to {out['flicker_new']['max_d_median']} "
-                            "greys away from segment changes")
+    fw = out["flicker_new_without_jumps"]["max_d_median"]
+    if fw is not None and fw > float(r["flicker_warn"]):
+        out["flags"].append(f"the window moves the neuropil grey by up to {fw} greys between slices away from segment "
+                            "changes (not counting the per-slice jumps, which the other windows apply too)")
     return out, samp, fl
 
 
@@ -506,15 +544,14 @@ def plot_reference(cfg, samp, fl, qc, path):
         ax.legend(fontsize=8, loc="upper right")
     ax.set_ylabel("tissue clipped (%)")
     ax = axes[3]
-    for k, colr, lab in (("old", "0.6", "previous levels"), ("new", "#2a78d6", "reference window"),
-                         ("new_without_jumps", "#4a3aa7", "reference part (before per-slice jumps)")):
+    for k, colr, lab in (("new_without_jumps", "#2a78d6", "reference window (without the per-slice jumps)"),):
         if k in fl:
             ax.plot(fl[k]["z"], fl[k]["d_median"], lw=0.6, color=colr, label=lab)
     ax.axhline(float(r["flicker_warn"]), color="#e34948", lw=1, ls="--", label="1 grey")
     for z in fl["new"].loc[fl["new"]["boundary"], "z"]:
         for a in axes:
             a.axvline(z, color="0.75", lw=0.6)
-    ax.set_ylabel("|neuropil grey change|\nslice to slice")
+    ax.set_ylabel("window change between\nslices (greys)")
     ax.set_xlabel("z")
     ax.legend(fontsize=8, loc="upper right")
     axes[0].set_title("Reference window: predicted neuropil at the sampled slices (grey lines: segment changes)")
