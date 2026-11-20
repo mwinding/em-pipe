@@ -24,6 +24,22 @@ def test_other_width_stretches_around_the_median():
     assert standard_compare.other_width(np.array([-40.0, 300.0]), 150, 140, 140).tolist() == [0, 255]
 
 
+def test_noise_sd_recovers_white_noise_under_structure():
+    """Known noise (SD 6) on smooth shading plus sharp-edged blobs (membrane-like structure) and rounding:
+    the estimate is within 10 %, the structure doesn't inflate it, and masked pixels are left out."""
+    rng = np.random.default_rng(3)
+    yy, xx = np.mgrid[0:400, 0:400]
+    structure = 120 + 0.1 * xx + 40 * ((xx // 37 + yy // 29) % 2)            # gradient + hard edges
+    img = np.round(structure + rng.normal(0, 6, structure.shape))
+    assert abs(standard_compare.noise_sd(img) - 6) < 0.6
+    noisy = img.copy()
+    noisy[:, :200] += rng.normal(0, 30, (400, 200))                         # a much noisier half, masked out
+    ok = np.zeros(img.shape, bool)
+    ok[:, 200:] = True
+    assert abs(standard_compare.noise_sd(noisy, ok) - 6) < 0.6
+    assert abs(standard_compare.ROUNDING_SD - 0.2887) < 1e-3
+
+
 def test_volume_clipping_matches_the_window_and_falls_with_width():
     """Tissue ~ normal(30000, 1500) per slice; neuropil median 30000, p5-p95 width 3000 raw; levels at width
     140 put it at grey 150: the clipped fractions are the normal's tails beyond the window's ends, and a

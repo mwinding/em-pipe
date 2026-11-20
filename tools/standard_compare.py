@@ -7,7 +7,11 @@ candidate width (rows), and reports how much is clipped to black or white at eac
   - per crop: the fraction of its pixels at 0 or 255;
   - per volume: the fraction of the tissue at 0 or 255 in the median sampled slice, from refstats' tissue
     quantiles (all sampled slices, the whole slice, every tissue type), so not just what a crop happens
-    to show.
+    to show;
+  - per crop, what a smaller width costs in the middle of the range: the pixel noise in greys (noise_sd)
+    against the error of rounding to whole greys (1 / sqrt(12) = 0.29 grey), as the share of the noise
+    variance that rounding adds. While the noise is several greys, rounding to fewer grey levels loses
+    next to nothing; clipping loses what it clips.
 
 Each volume's config must be a variant with intensity.window: reference and its own levels
 (intensity.output), already computed at one width (its reference.contrast). Another width w is the same
@@ -42,6 +46,25 @@ def unclipped(lmap, g, z):
     Ln, Hn = lmap.new.loc[z, ["Lc", "Hc"]]
     u = Lo + np.asarray(g, np.float64) * (Ho - Lo) / 255.0
     return 255.0 * (u - Ln) / (Hn - Ln)
+
+
+ROUNDING_SD = 1 / np.sqrt(12)       # SD of the error from rounding to whole greys (uniform over one step)
+
+
+def noise_sd(img, ok=None):
+    """Pixel noise SD of an image in its own units (Immerkaer 1996): the image filtered with
+    [[1,-2,1],[-2,4,-2],[1,-2,1]], which cancels smooth structure and scales white noise by 6, its
+    median absolute value as a robust SD (so membranes and other edges, a minority, don't inflate it)
+    divided by 6. ``ok``: pixels to use (their 3x3 neighbourhood whole); None: all. Noise correlated
+    between neighbours (e.g. from interpolation) reads low, so for comparing with the rounding error
+    the estimate errs on the cautious side."""
+    from scipy.ndimage import binary_erosion
+    from scipy.signal import convolve2d
+    k = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], float)
+    r = convolve2d(np.asarray(img, np.float64), k, mode="valid")
+    if ok is not None:
+        r = r[binary_erosion(ok, np.ones((3, 3), bool))[1:-1, 1:-1]]
+    return float(1.4826 * np.median(np.abs(r)) / 6.0) if r.size else float("nan")
 
 
 def other_width(g, med, width, width_to):
@@ -109,22 +132,32 @@ def main(argv=None):
             g = np.asarray(arr[ds.planes[z], y:y + crop, x:x + crop].read().result())
             new = unclipped(lmap, g, z)
             data = g > 0
-            crops[kind] = {"y": y, "x": x, "rows": {}}
+            # noise at the levels' own width, from pixels the rendered volume didn't clip
+            sd = noise_sd(new, (g > 0) & (g < 255))
+            crops[kind] = {"y": y, "x": x, "noise_sd": sd, "rows": {}}
             for w in widths:
                 gw = other_width(new, med, width, w)
+                sd_w = sd * w / width
                 crops[kind]["rows"][w] = {"img": gw[::2, ::2].astype(np.uint8),
-                                          "black": float((gw[data] <= 0).mean()), "white": float((gw[data] >= 255).mean())}
+                                          "black": float((gw[data] <= 0).mean()), "white": float((gw[data] >= 255).mean()),
+                                          "noise_sd": sd_w, "rounding_share": float(ROUNDING_SD ** 2 / sd_w ** 2)}
         cols.append({"name": it["name"], "z": z, "median": med, "width": width, "volume": vol, "crops": crops})
         print(it["name"], z, {w: {k: round(100 * v, 2) for k, v in c.items() if k != "samples"} for w, c in vol.items()},
               flush=True)
+        for kind, cr in crops.items():
+            print(f"  {kind}: pixel noise SD (greys) " + ", ".join(
+                f"width {w:g}: {rw['noise_sd']:.1f} (rounding adds {100 * rw['rounding_share']:.2f} % to the noise variance)"
+                for w, rw in cr["rows"].items()), flush=True)
     plot(cols, widths, kinds, spec, a.out_png)
     if a.json:
         Path(a.json).write_text(json.dumps({"widths": widths, "items": [
             {"name": c["name"], "z": c["z"], "median": c["median"], "levels_width": c["width"],
              "volume_clipping": {str(w): v for w, v in c["volume"].items()},
-             "crops": {k: {"y": v["y"], "x": v["x"], "clipping": {str(w): {"black": round(rw["black"], 5),
-                                                                               "white": round(rw["white"], 5)}
-                                                                   for w, rw in v["rows"].items()}}
+             "crops": {k: {"y": v["y"], "x": v["x"], "rounding_sd": round(float(ROUNDING_SD), 4),
+                           "per_width": {str(w): {"black": round(rw["black"], 5), "white": round(rw["white"], 5),
+                                                  "noise_sd": round(rw["noise_sd"], 3),
+                                                  "rounding_share": round(rw["rounding_share"], 6)}
+                                         for w, rw in v["rows"].items()}}
                        for k, v in c["crops"].items()}} for c in cols]}, indent=1))
     return 0
 
@@ -149,7 +182,8 @@ def plot(cols, widths, kinds, spec, out_png):
             ax.imshow(rw["img"], cmap="gray", vmin=0, vmax=255, interpolation="nearest")
             ax.set_title(f"{c['name']} z {c['z']}, {names[kind]}\nwidth {w:g}: crop black {100 * rw['black']:.2f} %, "
                          f"white {100 * rw['white']:.2f} %\nwhole volume (median slice): black "
-                         f"{100 * vol['black_median']:.2f} %, white {100 * vol['white_median']:.2f} %",
+                         f"{100 * vol['black_median']:.2f} %, white {100 * vol['white_median']:.2f} %\n"
+                         f"pixel noise {rw['noise_sd']:.1f} greys; rounding adds {100 * rw['rounding_share']:.2f} %",
                          fontsize=9, loc="left")
             if j == 0:
                 ax.set_ylabel(f"p5-p95 width {w:g}", fontsize=11)
