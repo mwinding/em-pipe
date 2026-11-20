@@ -36,10 +36,12 @@ slice's tissue as the median window places it, so fast slice-to-slice changes ar
 shifted so the neuropil's median comes out at median_ref: the shift is followed slowly along z in the
 same way (or is one per block with per: segment). With ``brightness: reference`` the position comes
 from the neuropil alone, lo = m - median_ref (hi - lo) / 255. Tile balance and per-slice jumps as for
-the other windows. A segment without reference tissue keeps the median window. QC: qc/intensity_reference[_<output>].png and .json: predicted neuropil
-grey and contrast per sampled slice, clipped tissue fractions, the largest slice-to-slice change of
-the neuropil's grey and contrast (flicker), and the step across every segment change next to the
-step with the previous levels.
+the other windows. A segment without reference tissue keeps the median window. QC:
+qc/intensity_reference[_<output>].png, .json and _samples.csv: predicted neuropil grey and contrast per
+sampled slice, clipped tissue fractions, and the step across every segment change, each next to the
+same for the levels the volume was rendered with (the base config's). Flicker from slice to slice
+can't be judged from the levels alone (the tiles' common scale itself moves from slice to slice): look
+at the rendered volume.
 
 ``intensity.output``: a name for a variant's levels (work/intensity/<output>/levels.csv, which
 render then reads), so a variant config doesn't replace the base config's levels.
@@ -118,7 +120,6 @@ DEFAULTS = {
             "boundary_slices": 300,   # QC: samples within this many slices each side of a segment change
             "band_pct": 5.0,      # QC: target band, +- % of median and contrast
             "clip_warn": 0.01,    # QC: warn when more than this fraction of tissue is at 0 or at 255
-            "flicker_warn": 1.0,  # QC: warn when the neuropil grey changes by more than this between slices
         },
     },
 }
@@ -440,22 +441,9 @@ def _cdf(x, row, qcols):
     return float(np.interp(x, vs, ps, left=0.0, right=1.0))
 
 
-def flicker(per_z, Lc, Hc):
-    """Per consecutive selected slices: |change| of the smoothed neuropil's grey and contrast when the
-    window changes from one slice to the next (the tissue itself held), and whether they straddle a
-    segment change."""
-    m, c = per_z["m_s"].to_numpy(float), per_z["c_s"].to_numpy(float)
-    L, H = Lc.to_numpy(float), Hc.to_numpy(float)
-    d_med = np.abs(grey(m[:-1], L[1:], H[1:]) - grey(m[:-1], L[:-1], H[:-1]))
-    d_con = np.abs(255 * c[:-1] / (H[1:] - L[1:]) - 255 * c[:-1] / (H[:-1] - L[:-1]))
-    seg = per_z["block" if "block" in per_z else "segment"].to_numpy()
-    return pd.DataFrame({"z": per_z["z"].to_numpy()[1:], "d_median": d_med, "d_contrast": d_con,
-                         "boundary": seg[1:] != seg[:-1]})
-
-
 def reference_qc(cfg, df, old=None):
-    """QC of reference windows: predicted greys, clipping, flicker and segment-change steps (dict),
-    the per-sample table and the flicker table. ``old``: the previous levels (z, tile, lo, hi)."""
+    """QC of reference windows: predicted greys, clipping and segment-change steps (dict), and the
+    per-sample table. ``old``: the levels to compare with (z, tile, lo, hi), e.g. the rendered volume's."""
     r = reference_settings(cfg)
     st = load_refstats(cfg)
     per_z = df.groupby("z").agg(segment=("segment", "first"), pos=("pos", "first"), m_s=("m_s", "first"),
@@ -480,12 +468,6 @@ def reference_qc(cfg, df, old=None):
         if qcols:
             samp[f"clip_lo_{k}"] = [_cdf(lo, row, qcols) for lo, (_, row) in zip(Lw, samp.iterrows())]
             samp[f"clip_hi_{k}"] = [1 - _cdf(hi, row, qcols) for hi, (_, row) in zip(Hw, samp.iterrows())]
-    fl = {}
-    for k, w in windows.items():
-        fl[k] = flicker(per_z, w["Lc"].reindex(per_z["z"]).reset_index(drop=True),
-                        w["Hc"].reindex(per_z["z"]).reset_index(drop=True))
-    # The reference part alone (before the per-slice jumps, which the other windows have too)
-    fl["new_without_jumps"] = flicker(per_z, per_z["L"], per_z["H"])
     out = {"reference": {k: r[k] for k in ("median", "contrast", "measure", "smooth_slices", "ramp_slices")},
            "samples": int(len(samp)), "slices": int(len(per_z)),
            "slices_without_reference": int(per_z["L"].isna().sum())}
@@ -503,11 +485,6 @@ def reference_qc(cfg, df, old=None):
             out[f"predicted_{k}"]["clipped_max"] = round(float(np.nanmax(clip)), 5) if len(clip) else None
             out[f"predicted_{k}"]["clipped_median"] = round(float(np.nanmedian(clip)), 5) if len(clip) else None
             out[f"predicted_{k}"]["clip_warn_slices"] = [int(z) for z in samp.loc[clip > float(r["clip_warn"]), "z"]]
-    for k, f in fl.items():
-        inner = f[~f["boundary"]]
-        out[f"flicker_{k}"] = {"max_d_median": round(float(inner["d_median"].max()), 3) if len(inner) else None,
-                               "max_d_contrast": round(float(inner["d_contrast"].max()), 3) if len(inner) else None,
-                               "slices_over_warn": int((inner["d_median"] > float(r["flicker_warn"])).sum())}
     # Segment changes: each side's neuropil grey from the samples within boundary_slices of the change
     steps = []
     bpos = per_z.loc[per_z["block"].ne(per_z["block"].shift()) & (per_z.index > 0)]
@@ -523,23 +500,18 @@ def reference_qc(cfg, df, old=None):
                 rec[f"step_grey_{k}"] = round(float(side["after"][f"grey_{k}"].median() - side["before"][f"grey_{k}"].median()), 2)
                 rec[f"step_contrast_{k}"] = round(float(side["after"][f"contrast_{k}"].median()
                                                         - side["before"][f"contrast_{k}"].median()), 2)
-        rec["window_step_grey_new"] = round(float(fl["new"].loc[fl["new"]["z"] == after["z"], "d_median"].iloc[0]), 2)
         if "step_grey_old" in rec and "step_grey_new" in rec:
             rec["bigger_than_old"] = bool(abs(rec["step_grey_new"]) > abs(rec["step_grey_old"]))
         steps.append(rec)
     out["segment_changes"] = steps
     out["flags"] = [f"segment change at z {s['z']}: neuropil step {s['step_grey_new']} greys (old {s['step_grey_old']})"
                     for s in steps if s.get("bigger_than_old")]
-    fw = out["flicker_new_without_jumps"]["max_d_median"]
-    if fw is not None and fw > float(r["flicker_warn"]):
-        out["flags"].append(f"the window moves the neuropil grey by up to {fw} greys between slices away from segment "
-                            "changes (not counting the per-slice jumps, which the other windows apply too)")
-    return out, samp, fl
+    return out, samp
 
 
-def plot_reference(cfg, samp, fl, qc, path):
+def plot_reference(cfg, samp, qc, path):
     r = reference_settings(cfg)
-    fig, axes = plt.subplots(4, 1, sharex=True, figsize=(12, 12), layout="constrained")
+    fig, axes = plt.subplots(3, 1, sharex=True, figsize=(12, 9.5), layout="constrained")
     band = float(r["band_pct"]) / 100
     for ax, col, target, label in ((axes[0], "grey", float(r["median"]), "neuropil median (grey)"),
                                    (axes[1], "contrast", float(r["contrast"]), f"neuropil {r['measure']} (greys)")):
@@ -560,17 +532,10 @@ def plot_reference(cfg, samp, fl, qc, path):
         ax.axhline(100 * float(r["clip_warn"]), color="#e34948", lw=1, ls="--", label="warning")
         ax.legend(fontsize=8, loc="upper right")
     ax.set_ylabel("tissue clipped (%)")
-    ax = axes[3]
-    for k, colr, lab in (("new_without_jumps", "#2a78d6", "reference window (without the per-slice jumps)"),):
-        if k in fl:
-            ax.plot(fl[k]["z"], fl[k]["d_median"], lw=0.6, color=colr, label=lab)
-    ax.axhline(float(r["flicker_warn"]), color="#e34948", lw=1, ls="--", label="1 grey")
-    for z in fl["new"].loc[fl["new"]["boundary"], "z"]:
-        for a in axes:
-            a.axvline(z, color="0.75", lw=0.6)
-    ax.set_ylabel("window change between\nslices (greys)")
     ax.set_xlabel("z")
-    ax.legend(fontsize=8, loc="upper right")
+    for s in qc["segment_changes"]:
+        for a in axes:
+            a.axvline(s["z"], color="0.75", lw=0.6)
     axes[0].set_title("Reference window: predicted neuropil at the sampled slices (grey lines: segment changes)")
     save(fig, path)
 
@@ -815,24 +780,26 @@ def main(argv=None):
     args = p.parse_args(argv)
     cfg = setup(args, deep_merge(deep_merge(DEFAULTS, shading.DEFAULTS), patchgrid.DEFAULTS))
     out = levels_path(cfg)
-    # The previous levels, for the reference window's QC: this output's own, else the base levels
-    prev = out if out.exists() else levels_path(cfg, output="")
+    # The levels to compare with in the reference window's QC: the base config's (what the volume was
+    # rendered with), else this output's own previous ones
+    base = levels_path(cfg, output="")
+    prev = base if base.exists() else out
     old = pd.read_csv(prev, dtype={"tile": str}) if prev.exists() else None
     df = compute_levels(cfg)
     out.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(out, lambda t: df[["z", "tile", "lo", "hi"]].to_csv(t, index=False, float_format="%.2f"))
     plot(df, qc_path(cfg, f"{_qc_name(cfg, 'intensity')}.png"))
     if cfg["intensity"]["window"] == "reference":
-        qc, samp, fl = reference_qc(cfg, df, old)
+        qc, samp = reference_qc(cfg, df, old)
         qc["previous_levels"] = str(prev) if old is not None else None
         name = _qc_name(cfg, "intensity_reference")
-        plot_reference(cfg, samp, fl, qc, qc_path(cfg, f"{name}.png"))
+        plot_reference(cfg, samp, qc, qc_path(cfg, f"{name}.png"))
         atomic_write(qc_path(cfg, f"{name}.json"), lambda t: Path(t).write_text(json.dumps(qc, indent=1)))
         atomic_write(qc_path(cfg, f"{name}_samples.csv"), lambda t: samp.to_csv(t, index=False, float_format="%.4f"))
         for flag in qc["flags"]:
             log.warning("reference window: %s", flag)
-        log.info("reference window: predicted neuropil grey p5/p50/p95 %s, flicker max %.3f greys",
-                 qc["predicted_new"]["median_grey_p5_p50_p95"], qc["flicker_new"]["max_d_median"] or 0)
+        log.info("reference window: predicted neuropil grey p5/p50/p95 %s, width p5/p50/p95 %s",
+                 qc["predicted_new"]["median_grey_p5_p50_p95"], qc["predicted_new"]["contrast_p5_p50_p95"])
     log.info("levels for %d (z, tile) over %d slices", len(df), df["z"].nunique())
     return 0
 

@@ -58,10 +58,11 @@ def test_noisy_stats_give_no_flicker():
     m_s = intensity.smooth_samples(sampled, m_true[::32] + rng.normal(0, 60, len(sampled)), pos, 601, 129)
     c_s = intensity.smooth_samples(sampled, c_true[::32] + rng.normal(0, 40, len(sampled)), pos, 601, 129)
     L, H = intensity.window_from_stats(m_s, c_s, 150.0, 131.0)
-    per_z = pd.DataFrame({"z": pos.astype(int), "segment": 0, "m_s": m_s, "c_s": c_s})
-    fl = intensity.flicker(per_z, pd.Series(L), pd.Series(H))
-    assert fl["d_median"].max() < 0.1
-    assert fl["d_contrast"].max() < 0.1
+    # the tissue held, how much each slice's window moves its grey and contrast from the slice before
+    d_median = np.abs(intensity.grey(m_s[:-1], L[1:], H[1:]) - intensity.grey(m_s[:-1], L[:-1], H[:-1]))
+    d_contrast = np.abs(255 * c_s[:-1] / (H[1:] - L[1:]) - 255 * c_s[:-1] / (H[:-1] - L[:-1]))
+    assert d_median.max() < 0.1
+    assert d_contrast.max() < 0.1
     # and the slow drift is followed: the tissue stays near its target grey throughout
     assert np.abs(intensity.grey(m_true, L, H) - 150).max() < 8
 

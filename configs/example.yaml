@@ -170,7 +170,6 @@ intensity:
     boundary_slices: 300     # QC: samples within this many slices each side of a segment change
     band_pct: 5.0            # QC: target band, +- % of median and contrast
     clip_warn: 0.01          # QC: warn when more than this fraction of tissue is at 0 or at 255
-    flicker_warn: 1.0        # QC: warn when the neuropil grey changes by more than this between slices
 
 shading:                     # flat-field: a smooth gain field per tile position and segment, from the thumbnails
   enabled: false             # runs in the intensity job; render divides each tile slice by its field
