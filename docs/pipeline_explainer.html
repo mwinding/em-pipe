@@ -387,28 +387,58 @@
         segment (a <strong>flat-field</strong>) and divides it out.</p>
     </div>
     <figure>
-      <div class="diagram" role="img" aria-label="Diagram: a tile that gets darker towards the right, divided by a flat-field with the same fall-off, gives an evenly bright tile.">
-        <svg viewBox="0 0 640 190" xmlns="http://www.w3.org/2000/svg">
+      <div class="diagram" role="img" aria-label="Diagram: a tile whose tissue gets much darker towards the right, divided by a flat-field that holds the same fall-off, gives a tile that is evenly bright. Under each tile a line shows brightness across it: sloping down, sloping down the same way, then flat.">
+        <svg viewBox="0 0 640 262" xmlns="http://www.w3.org/2000/svg">
           <defs>
-            <linearGradient id="ffTile" x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0" stop-color="#c9c9c9"/><stop offset="1" stop-color="#8f8f8f"/>
+            <linearGradient id="ffShade" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.6"/>
             </linearGradient>
-            <linearGradient id="ffField" x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#b6b6b6"/>
-            </linearGradient>
+            <symbol id="ffTissue" viewBox="0 0 130 130">
+              <rect width="130" height="130" fill="#d6d6d6"/>
+              <path d="M0 52 C 30 46, 52 70, 80 62 S 118 40, 130 48 M58 0 C 54 30, 70 44, 62 70 S 50 110, 60 130 M0 104 C 26 98, 40 118, 70 112 S 110 96, 130 104" fill="none" stroke="#8a8a8a" stroke-width="1.4"/>
+              <circle cx="28" cy="26" r="14" fill="#9c9c9c" stroke="#5e5e5e" stroke-width="1.6"/>
+              <circle cx="96" cy="24" r="11" fill="#9c9c9c" stroke="#5e5e5e" stroke-width="1.6"/>
+              <circle cx="102" cy="82" r="17" fill="#9c9c9c" stroke="#5e5e5e" stroke-width="1.6"/>
+              <circle cx="34" cy="84" r="13" fill="#9c9c9c" stroke="#5e5e5e" stroke-width="1.6"/>
+              <circle cx="102" cy="82" r="6" fill="#6b6b6b"/>
+              <circle cx="28" cy="26" r="5" fill="#6b6b6b"/>
+              <g fill="#7a7a7a"><circle cx="70" cy="30" r="2.2"/><circle cx="80" cy="88" r="2.2"/><circle cx="14" cy="60" r="2.2"/><circle cx="118" cy="120" r="2.2"/><circle cx="50" cy="120" r="2.2"/></g>
+            </symbol>
           </defs>
-          <rect x="30" y="20" width="120" height="120" fill="url(#ffTile)" style="stroke: var(--rule)"/>
-          <text x="215" y="90" text-anchor="middle" style="fill: var(--ink); font-size: 30px">÷</text>
-          <rect x="260" y="20" width="120" height="120" fill="url(#ffField)" style="stroke: var(--rule)"/>
-          <text x="445" y="90" text-anchor="middle" style="fill: var(--ink); font-size: 30px">=</text>
-          <rect x="490" y="20" width="120" height="120" fill="#c9c9c9" style="stroke: var(--rule)"/>
-          <text x="90" y="165" text-anchor="middle" class="s-label">tile as recorded</text>
-          <text x="320" y="165" text-anchor="middle" class="s-label">flat-field</text>
-          <text x="320" y="182" text-anchor="middle" class="s-small">(the fall-off, from many slices)</text>
-          <text x="550" y="165" text-anchor="middle" class="s-label">corrected tile</text>
+          <!-- tiles -->
+          <use href="#ffTissue" x="25" y="10" width="130" height="130"/>
+          <rect x="25" y="10" width="130" height="130" fill="url(#ffShade)"/>
+          <rect x="25" y="10" width="130" height="130" fill="none" style="stroke: var(--ink-2)" stroke-width="1.2"/>
+          <text x="205" y="86" text-anchor="middle" style="fill: var(--ink); font-size: 34px">÷</text>
+          <rect x="255" y="10" width="130" height="130" fill="#ffffff"/>
+          <rect x="255" y="10" width="130" height="130" fill="url(#ffShade)"/>
+          <rect x="255" y="10" width="130" height="130" fill="none" style="stroke: var(--ink-2)" stroke-width="1.2"/>
+          <text x="262" y="132" style="fill: #333; font-size: 12px; font-family: var(--font-mono)">100%</text>
+          <text x="378" y="132" text-anchor="end" style="fill: #fff; font-size: 12px; font-family: var(--font-mono)">40%</text>
+          <text x="435" y="86" text-anchor="middle" style="fill: var(--ink); font-size: 34px">=</text>
+          <use href="#ffTissue" x="485" y="10" width="130" height="130"/>
+          <rect x="485" y="10" width="130" height="130" fill="none" style="stroke: var(--ink-2)" stroke-width="1.2"/>
+          <!-- brightness across each tile -->
+          <g class="s-line">
+            <path d="M25 202 H155 M255 202 H385 M485 202 H615"/>
+          </g>
+          <g fill="none" style="stroke: var(--ink)" stroke-width="2.6" stroke-linecap="round">
+            <path d="M27 160 L153 196"/>
+            <path d="M257 160 L383 196"/>
+            <path d="M487 160 L613 160"/>
+          </g>
+          <text x="90" y="224" text-anchor="middle" class="s-label">tile as recorded</text>
+          <text x="90" y="241" text-anchor="middle" class="s-small">darker towards the right</text>
+          <text x="320" y="224" text-anchor="middle" class="s-label">flat-field</text>
+          <text x="320" y="241" text-anchor="middle" class="s-small">the same fall-off, from many slices</text>
+          <text x="550" y="224" text-anchor="middle" class="s-label">corrected tile</text>
+          <text x="550" y="241" text-anchor="middle" class="s-small">evenly bright</text>
+          <text x="320" y="258" text-anchor="middle" class="s-cap">LINES UNDER EACH TILE: BRIGHTNESS FROM LEFT TO RIGHT</text>
         </svg>
       </div>
-      <figcaption><span class="tag">Diagram</span>The fall-off is exaggerated here so it is easy to see.</figcaption>
+      <figcaption><span class="tag">Diagram</span>The fall-off is exaggerated here (60% darker at the right edge) so it is easy
+        to see; in 35h it is about 8%. Dividing by the flat-field brings every part of the tile back to the
+        brightness of its brightest part, without changing the tissue.</figcaption>
     </figure>
     <div class="step">
       <h3>Compare tiles where they overlap <span class="mono">overlaps</span> <span class="mono">patchgrid</span></h3>
