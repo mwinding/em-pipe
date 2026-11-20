@@ -216,22 +216,24 @@ def main(argv=None):
             rows.append((it["name"], z, kind, g[::2, ::2], new[::2, ::2].astype(np.uint8), res, clip))
         results.append(res)
         print(json.dumps(res), flush=True)
+    per = None
     if mode == "levels" and _maps:        # the standard the variants' levels were made with, for the title
         ref = (next(iter(_maps.values())).ref or {})
         med_std, width_std = float(ref.get("median", med_std)), float(ref.get("contrast", width_std))
-    plot(rows, med_std, width_std, spec, a.out_png)
+        per = ref.get("per", "slice")
+    plot(rows, med_std, width_std, spec, a.out_png, per)
     if a.json:
         Path(a.json).write_text(json.dumps({"standard": {"median": med_std, "width": width_std},
                                             "items": results}, indent=1))
     return 0
 
 
-def plot(rows, med_std, width_std, spec, out_png):
+def plot(rows, med_std, width_std, spec, out_png, per=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     n = len(rows)
-    fig, axes = plt.subplots(n, 2, figsize=(10, 5.2 * n), squeeze=False)
+    fig, axes = plt.subplots(n, 2, figsize=(10, 5.2 * n), squeeze=False, layout="constrained")
     for i, (name, z, kind, now, std, res, clip) in enumerate(rows):
         if res.get("mode") == "levels":
             seg = f", segment {res['segment']}" if res.get("segment", -1) >= 0 else ""
@@ -247,12 +249,14 @@ def plot(rows, med_std, width_std, spec, out_png):
             ax.set_title(f"{name} z {z}, {kind}\n{title}\nblack {100 * clip['dark_' + k]:.2f} %, "
                          f"white {100 * clip['bright_' + k]:.2f} % of the crop", fontsize=9.5, loc="left")
     if spec.get("mode") == "levels":
-        head = (f"Before and after: reference contrast (neuropil median {med_std:.0f}, p5-p95 width {width_std:.0f}; "
-                f"contrast per segment, brightness per slice)")
+        how = ("one contrast and brightness shift per segment" if per == "segment"
+               else "contrast and brightness shift following the neuropil slowly")
+        head = (f"Before and after: reference contrast, neuropil median {med_std:.0f}, p5-p95 width {width_std:.0f} "
+                f"({spec.get('crop_um', 10)} um crops, shown at 16 nm)\n{how}, brightness following every slice's tissue")
     else:
-        head = f"Neuropil standard: median {med_std:.0f}, p5-p95 width {width_std:.0f}"
-    fig.suptitle(f"{head}  ({spec.get('crop_um', 10)} um crops, shown at 16 nm)", fontsize=11, x=0.01, ha="left")
-    fig.tight_layout(rect=(0, 0, 1, 0.985))
+        head = (f"Neuropil standard: median {med_std:.0f}, p5-p95 width {width_std:.0f} "
+                f"({spec.get('crop_um', 10)} um crops, shown at 16 nm)")
+    fig.suptitle(head, fontsize=11, x=0.01, ha="left")
     fig.savefig(out_png, dpi=90)
 
 
