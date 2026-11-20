@@ -177,7 +177,7 @@ timeline changed.
 | `raw_stats.py` (+ `slurm/raw_stats.sbatch`) | Raw detector values per tile at sampled slices, by class: tissue, resin, off-sample (and neuropil vs other tissue where the reference-tissue mask is available). Histograms, per-tile percentiles, plots; `compare` draws several datasets together. Resin comes from the background mask and is not validated as a reference yet. |
 | `copy_verify.py` (+ `slurm/copy_verify.sbatch`) | Copy raw files to another place, md5 both sides, and write a checksum manifest next to the copy only when every file matches. Never deletes; refuses nested folders. |
 | `tile_jumps.py` | Tile jumps and alignment problems over a whole run (plot + summary): candidates for `align.local_windows`. |
-| `reference_from_volume.py`, `reference_preview.py`, `refstats_compare.py`, `segment_overview.py`, `refmask_check.py`, `refmask_train.py` | The reference contrast (below): a volume's neuropil numbers under its levels, before/after crops of new levels, two refstats runs compared, one slice per segment with its tile outlines, the neuropil mask drawn over a volume, the mask model rebuilt from labelled boxes. |
+| `reference_from_volume.py`, `reference_preview.py`, `standard_compare.py`, `refstats_compare.py`, `segment_overview.py`, `refmask_check.py`, `refmask_train.py` | The reference contrast (below): a volume's neuropil numbers under its levels, before/after crops of new levels, volumes side by side at candidate standards, two refstats runs compared, one slice per segment with its tile outlines, the neuropil mask drawn over a volume, the mask model rebuilt from labelled boxes. |
 | `seam_steps.py`, `shading_measure.py`, `shading_before_after.py`, `clipping_check.py`, `map_point.py`, `triptych.py` | Seam brightness steps, flat-field measurements and before/after stacks, clipping, mapping a point between volume and raw tiles, side-by-side figures. |
 | `check_private.sh` | Run before every push: fails if the files or commits about to be pushed contain site-specific details (paths, hosts, names, dataset IDs). Generic patterns are in `tools/private_patterns.txt`; put your own (cluster, share, people) in the git-ignored `tools/private_patterns.local.txt`. |
 
@@ -205,9 +205,11 @@ Volumes stained or imaged differently come out of the median or percentile windo
 because those windows follow all the tissue in a slice, whatever its mix. The reference window instead
 puts one tissue, neuropil, at a fixed standard in every volume: its median at grey `reference.median`
 and the width of its histogram between the 5th and 95th percentile at `reference.contrast` greys (e.g.
-150 and 140). Which percentiles the window clips at is not chosen; it follows from matching the
-neuropil, and the QC reports it. The standard is measured once on a reference volume
-(`tools/reference_from_volume.py`: its neuropil numbers under the levels it was rendered with) and
+150 and 130). Which percentiles the window clips at is not chosen; it follows from matching the
+neuropil, and the QC reports it. The standard starts from a reference volume
+(`tools/reference_from_volume.py`: its neuropil numbers under the levels it was rendered with), is
+settled once (`tools/standard_compare.py` shows volumes side by side at candidate widths, with the
+tissue each clips and the pixel noise against the rounding to whole greys, before and after CLAHE) and
 then kept fixed.
 
 Three steps:
@@ -241,7 +243,7 @@ refstats: {enabled: true, every: 64}
 intensity:
   window: reference
   output: reference                  # own levels, next to the volume's existing ones
-  reference: {median: 150, contrast: 140}
+  reference: {median: 150, contrast: 130}
 render:
   name: my_volume_reference.ome.zarr
 ```

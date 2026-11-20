@@ -636,13 +636,40 @@
 
     <div class="step">
       <h3>The standard</h3>
-      <p>Measured on 35h as it was already rendered, its neuropil had a median grey of 148 and a p5–p95 width of
-        143 greys. The lab standard rounds that to <strong>median 150, width 140</strong>. Every volume is set so
-        its neuropil hits those two numbers.</p>
+      <p>Every volume is set so its neuropil has a <strong>median grey of 150</strong> and a <strong>p5–p95 width
+        of 130 greys</strong>.</p>
+      <p>Where those numbers come from: 35h, as it was already rendered, had a neuropil median of 148 and a width
+        of 143. The median is rounded to 150. The width is set a little narrower, at 130, which gives slightly less
+        contrast than 35h had. That was decided on 20 November 2026, after first trying 140:</p>
+      <ul>
+        <li><strong>Less tissue turns pure black or white.</strong> Over the whole volume, the clipped tissue goes
+          from 1.75% to 1.3% in 35h (most of what is left is its pitch-black granules, which stay black at any
+          width), from 0.5% to 0.2% in 37i and from 0.3% to 0.15% in A1001.</li>
+        <li><strong>Nothing is lost in the middle greys.</strong> A single 8 nm pixel is noisy by 5.5–11 greys.
+          Storing whole greys adds a rounding error of about 0.29 grey, which makes the total noise less than 0.3%
+          larger at any of these widths. So spreading the neuropil over 130 greys instead of 140 doesn't merge
+          differences you could see.</li>
+        <li><strong>The CLAHE copies look the same.</strong> After CLAHE, widths of 130, 135 and 140 look
+          practically identical.</li>
+      </ul>
     </div>
+    <details class="more">
+      <summary>More detail: width 130 and 140 side by side</summary>
+      <div class="more-body">
+        <figure>
+          <img src="img/width_130.jpg" alt="Three 10 micrometre crops inside the neuropil of 35h, 37i and A1001 with the neuropil p5 to p95 width set to 130 greys." loading="lazy">
+          <img src="img/width_140.jpg" alt="The same three crops with the width set to 140 greys: very slightly more contrast, otherwise the same." loading="lazy">
+          <figcaption><span class="tag">Real data</span>10 µm crops inside the neuropil, shown at 16 nm. Left to
+            right: 35h (z 8848), 37i decurtained (z 9600), A1001 (z 240). Top row: width 130. Bottom row: width 140.
+            The text above each crop gives the clipped share of that crop and of the volume's median slice, the
+            pixel noise, and how much rounding to whole greys adds to it. Made with
+            <code>tools/standard_compare.py</code>, which also makes the same figure after CLAHE.</figcaption>
+        </figure>
+      </div>
+    </details>
 
     <figure>
-      <div class="diagram" role="img" aria-label="Diagram: the neuropil histogram on raw values, with its 5th percentile, median and 95th percentile, mapped onto the grey scale from 0 to 255 so the median becomes 150 and the 5th to 95th percentile span becomes 140 greys.">
+      <div class="diagram" role="img" aria-label="Diagram: the neuropil histogram on raw values, with its 5th percentile, median and 95th percentile, mapped onto the grey scale from 0 to 255 so the median becomes 150 and the 5th to 95th percentile span becomes 130 greys.">
         <svg viewBox="0 0 720 330" xmlns="http://www.w3.org/2000/svg">
           <defs>
             <linearGradient id="ramp" x1="0" x2="1" y1="0" y2="0">
@@ -659,28 +686,28 @@
           <text x="258" y="36" text-anchor="middle" style="fill: var(--ink); font: 500 13px var(--font-mono)">p5</text>
           <text x="366" y="36" text-anchor="middle" style="fill: var(--ink); font: 500 13px var(--font-mono)">median</text>
           <text x="480" y="36" text-anchor="middle" style="fill: var(--ink); font: 500 13px var(--font-mono)">p95</text>
-          <line x1="258" y1="140" x2="211" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
+          <line x1="258" y1="140" x2="226" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
           <line x1="366" y1="140" x2="417" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
-          <line x1="480" y1="140" x2="562" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
+          <line x1="480" y1="140" x2="552" y2="232" style="stroke: var(--muted); stroke-width: 1.2"/>
           <text x="560" y="190" class="s-small">the window maps raw values to greys</text>
           <rect x="40" y="232" width="640" height="24" fill="url(#ramp)" style="stroke: var(--rule); stroke-width: 1"/>
-          <line x1="211" y1="226" x2="211" y2="262" style="stroke: var(--accent); stroke-width: 2"/>
+          <line x1="226" y1="226" x2="226" y2="262" style="stroke: var(--accent); stroke-width: 2"/>
           <line x1="417" y1="226" x2="417" y2="262" style="stroke: var(--accent); stroke-width: 2.5"/>
-          <line x1="562" y1="226" x2="562" y2="262" style="stroke: var(--accent); stroke-width: 2"/>
+          <line x1="552" y1="226" x2="552" y2="262" style="stroke: var(--accent); stroke-width: 2"/>
           <text x="40" y="280" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">0 black</text>
           <text x="680" y="280" text-anchor="end" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">255 white</text>
-          <text x="211" y="280" text-anchor="middle" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">≈68</text>
+          <text x="226" y="280" text-anchor="middle" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">≈74</text>
           <text x="417" y="280" text-anchor="middle" style="fill: var(--ink); font: 600 13px var(--font-mono)">150</text>
-          <text x="562" y="280" text-anchor="middle" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">≈208</text>
-          <path d="M211 296 L211 304 L562 304 L562 296" style="fill: none; stroke: var(--accent); stroke-width: 1.5"/>
-          <text x="386" y="322" text-anchor="middle" style="fill: var(--ink); font: 500 13px var(--font-body)">p5 to p95 spans 140 greys</text>
+          <text x="552" y="280" text-anchor="middle" style="fill: var(--ink-2); font: 400 12.5px var(--font-mono)">≈204</text>
+          <path d="M226 296 L226 304 L552 304 L552 296" style="fill: none; stroke: var(--accent); stroke-width: 1.5"/>
+          <text x="389" y="322" text-anchor="middle" style="fill: var(--ink); font: 500 13px var(--font-body)">p5 to p95 spans 130 greys</text>
           <text x="40" y="216" class="s-cap">GREYS IN THE VOLUME</text>
         </svg>
       </div>
       <figcaption><span class="tag">Diagram</span>The window puts the neuropil's median at grey 150 and stretches
-        its p5–p95 range over 140 greys. We never choose "clip at 1% and 99%" by hand: how much of the slice ends
+        its p5–p95 range over 130 greys. We never choose "clip at 1% and 99%" by hand: how much of the slice ends
         up pure black or white simply follows from matching the neuropil, and the QC report says how much it is
-        (for 37i, about half a percent of the tissue in a typical slice).</figcaption>
+        (for 37i, about 0.2% of its tissue).</figcaption>
     </figure>
 
     <div class="step">
@@ -749,11 +776,12 @@
           </tbody>
         </table>
       </div>
-      <p>The steps at 35h's other segment changes are small with the slow follow: 1.7, 0.7, 3.6 and 4.2 greys in
-        brightness and 0.9, −2.8, −1.6 and −0.1 greys in width. The price is a little more clipping at the end of
-        segment 2. Segments shorter than about 2,000 slices come out almost constant, the same as one value per
-        segment. The one-value-per-segment setting (<code>per: segment</code>) is still available; the A1001
-        test render used it.</p>
+      <p>These 35h numbers were measured with the earlier standard width of 140. The steps at 35h's other segment
+        changes are small with the slow follow: 1.7, 0.7, 3.6 and 4.2 greys in brightness and 0.9, −2.8, −1.6 and
+        −0.1 greys in width. The price is a little more clipping at the end of segment 2. Segments shorter than
+        about 2,000 slices come out almost constant, the same as one value per segment. The one-value-per-segment
+        setting (<code>per: segment</code>) is still available; the A1001 test render used it, at the earlier
+        width of 140.</p>
     </div>
 
     <details class="more">
@@ -763,8 +791,8 @@
         <p class="formula">grey = 255 × (v − L) ÷ W</p>
         <p>clipped to 0–255. <strong>W</strong> is the window's width and <strong>L</strong> its low end.</p>
         <h4>Width (contrast)</h4>
-        <p class="formula">W = 255 × c ÷ 140</p>
-        <p>where c is the neuropil's p5–p95 width, smoothed along z. Then the neuropil's p5–p95 spans exactly 140
+        <p class="formula">W = 255 × c ÷ 130</p>
+        <p>where c is the neuropil's p5–p95 width, smoothed along z. Then the neuropil's p5–p95 spans exactly 130
           greys.</p>
         <h4>Low end (brightness)</h4>
         <p class="formula">L = M + J − a</p>
@@ -798,7 +826,8 @@
             right, grey lines at segment changes, green band ±5% around the target. Top, brightness: grey dots are
             one shift per segment, blue dots the slow shift. Bottom, width: grey dots are one width per segment,
             blue dots the slow width. The grey dots drift away from the target towards the end of segment 2
-            (just before z 12529); the blue dots stay on it.</figcaption>
+            (just before z 12529); the blue dots stay on it. Made with the earlier standard width of 140, so the
+            width target in the bottom plot is 140.</figcaption>
         </figure>
       </div>
     </details>
@@ -807,7 +836,7 @@
       <h3>What it did to our volumes</h3>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Volume</th><th>Contrast change</th><th>What that means</th></tr></thead>
+          <thead><tr><th>Volume</th><th>Contrast change at width 140</th><th>What that means</th></tr></thead>
           <tbody>
             <tr><td>35h</td><td class="num">×1.03</td><td>Almost unchanged, as expected: it is the reference.</td></tr>
             <tr><td>37i</td><td class="num">×1.04</td><td>Very slightly stronger contrast.</td></tr>
@@ -815,8 +844,10 @@
           </tbody>
         </table>
       </div>
-      <p>These factors come from the before/after panel below, made with one value per segment. The slow follow
-        moves 35h's contrast by a few percent at most.</p>
+      <p>These factors come from the before/after panel below, made with one value per segment and the earlier
+        width of 140. At the standard width of 130 every factor is 130/140 of that, about 7% less contrast:
+        roughly ×0.96 for 35h, ×0.97 for 37i and ×0.59 for A1001. The slow follow moves 35h's contrast by a few
+        percent at most.</p>
     </div>
     <figure>
       <img src="img/before_after_35h.jpg" alt="35h slice 8848 inside the neuropil: before and after the reference contrast. The two look nearly identical." loading="lazy">
@@ -908,7 +939,8 @@
       <figcaption><span class="tag">Real data</span>35h's <code>intensity_reference</code> plot for the adopted
         slow follow. Blue: the new window; grey: the version it is compared with (here, one width per segment).
         <strong>1.</strong> Neuropil median grey per sampled slice, target 150 with a ±5% band.
-        <strong>2.</strong> Neuropil p5–p95 width, target 140. <strong>3.</strong> Tissue turned pure black or
+        <strong>2.</strong> Neuropil p5–p95 width, target 140 here: this plot was made with the earlier standard
+        width (the standard is now 130). <strong>3.</strong> Tissue turned pure black or
         white, in percent; the dashed line is a 1% warning level that 35h is above everywhere, so treat it as a
         guide. <strong>4.</strong> How far the window itself moves between neighbouring slices. Most of that is the
         window following real slice-to-slice jumps in the raw data, so judge flicker by scrolling through the
