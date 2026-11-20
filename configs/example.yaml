@@ -212,6 +212,7 @@ refstats:                    # reference tissue median and lc32 on the common sc
   chunk_samples: 4           # sampled slices per array-task chunk
   median_stride: 4           # 8 nm px stride of the values the median is taken from
   tissue_stride: 8           # 8 nm px stride of the tissue values the quantiles are taken from
+  output: null               # a variant's name: statistics in work/refstats/<output>/ (e.g. with decurtaining)
 
 # Curtaining removal inside render. Tune first: python -m pipeline.destreak test --config C --z Z --tile r-c
 # Alone it is the wavelet-FFT filter (Münch et al. 2009): it takes the stripe part out of each level's

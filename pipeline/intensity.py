@@ -331,7 +331,8 @@ def smooth_samples(pos, values, all_pos, smooth, ramp):
 
 
 def load_refstats(cfg):
-    path = step_path(cfg, "refstats", "stats.csv")
+    from .refstats import stats_path
+    path = stats_path(cfg, "stats.csv")
     if not path.exists():
         raise FileNotFoundError(f"{path} not found: intensity.window: reference needs the refstats step (run, merge)")
     return pd.read_csv(path)

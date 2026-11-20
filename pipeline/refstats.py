@@ -2,7 +2,8 @@
 
 ``run`` (array over chunks of sampled slices): every ``refstats.every``-th selected slice of each
 segment (and each segment's last) is read at full resolution, and each tile gets exactly what render
-applies before the window: flat-field (shading), the patchgrid shape, then the tile's gain and offset
+applies before the window: decurtaining (destreak, when enabled), flat-field (shading), the patchgrid
+shape, then the tile's gain and offset
 onto the slice's common scale (intensity's tile balance, ``intensity.balanced_scale``). Inside the
 reference tissue's cells (work/refmask, eroded by ``erode_cells``, optionally only those whose centre
 lies in ``region``) it measures the tissue's median and lc32: the mean SD in 8 px windows at 32 nm
@@ -43,6 +44,8 @@ DEFAULTS = {
         "chunk_samples": 4,       # sampled slices per array-task chunk
         "median_stride": 4,       # 8 nm px stride of the values the median is taken from
         "tissue_stride": 8,       # 8 nm px stride of the tissue values the quantiles are taken from
+        "output": None,           # a variant's name: its statistics in work/refstats/<output>/ (e.g. one with
+                                  # decurtaining next to one without, in the same output_dir); intensity reads them there
     },
 }
 FACTOR = 4                        # 8 nm -> 32 nm for lc32
@@ -53,6 +56,20 @@ REF_Q = (1, 5, 25, 50, 75, 95, 99)
 
 def settings_of(cfg):
     return {**DEFAULTS["refstats"], **(cfg.get("refstats") or {})}
+
+
+def _parts(cfg):
+    out = settings_of(cfg)["output"]
+    return [str(out)] if out else []
+
+
+def stats_path(cfg, *name):
+    """work/refstats[/<output>]/<name>: refstats' files for this config (refstats.output)."""
+    return step_path(cfg, "refstats", *_parts(cfg), *name)
+
+
+def stats_dir(cfg, *name):
+    return step_dir(cfg, "refstats", *_parts(cfg), *name)
 
 
 def sample_z(slices, every):
@@ -132,8 +149,18 @@ class Measurer:
             from .render import frame
             self.frame = frame(cfg)
             self.T = {(int(r["z"]), r["tile"]): r for r in self.frame["plan"].to_dict("records")}
-        if (cfg.get("destreak") or {}).get("enabled"):
-            log.warning("destreak is enabled: refstats measures the tiles without it")
+        # Decurtaining as render applies it (raw values, before flat-field and window), so the reference
+        # tissue is measured as render will write it.
+        from .render import _destreak_settings
+        self.dsettings = _destreak_settings(cfg)
+        self.destreak = self.reference = None
+        if self.dsettings:
+            from . import destreak
+            dcfg = {**cfg, "destreak": self.dsettings}
+            self.destreak = lambda img, ref=None: destreak.destreak_from_cfg(img, dcfg, ref)
+            if self.dsettings.get("reference_from"):
+                self.reference = lambda file: destreak.reference_file(file, dcfg)
+            log.info("destreak enabled: the tiles are decurtained before they are measured")
         self._tile_fields = {}
 
     def digest(self, zs):
@@ -141,12 +168,18 @@ class Measurer:
         go = sorted((z, t, round(float(g), 6), round(float(o), 3)) for (z, t), (g, o) in self.go.items()
                     if z in zs and np.isfinite(g))
         h = hashlib.sha256(json.dumps([self.s, refmask.digest(refmask.settings_of(self.cfg)), shading.digest(self.cfg),
-                                       patchgrid.digest(self.cfg), go], sort_keys=True, default=str).encode())
+                                       patchgrid.digest(self.cfg), self.dsettings, go], sort_keys=True,
+                                      default=str).encode())
         return h.hexdigest()[:16]
 
     def corrected(self, row):
         """A tile slice's values as render corrects them (before the window), float32."""
         img = self.cache.read(row)
+        if self.destreak is not None:
+            ref = None
+            if self.reference is not None:
+                ref = self.cache.read({"file": self.reference(row["file"]), "index": row["index"]})
+            img = self.destreak(img, ref)
         h, w = img.shape
         key = (int(row["segment"]), row["tile"])
         field = self.fields.get(key)
@@ -236,7 +269,7 @@ def run(cfg, args):
         return 0
     m = Measurer(cfg)
     for zs in mine:
-        out = step_dir(cfg, "refstats", "chunks", f"chunk_{_name(zs)}.csv")
+        out = stats_dir(cfg, "chunks", f"chunk_{_name(zs)}.csv")
         dg = m.digest(zs)
         if out.exists() and not args.overwrite:
             done = pd.read_csv(out)
@@ -261,7 +294,7 @@ def merge(cfg, args):
     from .preview import save
     parts, missing = [], []
     for zs in _chunks(cfg):
-        path = step_path(cfg, "refstats", "chunks", f"chunk_{_name(zs)}.csv")
+        path = stats_path(cfg, "chunks", f"chunk_{_name(zs)}.csv")
         if not path.exists():
             missing.append(path.name)
             continue
@@ -273,8 +306,8 @@ def merge(cfg, args):
     if missing:
         raise RuntimeError(f"{len(missing)} refstats chunks missing or out of date, e.g. {missing[:3]}: run 'refstats run'")
     st = pd.concat(parts, ignore_index=True).sort_values("z")
-    atomic_write(step_dir(cfg, "refstats", "stats.csv"), lambda f: st.to_csv(f, index=False, float_format="%.4f"))
-    plot_stats(st, qc_path(cfg, "refstats.png"))
+    atomic_write(stats_dir(cfg, "stats.csv"), lambda f: st.to_csv(f, index=False, float_format="%.4f"))
+    plot_stats(st, qc_path(cfg, "_".join(["refstats", *_parts(cfg)]) + ".png"))
     log.info("refstats: %d sampled slices, %d with reference tissue", len(st), int((st["n_cells"] > 0).sum()))
     return 0
 
