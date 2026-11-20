@@ -112,3 +112,35 @@ def test_tissue_brightness_follows_slices_and_puts_neuropil_on_target():
     assert np.allclose(g, 150, atol=1e-6)                             # neuropil on target in every slice
     # the window follows the drifting tissue: its position changes with the level
     assert np.corrcoef(out["L"][:200], level[:200])[0, 1] > 0.99
+
+
+def test_tissue_brightness_follows_a_slow_drift_within_a_block():
+    """brightness: tissue with drift_slices: when the neuropil slowly moves against the rest of the tissue
+    within a long block (the tissue mix changes), one shift per block leaves the block's ends off target
+    and a step at the next block; the slow shift keeps the neuropil on target along the whole block,
+    while still following the fast slice-to-slice level of the tissue."""
+    n = 4000
+    z = np.arange(n)
+    level = 30000 + 300 * np.sin(z / 7.0)            # fast slice-to-slice changes (acquisition)
+    seg = (z >= 3000).astype(int)
+    drift = np.where(seg == 0, -400.0 * z / 3000, 0.0)   # neuropil vs tissue drifts by 400 along block 0
+    df = pd.DataFrame({"z": z, "tile": "0-0", "segment": seg, "pos": z.astype(float),
+                       "lo": level - 2000.0, "hi": level + 2000.0, "g": 1.0, "o": 0.0, "jump": 0.0})
+    per_z = pd.DataFrame({"z": z, "segment": seg, "pos": df["pos"]})
+    per_z["block"] = intensity.block_ids(per_z)
+    sampled = z % 64 == 0
+    neuropil = level - 200 + drift
+    per_z["median"] = np.where(sampled, neuropil, np.nan)
+    per_z["c_s"] = 1500.0
+    cfg = {"intensity": {"target_median": 140, "per_slice": "slice"}}
+    flat = intensity._tissue_brightness(cfg, df, per_z.copy(), {"median": 150.0, "contrast": 140.0})
+    slow = intensity._tissue_brightness(cfg, df, per_z.copy(), {"median": 150.0, "contrast": 140.0,
+                                                                 "drift_slices": 601, "ramp_slices": 65})
+    g_flat = intensity.grey(neuropil, flat["L"], flat["H"])
+    g_slow = intensity.grey(neuropil, slow["L"], slow["H"])
+    end = (z > 2800) & (z < 3000)
+    assert abs(g_flat[end].mean() - 150) > 8                     # one shift: the block's end is off target
+    assert np.abs(g_slow[seg == 0] - 150).max() < 4            # slow shift: on target along the block
+    assert abs(g_slow[2999] - g_slow[3000]) < 4                # no step into the next block
+    # the shift changes slowly: the window still follows the fast tissue level slice by slice
+    assert np.abs(np.diff(slow["L"].to_numpy() - level)[:2990]).max() < 2.0

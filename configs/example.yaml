@@ -163,7 +163,10 @@ intensity:
     breaks: []               # z where a new block starts within a segment (e.g. a setting changed mid-run)
     brightness: tissue       # tissue: position follows every slice's tissue (as the median window), shifted per block
                              # so the reference tissue's median is at median | reference: from the reference tissue itself
-    smooth_slices: 601       # per: slice: running median of the sampled stats over z (slices)
+    drift_slices: 2001       # brightness: tissue: that shift follows the reference tissue's samples slowly along z
+                             # (running median over this many slices, restarting at each block), so a slow change in
+                             # the tissue mix within a long block doesn't pull the ends off target | 0: one per block
+    smooth_slices: 601      # per: slice: running median of the sampled stats over z (slices)
     ramp_slices: 129         # running mean over z after interpolation (no kinks at the samples)
     min_cells: 20            # samples with fewer reference cells don't count
     boundary_slices: 300     # QC: samples within this many slices each side of a segment change

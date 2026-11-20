@@ -105,6 +105,11 @@ DEFAULTS = {
             # block so the reference tissue's median is at reference.median | reference: set from the
             # reference tissue's own median (per block, or along z with per: slice)
             "brightness": "tissue",
+            # brightness: tissue: the shift that puts the reference tissue at reference.median follows its
+            # samples slowly along z (running median over this many slices, restarting at every block, then a
+            # running mean over ramp_slices), so a slow change in the tissue mix within a long block doesn't
+            # move the reference tissue away from the target towards the block's ends | 0: one shift per block
+            "drift_slices": 2001,
             "smooth_slices": 601,   # per: slice: running median of the sampled stats over z (slices)
             "ramp_slices": 129,   # running mean over z after interpolation (no kinks at the samples)
             "min_cells": 20,      # samples with fewer reference cells don't count
@@ -385,8 +390,9 @@ def reference_windows(cfg, df):
 def _tissue_brightness(cfg, df, per_z, r):
     """brightness: tissue. The window's width per block from the reference tissue (c_s, as for
     brightness: reference), its position following every slice's starting window (all tissue, as the
-    median window places it), shifted once per block so the reference tissue's median comes out at
-    reference.median over the block's sampled slices (with the per-slice jumps render will add)."""
+    median window places it), shifted so the reference tissue's median comes out at reference.median
+    (with the per-slice jumps render will add): by one shift per block (drift_slices 0), or by a shift
+    that follows the block's sampled slices slowly along z (running median over drift_slices)."""
     tm = float(cfg["intensity"]["target_median"])
     w0 = common_window(df)                                   # starting windows, before the jumps
     M = (w0["Lc"] + tm / 255.0 * (w0["Hc"] - w0["Lc"])).reindex(per_z["z"]).to_numpy()
@@ -395,13 +401,20 @@ def _tissue_brightness(cfg, df, per_z, r):
     else:
         J = np.zeros(len(per_z))
     W = 255.0 * per_z["c_s"].to_numpy(float) / float(r["contrast"])
+    drift = int(r.get("drift_slices") or 0)
     L = np.full(len(per_z), np.nan)
     for b, g in per_z.groupby("block"):
         i = g.index.to_numpy()
         ok = g["median"].notna().to_numpy() & np.isfinite(W[i])
         if not ok.any():
             continue
-        a = np.median(float(r["median"]) * W[i][ok] / 255.0 - (g["median"].to_numpy()[ok] - M[i][ok] - J[i][ok]))
+        # per sampled slice: the shift that would put its reference tissue exactly at reference.median
+        need = float(r["median"]) * W[i][ok] / 255.0 - (g["median"].to_numpy()[ok] - M[i][ok] - J[i][ok])
+        if drift > 0:
+            pos = g["pos"].to_numpy(float)
+            a = smooth_samples(pos[ok], need, pos, drift, r.get("ramp_slices", 0))
+        else:
+            a = np.median(need)
         L[i] = M[i] - a
     per_z["L"], per_z["H"] = L, L + W
     per_z["m_s"] = per_z["L"] + float(r["median"]) * W / 255.0     # the value each window puts at reference.median
