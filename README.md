@@ -108,18 +108,28 @@ node with `--bind 0.0.0.0` and tunnel from your computer with
 
 ## Neuroglancer precomputed and bucket upload
 
-In the config: `precomputed.enabled: true` (export after the pyramid), and for the upload
-`upload.enabled: true` with `upload.destination: gs://bucket/prefix`. Then
-`./run_pipeline.sh CONFIG --steps precomputed,upload` (or as part of a longer chain). Check what an
-upload would send first: `python -m pipeline.upload --config CONFIG run --dry-run`.
+**Straight to a bucket (recommended for delivery):** `precomputed.enabled: true` and
+`precomputed.destination: gs://bucket/prefix`, then `./run_pipeline.sh CONFIG --steps precomputed`. The export
+is written into the bucket as it is made: no local copy (an uncompressed export is about as large as the
+volume's raw data), no separate upload. `verify` reads samples back from the bucket and only then writes
+`info` and `provenance`, so the volume only looks complete when it is. A re-run continues where it stopped (the
+progress is recorded in `work/precomputed/<name>/`). A destination that already holds a volume is only replaced
+with `init --overwrite`, in place, and only if it has the same size and export settings; writing to a new
+prefix is cleaner when someone may be reading the old one.
 
-The upload uses a Google service-account key file. **Put it in place yourself** on the cluster,
-at `~/.cloudvolume/secrets/google-secret.json` (CloudVolume's default; or set `upload.credentials`),
-and `chmod 600` it. Never
-put a key in the repository, a config, a chat or an email: the upload step refuses a key file inside
-the repository and only ever passes its path to the Google client.
+**Local folder, then upload:** leave `precomputed.destination` null (the export goes to
+`output_dir/<name>.precomputed`), and set `upload.enabled: true` with `upload.destination: gs://bucket/prefix`.
+Then `./run_pipeline.sh CONFIG --steps precomputed,upload`. Check what an upload would send first:
+`python -m pipeline.upload --config CONFIG run --dry-run`. Files already in the bucket are skipped only when
+size and MD5 match.
 
-The export serves like any volume: `python3 -m pipeline.serve FOLDER` lists `*.precomputed` too.
+Both use a Google service-account key file. **Put it in place yourself** on the cluster,
+at `~/.cloudvolume/secrets/google-secret.json` (CloudVolume's default; or set `precomputed.credentials` /
+`upload.credentials`), and `chmod 600` it. Never put a key in the repository, a config, a chat or an email:
+both steps refuse a key file inside the repository and only ever pass its path on (to tensorstore as
+`GOOGLE_APPLICATION_CREDENTIALS`, or to the Google client).
+
+A local export serves like any volume: `python3 -m pipeline.serve FOLDER` lists `*.precomputed` too.
 
 ## Things to know
 

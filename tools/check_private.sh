@@ -10,8 +10,10 @@
 # Patterns: tools/private_patterns.txt (committed, generic) plus tools/private_patterns.local.txt
 # (git-ignored: your cluster, share, host and people names; one extended regex per line).
 # Allowed: Python decorators, matrix '@', shell "$@" / [@], the LICENSE copyright line and the
-# Co-Authored-By trailer, and the placeholder bucket URL gs://bucket/prefix used in the docs. Commit
-# author emails are metadata: they are listed for review, not checked.
+# Co-Authored-By trailer; and placeholders: the bucket "bucket" (gs://bucket/prefix), a bare scheme in code or
+# text (gs:// followed by a quote, bracket or space), and addresses at the reserved example.org / example.com.
+# A real bucket name or email on the same line is then not reported: keep placeholders on their own lines.
+# Commit author emails are metadata: they are listed for review, not checked.
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 2
 if [ "${1:-}" = --all ]; then
@@ -28,7 +30,7 @@ cat tools/private_patterns.txt tools/private_patterns.local.txt 2>/dev/null | gr
 if [ ! -f tools/private_patterns.local.txt ]; then
   echo "note: tools/private_patterns.local.txt not found: only the generic patterns are checked"
 fi
-allow='^[^:]*:[0-9]*:[[:space:]+-]*@[A-Za-z_][A-Za-z0-9_.]*(\(|$)|^[+ -]?[[:space:]]*@[A-Za-z_][A-Za-z0-9_.]*(\(|$)|Copyright \(c\)|Co-Authored-By: Claude|\$@|\[@\]| @ |@=|gs://bucket/prefix'
+allow='^[^:]*:[0-9]*:[[:space:]+-]*@[A-Za-z_][A-Za-z0-9_.]*(\(|$)|^[+ -]?[[:space:]]*@[A-Za-z_][A-Za-z0-9_.]*(\(|$)|Copyright \(c\)|Co-Authored-By: Claude|\$@|\[@\]| @ |@=|(gs|s3)://bucket[/"'\'' ]|(gs|s3)://bucket$|(gs|s3)://["'\''`) ]|(gs|s3)://$|@example\.(org|com)\b'
 if [ "${range[0]}" = --all ]; then
   files=$(git ls-files -co --exclude-standard)
 else  # what this push would add: files changed in the range, plus uncommitted and untracked ones

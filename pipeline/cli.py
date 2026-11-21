@@ -3,6 +3,7 @@
 import argparse
 import logging
 import os
+import stat
 from pathlib import Path
 
 from .config import load_config
@@ -91,3 +92,19 @@ def atomic_write(path, write_fn, suffix=None):
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def key_file(path, setting):
+    """A key file's resolved path, after checks that it exists and lies outside the repository.
+    Only its path is handed on (to the Google client or tensorstore); it is never read, copied or logged here."""
+    path = Path(os.path.expanduser(str(path))).resolve()
+    if REPO in path.parents:
+        raise ValueError(f"{setting} {path} is inside the repository: keep the key elsewhere")
+    if not path.is_file():
+        raise FileNotFoundError(f"{setting}: no key file at {path}")
+    if path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        logging.getLogger(__name__).warning("%s is readable by others: chmod 600 it", path)
+    return path

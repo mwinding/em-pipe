@@ -38,6 +38,18 @@ def test_upload_runs_resumes_and_finishes(make_config, tmp_path):
     assert upload.main(["run", "--config", str(cfg)]) == 0
     assert (bucket / "8_8_8" / "0.shard").stat().st_mtime_ns == stamp
     assert (bucket / "8_8_8" / "3.shard").read_bytes() == bytes([3]) * 103
+    # a replaced volume: a file of the same size but other content is sent again too (MD5 compared)
+    (out / "vol.precomputed" / "8_8_8" / "5.shard").write_bytes(b"\xff" * 105)
+    assert upload.main(["run", "--config", str(cfg)]) == 0
+    assert (bucket / "8_8_8" / "5.shard").read_bytes() == b"\xff" * 105
+    assert (bucket / "8_8_8" / "0.shard").stat().st_mtime_ns == stamp
+
+
+def test_upload_refuses_when_the_export_went_to_the_bucket_directly(make_config, tmp_path):
+    cfg = make_config(tmp_path / "raw", precomputed={"destination": f"file://{tmp_path / 'bucket'}"},
+                      upload={"destination": f"file://{tmp_path / 'bucket'}"})
+    with pytest.raises(ValueError, match="nothing to upload"):
+        upload.main(["run", "--config", str(cfg)])
 
 
 def test_finish_refuses_until_every_data_file_is_there(make_config, tmp_path):
@@ -69,6 +81,6 @@ def test_destination_must_be_set_and_known(make_config, tmp_path):
     cfg = make_config(tmp_path / "raw", upload={"source": "vol.precomputed"})
     with pytest.raises(ValueError, match="destination"):
         upload.main(["run", "--config", str(cfg)])
-    cfg = make_config(tmp_path / "raw", upload={"source": "vol.precomputed", "destination": "s3://b/x"})
+    cfg = make_config(tmp_path / "raw", upload={"source": "vol.precomputed", "destination": "http://host/x"})
     with pytest.raises(ValueError, match="gs://"):
         upload.main(["run", "--config", str(cfg)])

@@ -1,8 +1,9 @@
 """Upload a finished output folder (by default the precomputed export) to a Google Cloud Storage bucket.
 
 ``run`` (array): every task takes its share of the folder's files (sorted, every n-th), lists what
-the bucket already has under the destination, and uploads what is missing or of another size, with
-CRC32C checked by the client. An object only appears in GCS once complete, so a re-run continues
+the bucket already has under the destination, and uploads what is missing or differs: another size, or
+the same size but another MD5 (so a replaced volume's files of unchanged size are not skipped), with
+CRC32C checked by the client on the way. An object only appears in GCS once complete, so a re-run continues
 where one stopped. The top-level ``info`` and ``provenance`` files wait for ``finish``: it checks that
 every other file is in the bucket, uploads them last (so the volume only looks complete when it is),
 then checks everything once more. ``--dry-run`` only counts.
@@ -14,16 +15,17 @@ inside the repository is refused. ``upload.destination`` may also be ``file:///p
 for tests).
 """
 
+import base64
+import hashlib
 import logging
 import os
 import shutil
-import stat
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from .cli import base_parser, setup, task_info
+from .cli import REPO, base_parser, key_file, setup, task_info
 from .precomputed import DEFAULTS as PRECOMPUTED_DEFAULTS, paths as precomputed_paths
 from .render import DEFAULTS as RENDER_DEFAULTS
 
@@ -40,14 +42,25 @@ DEFAULTS = {
     }
 }
 LAST = ("info", "provenance")   # top-level files uploaded by finish, after everything else
-REPO = Path(__file__).resolve().parent.parent
 
 
 def source_dir(cfg):
     u = cfg["upload"]
     if u["source"]:
         return Path(cfg["output_dir"]) / u["source"]
+    if cfg["precomputed"].get("destination"):
+        raise ValueError("precomputed.destination is set: the export is written there directly, so there is "
+                         "nothing to upload (switch upload off)")
     return precomputed_paths(cfg)[1]
+
+
+def md5_b64(path):
+    """Base64 MD5 of a file, as GCS reports it (``md5Hash``)."""
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 24), b""):
+            h.update(block)
+    return base64.b64encode(h.digest()).decode()
 
 
 def local_files(root):
@@ -64,6 +77,9 @@ class LocalTarget:
 
     def list(self):
         return local_files(self.root) if self.root.exists() else {}
+
+    def md5(self, rel):
+        return md5_b64(self.root / rel)
 
     def put(self, local, rel):
         dest = self.root / rel
@@ -92,7 +108,12 @@ class GCSTarget:
 
     def list(self):
         n = len(self.prefix)
-        return {b.name[n:]: b.size for b in self.bucket.list_blobs(prefix=self.prefix)}
+        blobs = list(self.bucket.list_blobs(prefix=self.prefix))
+        self._md5 = {b.name[n:]: b.md5_hash for b in blobs}   # None for composite objects: compared as different
+        return {b.name[n:]: b.size for b in blobs}
+
+    def md5(self, rel):
+        return self._md5.get(rel)
 
     def put(self, local, rel):
         blob = self.bucket.blob(self.prefix + rel)
@@ -102,14 +123,12 @@ class GCSTarget:
 
 def credentials_path(u):
     """The key file's path, after checks that it exists and lies outside the repository."""
-    path = Path(os.path.expanduser(str(u["credentials"]))).resolve()
-    if REPO in path.parents:
-        raise ValueError(f"upload.credentials {path} is inside the repository: keep the key elsewhere")
-    if not path.is_file():
-        raise FileNotFoundError(f"upload.credentials: no key file at {path}")
-    if path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-        log.warning("%s is readable by others: chmod 600 it", path)
-    return path
+    return key_file(u["credentials"], "upload.credentials")
+
+
+def _uploaded(tgt, root, rel, size, have):
+    """Whether the bucket already has this file: same size and same MD5 (read only when the sizes agree)."""
+    return have.get(rel) == size and tgt.md5(rel) == md5_b64(Path(root) / rel)
 
 
 def target(cfg):
@@ -163,7 +182,7 @@ def run(cfg, task_id, num_tasks, dry_run=False):
     mine = names[task_id::num_tasks]
     tgt = target(cfg)
     have = tgt.list()
-    todo = [(r, files[r]) for r in mine if have.get(r) != files[r]]
+    todo = [(r, files[r]) for r in mine if not _uploaded(tgt, root, r, files[r], have)]
     log.info("task %d/%d: %d of %d files, %d to upload (%.1f GB) to %s", task_id, num_tasks, len(mine),
              len(names), len(todo), sum(s for _, s in todo) / 1e9, u["destination"])
     if dry_run or not todo:

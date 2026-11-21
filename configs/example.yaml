@@ -328,6 +328,9 @@ serve:
 precomputed:
   enabled: false             # run_pipeline.sh: Neuroglancer precomputed export after pyramid
   name: null                 # folder in output_dir; null: <volume stem>.precomputed
+  destination: null          # null: that folder; gs://bucket/prefix: written straight to the bucket (no upload
+                             # step needed); or file:///path. info + provenance are written last, by verify
+  credentials: ~/.cloudvolume/secrets/google-secret.json   # gs:// destinations: service-account key; never in the repo
   chunk: [128, 128, 128]     # chunk size, x y z voxels
   encoding: raw              # raw (lossless, gzip in the shards) | jpeg (lossy, smaller)
   jpeg_quality: 90
@@ -339,7 +342,8 @@ precomputed:
   owners: []                 # provenance, e.g. ["name@example.org"]
 
 upload:
-  enabled: false             # run_pipeline.sh: upload after the precomputed export
+  enabled: false             # run_pipeline.sh: upload after the precomputed export (not needed when
+                             # precomputed.destination is a bucket)
   source: null               # folder in output_dir to upload; null: the precomputed export
   destination: null          # gs://bucket/prefix (or file:///path)
   credentials: ~/.cloudvolume/secrets/google-secret.json   # service-account key file; never in the repo
