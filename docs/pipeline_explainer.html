@@ -976,7 +976,7 @@
       <h3>The CLAHE copy</h3>
       <p>CLAHE is local contrast boosting. It splits each slice into small squares (256 pixels, about 2 µm, for our
         volumes) and stretches the contrast within each square separately, with a limit (1.5) so it does not
-        blow up the noise. Membranes stand out everywhere, which is nice for looking and tracing. The price is
+        blow up the noise. Membranes stand out everywhere, which helps with looking and tracing. The price is
         that a given grey no longer means the same thing in different places. That is why the CLAHE version is
         a separate volume, and the plain volume, with its consistent grey scale, is the one to use for
         measurements and for training models.</p>
