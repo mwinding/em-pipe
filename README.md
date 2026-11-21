@@ -110,8 +110,8 @@ node with `--bind 0.0.0.0` and tunnel from your computer with
 
 **Straight to a bucket (recommended for delivery):** `precomputed.enabled: true` and
 `precomputed.destination: gs://bucket/prefix`, then `./run_pipeline.sh CONFIG --steps precomputed`. The export
-is written into the bucket as it is made: no local copy (an uncompressed export is about as large as the
-volume's raw data), no separate upload. `verify` reads samples back from the bucket and only then writes
+is written into the bucket as it is made: no local copy (an export of a whole volume is terabytes: lossless
+compression shrinks EM data little), no separate upload. `verify` reads samples back from the bucket and only then writes
 `info` and `provenance`, so the volume only looks complete when it is. A re-run continues where it stopped (the
 progress is recorded in `work/precomputed/<name>/`). A destination that already holds a volume is only replaced
 with `init --overwrite`, in place, and only if it has the same size and export settings; writing to a new

@@ -192,7 +192,7 @@
   <section aria-labelledby="map">
     <header>
       <p class="eyebrow">The route</p>
-      <h2 id="map">Five stages, in order</h2>
+      <h2 id="map">Six stages, in order</h2>
     </header>
     <p>Each name below is one step of the pipeline. They run one after another as cluster jobs, and each step
       only starts when the one before it has finished. A step that already has its output skips the work, so
@@ -208,6 +208,8 @@
         <div class="chips"><span class="chip is-new">refmask</span><span class="chip is-new">refstats</span><span class="chip is-new">intensity (window: reference)</span></div></div></li>
       <li><span class="n">5</span><div class="what"><b>Make the volume</b>
         <div class="chips"><span class="chip">render</span><span class="chip opt">CLAHE copy</span><span class="chip">pyramid</span></div></div></li>
+      <li><span class="n">6</span><div class="what"><b>Hand it over for segmentation</b>
+        <div class="chips"><span class="chip opt">precomputed (straight to the bucket)</span></div></div></li>
     </ol>
     <div class="legend">
       <span><span class="chip">step</span> always runs</span>
@@ -216,8 +218,8 @@
     </div>
 
     <figure>
-      <div class="diagram" role="img" aria-label="Diagram: raw tiles go through check and preview, then split into two tracks. The geometry track is stitch then align. The brightness track is flat-field and patch maps, tile balance, the neuropil mask and statistics, and the window. Both tracks meet at render, which also makes the pyramid.">
-        <svg viewBox="0 0 900 252" xmlns="http://www.w3.org/2000/svg">
+      <div class="diagram" role="img" aria-label="Diagram: raw tiles go through check and preview, then split into two tracks. The geometry track is stitch then align. The brightness track is flat-field and patch maps, tile balance, the neuropil mask and statistics, and the window. Both tracks meet at render, which also makes the pyramid. The finished volume is then exported into the bucket for segmentation.">
+        <svg viewBox="0 0 1010 252" xmlns="http://www.w3.org/2000/svg">
           <defs>
             <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0 0 L10 5 L0 10 z" class="s-head"/>
@@ -245,6 +247,11 @@
           <text x="810" y="121" text-anchor="middle" class="s-label">render</text>
           <text x="810" y="139" text-anchor="middle" class="s-small">+ pyramid</text>
           <text x="810" y="170" text-anchor="middle" class="s-small">the volume</text>
+          <rect x="890" y="100" width="110" height="50" rx="4" class="s-box"/>
+          <text x="945" y="121" text-anchor="middle" class="s-label">precomputed</text>
+          <text x="945" y="139" text-anchor="middle" class="s-small">→ bucket</text>
+          <text x="945" y="170" text-anchor="middle" class="s-small">for segmentation</text>
+          <path d="M860 125 L888 125" class="s-line" marker-end="url(#arrA)"/>
           <path d="M110 125 L133 125" class="s-line" marker-end="url(#arrA)"/>
           <path d="M245 118 C 272 100, 274 60, 298 60" class="s-line" marker-end="url(#arrA)"/>
           <path d="M390 60 L408 60" class="s-line" marker-end="url(#arrA)"/>
@@ -258,7 +265,9 @@
       </div>
       <figcaption><span class="tag">Diagram</span>Simplified. Two kinds of information are worked out separately:
         where each tile goes (top) and how bright each pixel should become (bottom). Render is the only step that
-        writes the final image, and it uses both. The steps in the coloured boxes are the new reference contrast.</figcaption>
+        writes the final image, and it uses both. The steps in the coloured boxes are the new reference contrast.
+        The export at the end copies the finished volume, unchanged, into the format and place the segmentation
+        team reads.</figcaption>
     </figure>
   </section>
 
@@ -720,8 +729,8 @@
           in every slice. This is what the earlier windows did too.</li>
         <li><strong>Slow changes.</strong> On top of that, two things follow the neuropil, slowly: the window's
           <strong>width</strong> (contrast) and a <strong>brightness shift</strong> that puts the neuropil's median
-          at 150. Both come from the sampled slices and are smoothed over about 2,000 slices, starting afresh at
-          every segment change.</li>
+          at 150. Both come from the sampled slices and are smoothed over up to about 2,000 slices, starting afresh
+          at every segment change. Where the neuropil really does change faster, they follow faster (below).</li>
       </ul>
       <p>Why slowly? The neuropil is only measured on sampled slices, and its numbers vary a little from sample
         to sample as the view changes. Following each sample would add flicker; following them slowly corrects
@@ -763,25 +772,90 @@
     </figure>
 
     <div class="step">
+      <h3 id="adapt">When the neuropil changes quickly: follow faster <span class="mono">adapt: true</span></h3>
+      <p>Smoothing over 2,000 slices is right when the neuropil drifts slowly, but sometimes it changes faster for
+        real: the microscope settles for a few hundred slices after a pause, or a setting changed mid-segment.
+        A long window smooths such a change away and leaves those slices off target, most of all at the start of
+        a segment, where the window can only look forward.</p>
+      <p>So the window adapts. It first measures how much the samples scatter when nothing is changing (the
+        difference between neighbouring samples). Then, at every slice, it starts from a short window of a few
+        samples and makes it longer, step by step, for as long as the longer window still agrees with the shorter
+        ones within that scatter (2.5 times its expected error). Where the neuropil is steady it ends up with the
+        full 2,000 slices, the same as before; where it changes, it stays short and follows. The QC plot shades
+        those faster stretches orange.</p>
+    </div>
+
+    <figure>
+      <div class="diagram" role="img" aria-label="Diagram: sampled neuropil width at the start of a segment rises quickly over the first few samples and then levels off. The long window stays almost flat near the final level, so the first slices are far off. The adaptive window follows the rise and then joins the long window.">
+        <svg viewBox="0 0 720 270" xmlns="http://www.w3.org/2000/svg">
+          <line x1="60" y1="30" x2="60" y2="215" style="stroke: var(--ink-2); stroke-width: 1.2"/>
+          <line x1="60" y1="215" x2="700" y2="215" style="stroke: var(--ink-2); stroke-width: 1.2"/>
+          <text x="20" y="125" text-anchor="middle" class="s-small" transform="rotate(-90 20 125)">neuropil width (raw)</text>
+          <line x1="70" y1="30" x2="70" y2="215" style="stroke: var(--rule); stroke-width: 2"/>
+          <text x="76" y="44" class="s-small">segment starts</text>
+          <g style="fill: var(--ink-2)">
+            <circle cx="70" cy="188" r="4"/><circle cx="110" cy="169" r="4"/><circle cx="150" cy="139" r="4"/>
+            <circle cx="190" cy="134" r="4"/><circle cx="230" cy="112" r="4"/><circle cx="270" cy="111" r="4"/>
+            <circle cx="310" cy="98" r="4"/><circle cx="350" cy="102" r="4"/><circle cx="390" cy="91" r="4"/>
+            <circle cx="430" cy="97" r="4"/><circle cx="470" cy="87" r="4"/><circle cx="510" cy="93" r="4"/>
+            <circle cx="550" cy="87" r="4"/><circle cx="590" cy="93" r="4"/><circle cx="630" cy="89" r="4"/>
+            <circle cx="670" cy="91" r="4"/>
+          </g>
+          <path d="M70 104 C 220 100, 420 93, 690 90" class="s-grey"/>
+          <path d="M70 186 C 110 166, 150 141, 210 124 S 330 99, 420 94 S 600 90, 690 90" class="s-accent"/>
+          <text x="300" y="72" class="s-label" style="fill: var(--ink-2)">long window only: first slices far off</text>
+          <text x="180" y="170" class="s-label" style="fill: var(--accent); font-weight: 600">adaptive (adopted)</text>
+          <text x="560" y="120" class="s-small">dots: sampled slices</text>
+          <text x="700" y="262" text-anchor="end" class="s-cap">SLICES (Z) →</text>
+          <text x="70" y="236" class="s-small">short window here</text>
+          <text x="690" y="236" text-anchor="end" class="s-small">full 2,000 slices here</text>
+        </svg>
+      </div>
+      <figcaption><span class="tag">Diagram</span>Illustrative, not data. The neuropil's width settles quickly at
+        the start of a segment. The long window (grey) can only look forward here and averages the settling away,
+        so the first slices get the wrong contrast. The adaptive window (coloured line) is short where the samples
+        change and long once they agree.</figcaption>
+    </figure>
+
+    <details class="more">
+      <summary>More detail: how far the window shortens, in numbers</summary>
+      <div class="more-body">
+        <p><strong>Scatter between samples.</strong> The typical difference between neighbouring sampled slices,
+          divided by √2, pooled over the volume: for 35h 0.52% for the width and 3.7 greys for the brightness
+          shift; for 37i 0.4–0.5% and 1.2 greys.</p>
+        <p><strong>Window lengths.</strong> From about 1.5 sample spacings (192 slices when every 64th slice is
+          sampled) up to 2,000 slices, in steps of √2. A window wholly inside the segment takes the median of its
+          samples. A window cut off by the segment's start or end fits a straight line instead (robustly, so one odd
+          sample can't tip it), so a settling at the edge isn't flattened.</p>
+        <p><strong>How often it shortens.</strong> In 35h the width followed faster in 15 stretches, 31% of the
+          slices, mostly where the first segments settle; the brightness shift in 3 stretches (2%). In 37i: 11 and
+          5 stretches (22% and 7%).</p>
+        <p>Settings: <code>intensity.reference.adapt: true</code> (default) and <code>adapt_sigmas: 2.5</code>. The
+          QC file <code>intensity_reference_*.json</code> lists the scatter (<code>sample_noise</code>) and every
+          faster stretch with its shortest window (<code>faster</code>).</p>
+      </div>
+    </details>
+
+    <div class="step">
       <h3>What it changed in 35h</h3>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>35h, neuropil</th><th>One value per segment</th><th>Slow follow (adopted)</th></tr></thead>
+          <thead><tr><th>35h, neuropil</th><th>One value per segment (width 140)</th><th>Slow follow (width 140)</th><th>Slow follow, adaptive (width 130, adopted)</th></tr></thead>
           <tbody>
-            <tr><td>Brightness step at z 12529</td><td class="num">12.8 greys</td><td class="num">2.0 greys</td></tr>
-            <tr><td>Width step at z 12529</td><td class="num">5.1 greys</td><td class="num">0.4 greys</td></tr>
-            <tr><td>Median grey across slices (p5–p95)</td><td class="num">139–159</td><td class="num">142–158</td></tr>
-            <tr><td>Width across slices (p5–p95)</td><td class="num">135–144</td><td class="num">138–143</td></tr>
-            <tr><td>Most tissue clipped in one slice</td><td class="num">2.6%</td><td class="num">3.0%</td></tr>
+            <tr><td>Brightness step at z 12529</td><td class="num">12.8 greys</td><td class="num">2.0 greys</td><td class="num">−1.4 greys</td></tr>
+            <tr><td>Width step at z 12529</td><td class="num">5.1 greys</td><td class="num">0.4 greys</td><td class="num">−0.1 greys</td></tr>
+            <tr><td>Median grey across slices (p5–p95)</td><td class="num">139–159</td><td class="num">142–158</td><td class="num">143–157</td></tr>
+            <tr><td>Width across slices (p5–p95)</td><td class="num">135–144</td><td class="num">138–143</td><td class="num">129–132</td></tr>
+            <tr><td>Most tissue clipped in one slice</td><td class="num">2.6%</td><td class="num">3.0%</td><td class="num">2.2%</td></tr>
           </tbody>
         </table>
       </div>
-      <p>These 35h numbers were measured with the earlier standard width of 140. The steps at 35h's other segment
-        changes are small with the slow follow: 1.7, 0.7, 3.6 and 4.2 greys in brightness and 0.9, −2.8, −1.6 and
-        −0.1 greys in width. The price is a little more clipping at the end of segment 2. Segments shorter than
-        about 2,000 slices come out almost constant, the same as one value per segment. The one-value-per-segment
-        setting (<code>per: segment</code>) is still available; the A1001 test render used it, at the earlier
-        width of 140.</p>
+      <p>The first two columns were measured with the earlier width of 140, so their widths sit around 140; the
+        adopted column is the setting the volumes are rendered with now. With it, the steps at 35h's other segment
+        changes are 1.7, 0.6, 4.2 and 0.0 greys in brightness and −0.7, 0.9, −0.8 and 0.0 greys in width. Every
+        sampled slice's neuropil width lies within ±5% of 130, and 91% of their medians within ±5% of 150. The
+        one-value-per-segment setting (<code>per: segment</code>) is still available; the A1001 test render used
+        it, at the earlier width of 140.</p>
     </div>
 
     <details class="more">
@@ -809,11 +883,12 @@
         <h4>How c and a are smoothed</h4>
         <p>Within each block (a segment, or part of one when a <code>breaks</code> entry splits it, as at A1001's
           z 127, where the slice interval and the raw neuropil changed mid-run), the sampled values of c and of a each get a running median
-          over 2,001 slices (±1,000), are interpolated linearly between samples (held at the block's ends), and
+          over up to 2,001 slices (±1,000; shorter where the samples change faster than their scatter, see
+          "follow faster" above), are interpolated linearly between samples (held at the block's ends), and
           then get a running mean over 129 slices so there are no kinks. Settings:
           <code>intensity.reference.per: slice</code>, <code>smooth_slices: 2001</code>,
-          <code>ramp_slices: 129</code>. With <code>per: segment</code>, c and a are instead the medians over the
-          block's samples.</p>
+          <code>adapt: true</code>, <code>adapt_sigmas: 2.5</code>, <code>ramp_slices: 129</code>. With
+          <code>per: segment</code>, c and a are instead the medians over the block's samples.</p>
         <h4>Back to each tile</h4>
         <p>The window L to L + W is mapped back through each tile's gain and offset, lo = (L − o) ÷ g and
           hi = (L + W − o) ÷ g, and written to <code>work/intensity/levels.csv</code> (one lo and hi per slice and
@@ -912,6 +987,84 @@
     </div>
   </section>
 
+  <section aria-labelledby="s6">
+    <header>
+      <p class="eyebrow">Stage 6</p>
+      <h2 id="s6">Hand it over for segmentation</h2>
+    </header>
+    <div class="step">
+      <h3>A copy in the format the segmentation team reads <span class="mono">precomputed</span></h3>
+      <p>The segmentation team's tools read "Neuroglancer precomputed", not OME-Zarr. The export makes that copy
+        of every zoom level, with the same greys voxel for voxel (no compression loss). The voxels are grouped
+        into shard files of 512 × 512 × 512, so a volume of terabytes is tens of thousands of files rather than
+        tens of millions.</p>
+      <p>The export is written <strong>straight into the team's cloud bucket</strong>, as it is made. There is no
+        local copy: each export is terabytes (35h's was about 10 TB; the shards are compressed losslessly, but
+        electron microscopy images don't shrink much), too much to keep a spare copy of several volumes on the
+        lab share. About 40 cluster jobs each write their own shards, so no two jobs touch the same file.</p>
+    </div>
+
+    <figure>
+      <div class="diagram" role="img" aria-label="Diagram: the volume on the lab share is read by about 40 jobs, which write shard files straight into the bucket. A check then reads samples back from the bucket and compares them with the volume. Only after that are the info and provenance files written, and the volume is complete.">
+        <svg viewBox="0 0 900 200" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" class="s-head"/>
+            </marker>
+          </defs>
+          <rect x="10" y="70" width="140" height="50" rx="4" class="s-box"/>
+          <text x="80" y="92" text-anchor="middle" class="s-label">the volume</text>
+          <text x="80" y="110" text-anchor="middle" class="s-small">OME-Zarr, lab share</text>
+          <rect x="200" y="70" width="150" height="50" rx="4" class="s-box"/>
+          <text x="275" y="92" text-anchor="middle" class="s-label">~40 jobs</text>
+          <text x="275" y="110" text-anchor="middle" class="s-small">each writes its shards</text>
+          <rect x="410" y="40" width="200" height="110" rx="6" class="s-box"/>
+          <text x="510" y="60" text-anchor="middle" class="s-cap">BUCKET</text>
+          <g class="s-small">
+            <rect x="428" y="72" width="34" height="22" rx="2" class="s-box"/><rect x="470" y="72" width="34" height="22" rx="2" class="s-box"/>
+            <rect x="512" y="72" width="34" height="22" rx="2" class="s-box"/><rect x="554" y="72" width="34" height="22" rx="2" class="s-box"/>
+            <rect x="428" y="102" width="34" height="22" rx="2" class="s-box"/><rect x="470" y="102" width="34" height="22" rx="2" class="s-box"/>
+            <rect x="512" y="102" width="34" height="22" rx="2" class="s-box"/>
+          </g>
+          <text x="510" y="142" text-anchor="middle" class="s-small">shard files</text>
+          <rect x="645" y="40" width="140" height="44" rx="4" class="s-box"/>
+          <text x="715" y="60" text-anchor="middle" class="s-label">check</text>
+          <text x="715" y="76" text-anchor="middle" class="s-small">read back, compare</text>
+          <rect x="645" y="106" width="140" height="44" rx="4" class="s-box"/>
+          <text x="715" y="126" text-anchor="middle" class="s-label">info written</text>
+          <text x="715" y="142" text-anchor="middle" class="s-small">last</text>
+          <text x="852" y="132" text-anchor="middle" class="s-small">complete</text>
+          <path d="M150 95 L198 95" class="s-line" marker-end="url(#arrE)"/>
+          <path d="M350 95 L408 95" class="s-line" marker-end="url(#arrE)"/>
+          <path d="M610 70 L643 62" class="s-line" marker-end="url(#arrE)"/>
+          <path d="M715 84 L715 104" class="s-line" marker-end="url(#arrE)"/>
+          <path d="M785 128 L818 128" class="s-line" marker-end="url(#arrE)"/>
+          <text x="450" y="185" text-anchor="middle" class="s-cap">A RE-RUN CONTINUES WHERE IT STOPPED; NOTHING LOOKS FINISHED UNTIL IT IS</text>
+        </svg>
+      </div>
+      <figcaption><span class="tag">Diagram</span>The order matters. A reader opens a precomputed volume through its
+        <code>info</code> file, so that file is written only after every shard is in place and samples read back
+        from the bucket match the volume exactly. Until then the volume simply isn't there for the team.</figcaption>
+    </figure>
+
+    <div class="step">
+      <h3>Safe to re-run, safe for what is already there</h3>
+      <ul>
+        <li><strong>Progress is recorded.</strong> Each job notes every shard it has written in the volume's work
+          folder, so a job that is stopped (time limit, network trouble) is simply submitted again and carries on.
+          A shard that is noted but missing from the bucket is written again.</li>
+        <li><strong>Nothing is replaced by accident.</strong> If the destination already holds a volume, the export
+          refuses unless told to replace it, and even then only if the old one has exactly the same size and
+          settings. In practice each new version gets its own name, so the team can switch over when they are
+          ready.</li>
+        <li><strong>The key stays put.</strong> The bucket's access key is a file on the cluster; the export only
+          tells the storage library where it is, and never copies or prints it.</li>
+      </ul>
+      <p>The older route, exporting to a folder on the lab share and then uploading it, still exists for small
+        volumes or other destinations.</p>
+    </div>
+  </section>
+
   <section aria-labelledby="qc">
     <header>
       <p class="eyebrow">Checking a run</p>
@@ -930,15 +1083,16 @@
           <tr><td class="file">intensity.png</td><td>Each tile's levels and gain along z</td><td>Tiles moving together, no sudden splits.</td></tr>
           <tr><td class="file">refmask.png</td><td>The neuropil's share of the tissue per slice</td><td>A smooth curve. A sudden jump means the mask went wrong somewhere: draw it over the slice with <code>tools/refmask_check.py</code>.</td></tr>
           <tr><td class="file">refstats.png</td><td>The raw neuropil per sampled slice: median, width, lc32 and squares measured</td><td>Steady within segments; steps at segment changes are normal. Very few squares means no reliable measurement there.</td></tr>
-          <tr><td class="file">intensity_reference.png, .json</td><td>The predicted result of the new window (figure below)</td><td>Dots inside the green band, no steps at the grey lines, clipping a few percent at most. The .json lists the step at every segment change and any warnings.</td></tr>
+          <tr><td class="file">intensity_reference.png, .json</td><td>The predicted result of the new window (figure below)</td><td>Dots inside the green band, no steps at the grey lines, clipping a few percent at most. Orange bands mark where the window followed faster; they belong where the grey dots change quickly. The .json lists the step at every segment change, the faster stretches and any warnings.</td></tr>
         </tbody>
       </table>
     </div>
     <figure>
-      <img src="img/qc_35h_130.jpg" alt="35h intensity reference QC plot with three panels over z. Top: neuropil median grey, blue dots around 150, grey dots more scattered. Middle: neuropil p5 to p95 width, blue dots on 130, grey dots between about 125 and 175, highest in the first segments. Bottom: percent of tissue clipped, the new window mostly 1 to 2 percent, the current levels mostly 1.5 to 3.5 percent." loading="lazy">
+      <img src="img/qc_35h_adaptive.jpg" alt="35h intensity reference QC plot with three panels over z. Top: neuropil median grey, blue dots around 150, grey dots more scattered, a few narrow orange bands. Middle: neuropil p5 to p95 width, blue dots on 130, grey dots between about 125 and 175, highest in the first segments, with orange bands over the first segments and a few later stretches. Bottom: percent of tissue clipped, the new window mostly 1 to 2 percent, the current levels mostly 1.5 to 3.5 percent." loading="lazy">
       <figcaption><span class="tag">Real data</span>35h's <code>intensity_reference</code> plot at the standard
-        (median 150, width 130), one dot per sampled slice, grey lines at segment changes. Blue (orange in the
-        bottom panel): the new window. Grey: the levels 35h is rendered with now.
+        (median 150, width 130, adaptive), one dot per sampled slice, grey lines at segment changes. Blue (orange
+        in the bottom panel): the new window. Grey: the levels 35h is rendered with now. Orange bands: stretches
+        where the window followed faster than 2,000 slices.
         <strong>1.</strong> Neuropil median grey, target 150 with a ±5% band.
         <strong>2.</strong> Neuropil p5–p95 width, target 130. The new window holds it steady; the current
         render varies much more, and is widest in the first two segments.
@@ -950,10 +1104,10 @@
       <table>
         <thead><tr><th>At the standard</th><th>Neuropil grey</th><th>Neuropil width</th><th>Tissue clipped, median slice</th></tr></thead>
         <tbody>
-          <tr><td>35h, new window</td><td class="num">142–158</td><td class="num">128–133</td><td class="num">1.44%</td></tr>
-          <tr><td>35h, as rendered now</td><td class="num">–</td><td class="num">130–168 (median 143)</td><td class="num">2.0%</td></tr>
-          <tr><td>37i decurtained, new window</td><td class="num">147–153</td><td class="num">128–133</td><td class="num">0.22%</td></tr>
-          <tr><td>37i decurtained, as rendered now</td><td class="num">–</td><td class="num">118–147 (median 129)</td><td class="num">0.24%</td></tr>
+          <tr><td>35h, new window</td><td class="num">143–157</td><td class="num">129–132</td><td class="num">1.45%</td></tr>
+          <tr><td>35h, as rendered now</td><td class="num">137–160</td><td class="num">130–168 (median 143)</td><td class="num">2.0%</td></tr>
+          <tr><td>37i decurtained, new window (rendered 20 Nov)</td><td class="num">148–153</td><td class="num">129–131</td><td class="num">0.22%</td></tr>
+          <tr><td>37i decurtained, first render (Nov, hand-matched)</td><td class="num">142–157</td><td class="num">118–147 (median 129)</td><td class="num">0.24%</td></tr>
         </tbody>
       </table>
     </div>
@@ -981,6 +1135,10 @@
       <dt>Flat-field</dt><dd>The map of how much brighter or darker each part of a tile is than average, from the microscope's uneven lighting.</dd>
       <dt>CLAHE</dt><dd>Contrast-limited adaptive histogram equalisation: local contrast boosting, square by square.</dd>
       <dt>OME-Zarr</dt><dd>The file format of the volume: many small chunks plus the zoomed-out copies, which neuroglancer reads directly.</dd>
+      <dt>Precomputed</dt><dd>Neuroglancer's other volume format, the one segmentation tools (CloudVolume and those built on it) read. The export makes it from the OME-Zarr volume, voxel for voxel.</dd>
+      <dt>Shard</dt><dd>One file holding a block of chunks (here 512 × 512 × 512 voxels), so a huge volume is a manageable number of files.</dd>
+      <dt>Bucket</dt><dd>A storage space in the cloud (Google Cloud Storage) that the segmentation team reads from.</dd>
+      <dt>Adaptive window</dt><dd>The smoothing of the neuropil numbers along z that is long (up to 2,000 slices) where they are steady and short where they really change.</dd>
     </dl>
   </section>
 
