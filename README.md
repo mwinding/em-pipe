@@ -153,7 +153,8 @@ A local export serves like any volume: `python3 -m pipeline.serve FOLDER` lists 
   `destreak.reference_from` / `reference_to` swap the stripe part from it instead of removing it, so
   structure that runs along the curtains is kept; `stripe_px` sets what counts as a stripe by length,
   `core_threshold` fills the cores of strong curtains from the matched reference, and `band_match`
-  matches the broad bands that clusters of curtains darken to the reference, only around the curtains
+  matches to the reference the broad band a cluster of curtains leaves after the swap (the curtains' own
+  darkness, which wavelet details can't hold, spread over a few hundred px), only around the curtains
   (`band_max_px` limits it to bands up to that wide, so wider regions the detectors show differently keep
   the image's look).
 - **patchgrid** needs `overlaps.patch_grid` > 0 (e.g. 8) and `intensity.balance_source: overlaps`.

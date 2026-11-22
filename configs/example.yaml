@@ -249,7 +249,7 @@ destreak:
   core_dilate_px: 2          # cores widened by this many px across the stripes (curtains wander)
   core_window_px: 31         # window of the local linear match reference -> image
   core_denoise_px: 1.0       # Gaussian sigma smoothing the reference before it fills cores
-  band_match: false          # swap: the broad bands curtain clusters darken (wider than ``levels`` reach)
+  band_match: false          # swap: the broad band a curtain cluster's own darkness leaves after the swap
                              # matched to the reference in curtain zones, fading to 0 at their edges
                              # (seamless); good tissue keeps the swap's result
   band_zone: 1.0             # curtain zone: what the swap took out (smoothed 64 px across / 256 px along the

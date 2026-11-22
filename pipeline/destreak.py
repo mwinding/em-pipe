@@ -15,9 +15,12 @@ else stays the image's own. No curtain mask is needed: where there are no curtai
 parts agree and the swap changes little. With ``core_threshold``, the cores of strong curtains (a
 few px wide, where the swap took out the most) then take the reference matched to the image
 locally: a curtain that wanders sideways from row to row is not a stripe at any scale, so the
-swap leaves a faint jagged trace of it. With ``band_match``, the broad darkening a cluster of
-curtains leaves around them (a band wider than the swap's levels reach) is matched to the reference
-in curtain zones, fading to nothing at their edges.
+swap leaves a faint jagged trace of it. With ``band_match``, the broad band a cluster of curtains
+leaves after the swap is matched to the reference in curtain zones, fading to nothing at their edges.
+The band is the curtains' own darkness: wavelet details average to 0, so a dark line's total
+darkness is in no detail band but in the coarse remainder, and once the swap has taken out the
+curtains' shape it is left spread over a few hundred px (the tissue between the curtains is not
+darker in the raw image).
 
 ``stripe_px`` sets what counts as a stripe by length (structure varying more slowly than that along
 the stripes), the same at every image size; ``sigma`` (notch width in FFT bins over the band's
@@ -66,7 +69,7 @@ DEFAULTS = {
         "core_dilate_px": 2,    # cores widened by this many px across the stripes (curtains wander)
         "core_window_px": 31,   # window of the local linear match reference -> image
         "core_denoise_px": 1.0,  # Gaussian sigma smoothing the reference before it fills cores
-        "band_match": False,    # swap: the broad bands curtain clusters darken (wider than ``levels`` reach)
+        "band_match": False,    # swap: the broad band a curtain cluster's own darkness leaves after the swap
                                 # matched to the reference in curtain zones, fading to 0 at their edges
         "band_zone": 1.0,       # curtain zone: what the swap took out (smoothed 64 px across / 256 px along
                                 # the stripes) above this many times the image's pixel noise...
@@ -292,11 +295,14 @@ def _sigmas(axis, along, across, factor):
 
 def match_bands(img, out, ref, threshold=1.0, zone_px=256, along_px=512.0, across_px=32.0, direction="vertical",
                 wavelet="db4", factor=32, max_px=None):
-    """The broad bands curtain clusters darken, left in ``out`` (= swap(img, ref)), matched to ``ref`` in
-    curtain zones, seamlessly.
+    """The broad band a curtain cluster leaves in ``out`` (= swap(img, ref)), matched to ``ref`` in curtain
+    zones, seamlessly.
 
-    Besides its curtains, a cluster of them darkens the tissue around them as a whole, over a band wider than
-    the swap's levels reach. Curtain zones: what the swap took out, |img - out|, smoothed (Gaussian 64 px
+    The band is the curtains' own darkness. Wavelet details average to 0, so a dark line's total darkness is in
+    no detail band but in the coarse remainder; the swap takes out the curtains' shape and leaves their darkness
+    spread over a few hundred px, wider than the swap's levels reach. (In the raw image the tissue between the
+    curtains is not darker: the image averaged over a cluster is as dark before the swap as after it, and
+    filling the strong cores from the reference first takes most of the band away.) Curtain zones: what the swap took out, |img - out|, smoothed (Gaussian 64 px
     across the stripes, 256 px along) above ``threshold`` times img's pixel noise, widened ``zone_px``. The
     band: out - (a ref + b), a and b fitted outside the zones (on all of the image if they leave less than a
     tenth), smoothed ``along_px`` along the stripes (a band persists; tissue the two detectors show with
