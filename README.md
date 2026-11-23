@@ -187,6 +187,7 @@ timeline changed.
 |---|---|
 | `raw_stats.py` (+ `slurm/raw_stats.sbatch`) | Raw detector values per tile at sampled slices, by class: tissue, resin, off-sample (and neuropil vs other tissue where the reference-tissue mask is available). Histograms, per-tile percentiles, plots; `compare` draws several datasets together. Resin comes from the background mask and is not validated as a reference yet. |
 | `copy_verify.py` (+ `slurm/copy_verify.sbatch`) | Copy raw files to another place, md5 both sides, and write a checksum manifest next to the copy only when every file matches. Never deletes; refuses nested folders. |
+| `split_stack.py` (+ `slurm/split_stack.sbatch`) | Split joined multi-day stacks (e.g. an EsB export `M11_D12D13_ESB_tile0-0.tif`) into one stack per day, by the per-day InLens files' slice counts, named for destreak's reference regex (`M11_D12_EsB_tile0-0.tif`). Pixels copied byte for byte; verify checks headers, pixels (md5) and the day order against InLens before writing a manifest. Never changes its inputs. |
 | `tile_jumps.py` | Tile jumps and alignment problems over a whole run (plot + summary): candidates for `align.local_windows`. |
 | `reference_from_volume.py`, `reference_preview.py`, `standard_compare.py`, `refstats_compare.py`, `segment_overview.py`, `refmask_check.py`, `refmask_train.py` | The reference contrast (below): a volume's neuropil numbers under its levels, before/after crops of new levels, volumes side by side at candidate standards, two refstats runs compared, one slice per segment with its tile outlines, the neuropil mask drawn over a volume, the mask model rebuilt from labelled boxes. |
 | `seam_steps.py`, `shading_measure.py`, `shading_before_after.py`, `clipping_check.py`, `map_point.py`, `triptych.py` | Seam brightness steps, flat-field measurements and before/after stacks, clipping, mapping a point between volume and raw tiles, side-by-side figures. |
@@ -201,6 +202,9 @@ python tools/raw_stats.py compare --out cmp A=/path/to/a/qc/raw_stats B=/path/to
 
 # copy raw data and verify it (a Slurm chain: copy array, md5 array, verify)
 python tools/copy_verify.py submit /path/to/raw/my_volume /path/to/copy/my_volume --group-rw
+
+# split joined EsB stacks into per-day stacks next to them (a Slurm chain: split array, check array, verify)
+python tools/split_stack.py submit /path/to/raw/my_volume/Backscatter /path/to/raw/my_volume --group-rw
 ```
 
 Keep the record of which data were copied where (and other site details) in your own configuration
