@@ -1,7 +1,7 @@
 """Slice-to-slice brightness flicker in rendered volumes (what x-z and y-z views show as stripes), and in
 the raw tiles and display windows behind it.
 
-    python tools/zflicker.py --out DIR [--config C] [--scale 3] [--grid 6] [--window 9] NAME=VOLUME [NAME=VOLUME ...]
+    python tools/zflicker.py --out DIR [--config C] [--scale 3] [--grid 6] [--box-px N] [--window 9] NAME=VOLUME [...]
 
 Rendered volumes: per plane, the mean grey of each box of a grid x grid split of the plane at the given
 scale (pixels > 0 only; boxes less than half covered are left out). Tissue changes slowly over z and
@@ -10,6 +10,10 @@ brightness jumps don't, so a box's flicker is its mean minus the running mean of
 and the rest ("own": box minus common), each summarised by a robust standard deviation (1.4826 x MAD)
 in greys, and the common part's lag-1 autocorrelation (near -1: planes alternating bright and dark; near 0:
 independent jumps; positive: slower waves).
+
+The pyramid scales above 0 are downsampled in z as well (a plane at scale k averages 2^k slices), which
+hides most single-slice flicker. For slice-level flicker use --scale 0 with --box-px (e.g. 512): a square
+of that size at the centre of each grid cell, read through every plane.
 
 With --config (the run's config, for its preview statistics and display windows): the same for
   raw        each tile's tissue median (preview t_p50) in greys of its display window (255 / (hi - lo)),
@@ -46,14 +50,26 @@ def lag1(a):
     return float(np.corrcoef(x, y)[0, 1])
 
 
-def box_means(path, scale, grid):
-    """DataFrame (z, box, value): mean grey of pixels > 0 per grid box and plane."""
+def box_means(path, scale, grid, box_px=None):
+    """DataFrame (z, box, value): mean grey of pixels > 0 per grid box and plane (with box_px, of a box_px
+    square at the centre of each grid cell instead of the whole cell)."""
     from pipeline import omezarr
     arr = omezarr.open_scale(path, scale)
     nz, ny, nx = (int(v) for v in arr.shape)
     by, bx = ny // grid, nx // grid
-    depth = int(arr.chunk_layout.read_chunk.shape[0] or 64)
     rows = []
+    if box_px:
+        b = min(int(box_px), by, bx)
+        for gy in range(grid):
+            for gx in range(grid):
+                y0, x0 = gy * by + (by - b) // 2, gx * bx + (bx - b) // 2
+                col = arr[:, y0:y0 + b, x0:x0 + b].read().result()
+                n = (col > 0).sum(axis=(1, 2))
+                s = col.sum(axis=(1, 2), dtype=np.float64)
+                rows += [(z, f"{gy}-{gx}", s[z] / n[z]) for z in range(nz) if n[z] >= 0.5 * b * b]
+                print(f"  {Path(path).name}: box {gy}-{gx} of {grid}x{grid}", flush=True)
+        return pd.DataFrame(rows, columns=["z", "box", "value"])
+    depth = int(arr.chunk_layout.read_chunk.shape[0] or 64)
     for z0 in range(0, nz, depth):
         slab = arr[z0:min(z0 + depth, nz), :by * grid, :bx * grid].read().result()
         for i, plane in enumerate(slab):
@@ -133,6 +149,8 @@ def main(argv=None):
     p.add_argument("--config", help="the run's config: also measure raw tile medians and display windows")
     p.add_argument("--scale", type=int, default=3)
     p.add_argument("--grid", type=int, default=6)
+    p.add_argument("--box-px", type=int, help="measure a square of this size (px at --scale) at the centre of each grid "
+                   "cell instead of the whole cell: full z resolution at scale 0 without reading the whole volume")
     p.add_argument("--window", type=int, default=9, help="running-mean window over z (planes)")
     args = p.parse_args(argv)
     out = Path(args.out)
@@ -144,7 +162,7 @@ def main(argv=None):
         name, _, path = spec.partition("=")
         if not path:
             sys.exit(f"expected NAME=VOLUME, got {spec!r}")
-        series.append((name, box_means(path, args.scale, args.grid)))
+        series.append((name, box_means(path, args.scale, args.grid, args.box_px)))
     results, frames, summary = [], [], {"scale": args.scale, "grid": args.grid, "window": args.window, "series": {}}
     for name, df in series:
         df, common = residuals(df, args.window)

@@ -40,3 +40,15 @@ def test_common_and_own_flicker(tmp_path):
     own = rows.groupby("box")["resid"].std()
     assert own["0-0"] > 2.5 and own.drop("0-0").max() < 0.6
     assert (tmp_path / "out" / "zflicker.png").exists()
+
+
+def test_box_px_reads_a_centred_square(tmp_path):
+    nz, ny, nx = 12, 64, 64
+    data = np.full((nz, ny, nx), 100, np.uint8)
+    data[:, 8:24, 8:24] = 200                         # the centre of grid cell 0-0 (grid 2: cells of 32 px)
+    data[5] += 10                                     # one plane brighter everywhere
+    _volume(tmp_path / "v.ome.zarr", data)
+    df = zflicker.box_means(tmp_path / "v.ome.zarr", 0, 2, box_px=16)
+    assert len(df) == 4 * nz
+    v = df.set_index(["z", "box"])["value"]
+    assert v[(0, "0-0")] == 200 and v[(0, "1-1")] == 100 and v[(5, "0-1")] == 110
