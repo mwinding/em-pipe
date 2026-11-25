@@ -1,5 +1,6 @@
 """tools/qc_summary.py: the page on a synthetic run with parts missing, then with slice quality flags."""
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -79,6 +80,28 @@ def test_page_with_slice_flags(run):
     check_page(page, tmp)
     assert 'href="slice_flags.csv"' in page and "slices carry a flag" in page and "GB on disk" in page
     assert "Slice quality metrics over z" in page
+
+
+def test_flicker_is_marked_only_for_named_series(run):
+    tmp, cfg = run
+    d = tmp / "out" / "qc" / "zflicker_test"
+    d.mkdir(exist_ok=True)
+    series = {"raw (fixed window)": 11.0, "raw - windows": 0.06, "other volume": 6.4, "this volume": 0.07}
+    (d / "zflicker.json").write_text(json.dumps({"series": {k: {"flicker_common_sd": v, "flicker_own_sd": 0.1, "planes": 16}
+                                                              for k, v in series.items()}}))
+    out = tmp / "page.html"
+    qs.main([str(cfg), "--out", str(out)])
+    page = out.read_text()
+    assert "listed without a mark" in page and "other volume" in page
+    qs.main([str(cfg), "--out", str(out), "--flicker", "zflicker_test:raw - windows,this volume"])
+    page = out.read_text()
+    row = page[page.index("<td>Flicker along z</td>"):]
+    assert 'class="mark pass"' in row[:row.index("</span>") + 10] and "this volume (zflicker_test): 0.07 greys" in page
+    qs.main([str(cfg), "--out", str(out), "--flicker", str(d)])          # every series but the raw tiles: 6.4 counts
+    row = out.read_text()
+    row = row[row.index("<td>Flicker along z</td>"):]
+    assert 'class="mark attention"' in row[:row.index("</span>") + 10]
+    check_page(out.read_text(), tmp)
 
 
 def test_page_before_anything_has_run(tmp_path):

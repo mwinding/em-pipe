@@ -1,6 +1,6 @@
 """A one-page QC summary of a rendered volume: one self-contained HTML file.
 
-    python tools/qc_summary.py CONFIG [--volume NAME] [--out HTML] [--flicker DIR] [--disk-size]
+    python tools/qc_summary.py CONFIG [--volume NAME] [--out HTML] [--flicker DIR[:SERIES,...] ...] [--disk-size]
 
 CONFIG names the dataset and the volume (render.name; --volume picks another volume of the same
 output_dir, which then shows the volume's own render settings from its render.json). The page is put
@@ -15,7 +15,12 @@ with its numbers and a pass / attention mark against the limit stated next to it
 The limits are working values for this page (LIMITS below), not validated standards: "attention"
 means "look at this", not "the volume is bad".
 
---flicker DIR   the tools/zflicker.py output folder to report (default: every qc/zflicker*/ folder)
+--flicker DIR[:SERIES,...]   a tools/zflicker.py output folder holding this volume's flicker, and the series
+                in it that are this volume (as named when zflicker ran; default: all of them, without the
+                raw tiles and the windows); may be given several times, e.g. the prediction and the
+                measurement. A folder name alone is looked for in the qc folder. Without --flicker every
+                qc/zflicker*/ folder is listed, without a pass / attention mark (the page cannot tell
+                which series is this volume).
 --disk-size     also add up the volume's size on disk (walks every file: slow on large volumes)
 
 Writes <output_dir>/qc/summary_<volume>.html (or --out). Paths on the page are relative to the qc
@@ -43,14 +48,13 @@ from pipeline.config import load_config, step_defaults, step_path  # noqa: E402
 
 LIMITS = {
     "stitch_failed_samples": 0,        # stitched samples without a solution
-    "stitch_residual_px": 2.0,         # median residual of the tile pairs used
+    "stitch_residual_px": 5.0,         # median residual of the tile pairs used (the pipeline's own stitch.refine_px scale)
     "align_rejected_share": 0.005,     # share of slice pairs the alignment rejected
     "align_rms_px": 5.0,               # median residual of the accepted slice pairs
     "big_jump_px": 15.0,               # a tile movement between two slices counted as a large jump
     "reference_in_band": 0.95,         # share of sampled slices with the neuropil within the standard's band
     "clipped_max": 0.01,               # largest predicted share of tissue clipped at 0 or 255 in a sampled slice
     "flicker_common_sd": 1.0,          # slice-wide flicker of the volume, greys (robust sd)
-    "thickness_cv": 0.15,              # scatter of the estimated slice spacing / nominal
     "major_flag_share": 0.01,          # share of slices with a major slice-quality flag
 }
 PASS, ATTN, NOTRUN, INFO = "pass", "attention", "not run", "info"
@@ -294,23 +298,32 @@ def checks(cfg, R, facts):
         txt = "; ".join(f"{c}: max {fmt(num[c].max())}" for c in num.columns[:6])
         out.append(("Clipping measured in the volume", esc(txt), "information", INFO, '<a href="clipping/clipping.csv">clipping/clipping.csv</a>'))
     # flicker
-    fl_dirs = [Path(R["flicker"])] if R.get("flicker") else sorted(p.parent for p in qc.glob("zflicker*/zflicker.json"))
+    chosen = R.get("flicker") or []
+    fl_dirs = [(d, names) for d, names in chosen] or [(p.parent, None) for p in sorted(qc.glob("zflicker*/zflicker.json"))]
     fl_rows = []
-    for d in fl_dirs:
+    for d, names in fl_dirs:
         j = read_json(Path(d) / "zflicker.json")
         for sname, v in ((j or {}).get("series") or {}).items():
-            fl_rows.append((Path(d).name, sname, v.get("flicker_common_sd"), v.get("flicker_own_sd"), v.get("planes")))
+            mine = bool(chosen) and (sname in names if names else sname not in ("raw (fixed window)", "windows (correction)"))
+            fl_rows.append((Path(d).name, sname, v.get("flicker_common_sd"), v.get("flicker_own_sd"), v.get("planes"), mine))
     if not fl_rows:
         out.append(("Flicker along z", "", "", NOTRUN,
                     cmd("sbatch slurm/zflicker.sbatch --out OUTPUT_DIR/qc/zflicker --config CONFIG NAME=VOLUME.ome.zarr")))
     else:
-        vol_rows = [r for r in fl_rows if r[1] not in ("raw (fixed window)", "windows (correction)")]
-        worst = max((r[2] for r in vol_rows if r[2] is not None), default=np.nan)
-        det = table(["folder", "series", "slice-wide sd (greys)", "each region's own sd", "planes"],
-                    [[esc(a), esc(b), fmt(c), fmt(d_), fmt(e)] for a, b, c, d_, e in fl_rows])
-        out.append(("Flicker along z", esc(f"{len(fl_rows)} series measured; largest slice-wide sd among the volumes and the prediction "
-                                           f"('raw - windows'): {fmt(worst)} greys; the raw tiles and the windows are listed for comparison"),
-                    f"slice-wide sd <= {LIMITS['flicker_common_sd']:g} grey", PASS if worst <= LIMITS["flicker_common_sd"] else ATTN, det))
+        det = table(["folder", "series", "slice-wide sd (greys)", "each region's own sd", "planes", "this volume"],
+                    [[esc(a), esc(b), fmt(c), fmt(d_), fmt(e), "yes" if m else ""] for a, b, c, d_, e, m in fl_rows])
+        own = [r for r in fl_rows if r[5] and r[2] is not None]
+        if own:
+            worst = max(r[2] for r in own)
+            txt = ("slice-wide flicker (robust sd of the brightness the whole plane shares, against a running mean along z): "
+                   + "; ".join(f"{r[1]} ({r[0]}): {fmt(r[2])} greys" for r in own)
+                   + ". 'raw - windows' is the prediction from the raw tiles and the display windows, without a render")
+            out.append(("Flicker along z", esc(txt), f"slice-wide sd <= {LIMITS['flicker_common_sd']:g} grey",
+                        PASS if worst <= LIMITS["flicker_common_sd"] else ATTN, det))
+        else:
+            out.append(("Flicker along z", esc(f"{len(fl_rows)} series in {len(fl_dirs)} folders; which of them is this volume was not "
+                                               "given (--flicker), so they are listed without a mark"),
+                        f"slice-wide sd <= {LIMITS['flicker_common_sd']:g} grey", INFO, det))
     # slice thickness
     pos = read_csv(step_path(cfg, "zcorrect", "positions.csv"))
     if pos is None:
@@ -321,7 +334,7 @@ def checks(cfg, R, facts):
         cv = float(1.4826 * np.median(np.abs(sp - nominal)) / nominal) if len(sp) and nominal else np.nan
         txt = (f"estimated spacing: median {fmt(nominal)} nm, 5th-95th percentile {fmt(np.percentile(sp, 5))}-{fmt(np.percentile(sp, 95))} nm, "
                f"robust scatter {100 * cv:.1f} % of the median; " + ("applied in this volume" if (R.get("render") or {}).get("zcorrected") else "not applied in this volume"))
-        out.append(("Slice thickness", esc(txt), f"scatter <= {100 * LIMITS['thickness_cv']:g} %", PASS if cv <= LIMITS["thickness_cv"] else ATTN, ""))
+        out.append(("Slice thickness", esc(txt), "no limit set: listed for information", INFO, ""))
     # curtains and slice quality
     sq = read_json(qc / "slice_quality" / "summary.json")
     sq_cmd = ("A=$(sbatch --parsable --array=0-19 slurm/slice_quality.sbatch CONFIG); "
@@ -370,19 +383,20 @@ def quality_section(R):
     out += table(["reason", "slices", "major flags", "minor flags", "rule"], rows) if rows else "<p>No slice is flagged.</p>"
     f = flags[~flags["reason"].isin(["excluded"])].copy()
     if len(f):
-        f["rank"] = (f["severity"] == "major").astype(int)
-        worst = f.sort_values(["rank", "zscore"], ascending=[False, False], key=lambda s: s.abs() if s.name == "zscore" else s)
-        worst = worst.groupby("reason", sort=True).head(5)
+        # how far beyond its limit: below-limits count downwards
+        below = {r for r, lim in sq["limits"].items() if lim.get("direction") == "below"}
+        f["beyond"] = np.where(f["reason"].isin(below), -f["value"], f["value"].abs())
+        worst = f.sort_values("beyond", ascending=False).groupby("reason", sort=True).head(5)
         out += "<h3>Worst flagged slices per reason</h3>" + table(
             ["reason", "z", "tile", "value", "limit", "severity"],
-            [[esc(r.reason), r.z, esc(r.tile), fmt(r.value), fmt(r.limit), esc(r.severity)] for r in worst.sort_values(["reason", "z"]).itertuples()])
+            [[esc(r.reason), r.z, esc(r.tile), fmt(r.value), fmt(r.limit), esc(r.severity)] for r in worst.sort_values(["reason", "beyond"], ascending=[True, False]).itertuples()])
     links = ['<a href="slice_flags.csv">slice_flags.csv</a>', '<a href="slice_quality.csv">slice_quality.csv</a>']
     links += [f'<a href="slice_quality/{esc(s)}">{esc(s)}</a>' for s in sq.get("sheets", [])]
     return out + "<p>Tables and contact sheets (flagged slice next to its neighbours): " + ", ".join(links) + "</p>"
 
 
 def embed(path):
-    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR) if Path(path).is_file() else None
     if img is None:
         return None
     if img.shape[1] > FIGURE_WIDTH:
@@ -396,7 +410,7 @@ def figures_section(cfg, R):
     qc = R["qc"]
     i = (cfg.get("intensity") or {}).get("output") if R.get("own_config") else None
     rs = (cfg.get("refstats") or {}).get("output") if R.get("own_config") else None
-    fl = Path(R["flicker"]) if R.get("flicker") else next(iter(sorted(p.parent for p in qc.glob("zflicker*/zflicker.png"))), None)
+    fl = R["flicker"][0][0] if R.get("flicker") else next(iter(sorted(p.parent for p in qc.glob("zflicker*/zflicker.png"))), None)
     wanted = [("stitch.png", "Stitch: tile offsets over z"), ("align_drift.png", "Align: drift and residuals over z"),
               ("tile_jumps.png", "Tile jumps and alignment residuals over time"),
               (f"intensity_{i}.png" if i else "intensity.png", "Display levels over z"),
@@ -447,7 +461,12 @@ def files_section(cfg, R, disk):
     for p in sorted(out_dir.glob("*.tif")):
         if p.name.startswith(R["stem"]):
             rows.append([esc(rel(p, qc)), "quick-look TIFF", f"{p.stat().st_size / 1e9:,.1f} GB", ""])
-    for p in sorted(qc.rglob("view_*.txt"))[:30]:
+    for p in sorted(qc.rglob("view_*.txt"))[:200]:
+        try:   # only the link files that show this volume
+            if Path(R["volume"]).name not in p.read_text(errors="ignore"):
+                continue
+        except OSError:
+            continue
         rows.append([f'<a href="{esc(rel(p, qc))}">{esc(rel(p, qc))}</a>', "neuroglancer link file", "", ""])
     for name, what in (("check_report.md", "raw data check report"), ("slice_flags.csv", "slice quality flags"), ("slice_quality.csv", "slice quality metrics")):
         if (qc / name).exists():
@@ -496,12 +515,20 @@ def build(cfg, R, disk=False):
             f"<title>{esc(title)}</title><style>{CSS}</style></head><body><div class=\"page\"><header>{head}</header>{body}</div></body></html>")
 
 
+def flicker_arg(text, qc):
+    """(folder, series names or None) from DIR[:SERIES,...]; a folder that does not exist as given is taken in qc."""
+    d, _, names = text.partition(":")
+    d = Path(d) if Path(d).is_dir() else qc / d
+    return d, [n.strip() for n in names.split(",") if n.strip()] or None
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("config")
     p.add_argument("--volume", help="volume folder name in output_dir (default: the config's render.name)")
     p.add_argument("--out", help="HTML path (default <output_dir>/qc/summary_<volume>.html)")
-    p.add_argument("--flicker", help="the zflicker output folder to report")
+    p.add_argument("--flicker", action="append", default=[], metavar="DIR[:SERIES,...]",
+                   help="zflicker output folder (and series) of this volume; repeatable")
     p.add_argument("--disk-size", action="store_true")
     p.add_argument("--raw-dir")
     p.add_argument("--output-dir")
@@ -512,7 +539,7 @@ def main(argv=None):
     stem = Path(volume).name.removesuffix(".zarr").removesuffix(".ome")
     qc = Path(cfg["output_dir"]) / "qc"
     R = {"qc": qc, "volume": volume, "stem": stem, "own_config": Path(volume).name == Path(own).name, "commit": commit(),
-         "render": read_json(step_path(cfg, "render", stem, "render.json")), "flicker": a.flicker,
+         "render": read_json(step_path(cfg, "render", stem, "render.json")), "flicker": [flicker_arg(f, qc) for f in a.flicker],
          "plan": read_csv(step_path(cfg, "render", stem, "tiles.csv"), usecols=["z"])}
     out = Path(a.out) if a.out else qc / f"summary_{stem}.html"
     page = build(cfg, R, a.disk_size)
