@@ -1,7 +1,7 @@
 """Slice-to-slice brightness flicker in rendered volumes (what x-z and y-z views show as stripes), and in
 the raw tiles and display windows behind it.
 
-    python tools/zflicker.py --out DIR [--config C] [--scale 3] [--grid 6] [--box-px N] [--window 9] NAME=VOLUME [...]
+    python tools/zflicker.py --out DIR [--config C] [--scale 3] [--grid 6] [--box-px N] [--window 9] [NAME=VOLUME ...]
 
 Rendered volumes: per plane, the mean grey of each box of a grid x grid split of the plane at the given
 scale (pixels > 0 only; boxes less than half covered are left out). Tissue changes slowly over z and
@@ -144,7 +144,8 @@ def draw(results, out):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("volumes", nargs="+", help="NAME=VOLUME (an OME-Zarr folder)")
+    p.add_argument("volumes", nargs="*", help="NAME=VOLUME (an OME-Zarr folder); none with --config: raw tiles and "
+                   "windows only (the flicker the levels predict, without reading a volume)")
     p.add_argument("--out", required=True)
     p.add_argument("--config", help="the run's config: also measure raw tile medians and display windows")
     p.add_argument("--scale", type=int, default=3)
@@ -153,6 +154,8 @@ def main(argv=None):
                    "cell instead of the whole cell: full z resolution at scale 0 without reading the whole volume")
     p.add_argument("--window", type=int, default=9, help="running-mean window over z (planes)")
     args = p.parse_args(argv)
+    if not args.volumes and not args.config:
+        p.error("give at least one NAME=VOLUME, or --config")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     series = []
