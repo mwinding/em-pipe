@@ -34,7 +34,7 @@ DEFAULTS = {
     # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch (partition: SBATCH_PARTITION
     # from slurm/site.sh, else the cluster's default).
     # Jobs: check, preview, preview_merge, refmask, refmask_merge, stitch, stitch_merge, align, align_solve,
-    # shading, overlaps, overlaps_merge, patchgrid, refstats, refstats_merge, intensity,
+    # shading, overlaps, overlaps_merge, patchgrid, zrelations, zrelations_merge, refstats, refstats_merge, intensity,
     # zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale), export.
     "slurm": {
         "mail_user": None,          # sbatch --mail-user (failure mails); null: Slurm's default
@@ -44,6 +44,7 @@ DEFAULTS = {
         "stitch": {"array": 10},
         "align": {"array": 20},
         "overlaps": {"array": 20},
+        "zrelations": {"array": 10},
         "zcorrect": {"array": 10},
         "render_init": {"mem": "16G"},   # render.sbatch's 160G is sized for render run
         "render": {"array": 20},
@@ -52,14 +53,16 @@ DEFAULTS = {
 }
 
 # Step modules, in pipeline order; each has a DEFAULTS section of the same name.
-STEPS = ("check", "preview", "refmask", "stitch", "align", "shading", "overlaps", "patchgrid", "refstats", "intensity",
+STEPS = ("check", "preview", "refmask", "stitch", "align", "shading", "overlaps", "patchgrid", "zrelations", "refstats",
+         "intensity",
          "destreak", "zcorrect",
          "render", "pyramid", "export", "precomputed", "upload", "serve", "movie")
 JOBS = ("check", "preview", "preview_merge", "refmask", "refmask_merge", "stitch", "stitch_merge", "align",
-        "align_solve", "shading", "overlaps", "overlaps_merge", "patchgrid", "refstats", "refstats_merge", "intensity",
+        "align_solve", "shading", "overlaps", "overlaps_merge", "patchgrid", "zrelations", "zrelations_merge", "refstats",
+        "refstats_merge", "intensity",
         "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid", "export", "precomputed_init",
         "precomputed", "precomputed_verify", "upload", "upload_finish")
-ARRAY_JOBS = ("preview", "refmask", "stitch", "align", "overlaps", "refstats", "zcorrect", "render", "pyramid",
+ARRAY_JOBS = ("preview", "refmask", "stitch", "align", "overlaps", "zrelations", "refstats", "zcorrect", "render", "pyramid",
               "precomputed", "upload")
 _SBATCH = {"cpus": "--cpus-per-task", "mem": "--mem", "time": "--time", "partition": "--partition",
            "gres": "--gres"}

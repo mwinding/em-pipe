@@ -2,14 +2,14 @@
 # Submit the em-pipe steps for one dataset to Slurm, each job waiting for the previous one.
 #
 # Usage: ./run_pipeline.sh CONFIG [--steps a,b,...] [--from STEP] [--after JOBID] [--dry-run]
-#   steps (in order): check preview refmask stitch align shading overlaps patchgrid refstats intensity zcorrect
-#                     render pyramid export precomputed upload
+#   steps (in order): check preview refmask stitch align shading overlaps patchgrid zrelations refstats intensity
+#                     zcorrect render pyramid export precomputed upload
 #   --steps a,b  only these steps (the first one waits for nothing)
 #   --from STEP  STEP and every later step
 #   --after ID   the first job waits for Slurm job ID to finish successfully
 #   --dry-run    print the sbatch commands instead of submitting them
 # refmask, shading, overlaps, patchgrid, refstats, zcorrect, precomputed and upload run only when their enabled
-# setting is true.
+# setting is true; zrelations only when intensity.balance_z_distance > 0.
 # Array sizes, CPUs, memory, time, partition and gres come from the config's slurm: section (see
 # configs/example.yaml); logs go to output_dir/work/logs/.
 # Set EM_PIPE_SKIP_ENV=1 to skip sourcing slurm/env.sh (when the environment is already active).
@@ -18,7 +18,7 @@
 # the old volume), then  ./run_pipeline.sh CONFIG --from render.
 set -eo pipefail
 
-STEPS="check preview refmask stitch align shading overlaps patchgrid refstats intensity zcorrect render pyramid export precomputed upload"
+STEPS="check preview refmask stitch align shading overlaps patchgrid zrelations refstats intensity zcorrect render pyramid export precomputed upload"
 usage() { sed -n '4,18p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "$1"; }
 
 CONFIG= SELECT= FROM= AFTER= DRY=0
@@ -58,10 +58,10 @@ wanted() {  # wanted STEP: is STEP selected?
 
 # Everything needed from the config in two calls (python start-up can be slow on shared filesystems).
 VALUES=$(cfg --get output_dir zcorrect.enabled render.num_scales precomputed.enabled upload.enabled shading.enabled \
-         overlaps.enabled patchgrid.enabled refmask.enabled refstats.enabled)
+         overlaps.enabled patchgrid.enabled refmask.enabled refstats.enabled intensity.balance_z_distance)
 SBATCH=$(cfg --sbatch-args)   # one line per job: the job, then its sbatch options, tab-separated
 { read -r OUT; read -r ZCORRECT; read -r NUM_SCALES; read -r PRECOMPUTED; read -r UPLOAD; read -r SHADING
-  read -r OVERLAPS; read -r PATCHGRID; read -r REFMASK; read -r REFSTATS; } <<< "$VALUES"
+  read -r OVERLAPS; read -r PATCHGRID; read -r REFMASK; read -r REFSTATS; read -r ZDIST; } <<< "$VALUES"
 
 PREV=$AFTER
 submit() {  # submit JOB NAME STEP [ARGS...]: sbatch slurm/STEP.sbatch after the previous job
@@ -127,6 +127,14 @@ if wanted patchgrid; then
     submit patchgrid em-patchgrid patchgrid
   else
     echo "patchgrid.enabled is false: patchgrid skipped" >&2
+  fi
+fi
+if wanted zrelations; then
+  if [ "${ZDIST:-0}" -gt 0 ] 2>/dev/null; then
+    submit zrelations em-zrelations-run zrelations run
+    submit zrelations_merge em-zrelations-merge zrelations merge
+  else
+    echo "intensity.balance_z_distance is 0: zrelations skipped" >&2
   fi
 fi
 if wanted refstats; then

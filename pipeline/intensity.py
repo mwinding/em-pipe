@@ -9,6 +9,19 @@ least-squares solve per slice gives per-tile gain/offset onto a common scale (me
 offset 0), smoothed over ``balance_smooth_slices``, and one common window per z is mapped back into
 each tile's raw values. Writes intensity/levels.csv and intensity.png.
 
+With ``balance_z_distance`` > 0 (and ``balance_source: overlaps``, ``per_slice: false``) the tiles and
+the slices are balanced together, as Janelia render's intensity correction does with ``--zDistance``
+(saalfeldlab/render, ``newsolver`` branch; after TrakEM2's "Match intensities (layer-wise)"; written here
+from their description, no code taken): besides the overlaps' relations within each slice, every tile is
+related to itself in the next slices (the zrelations step: tissue percentiles of the preview thumbnails),
+and the gain and offset of every (z, tile) of a block are solved at once (``joint_solve``, sparse least
+squares), each weakly pulled towards no change (``balance_z_prior``). The per-slice solve has to anchor
+every slice on its own (mean gain 1, mean offset 0 over its tiles), so the level the slice's tiles share
+jumps whenever they jump independently; the joint scale is continuous along z instead, and follows the raw
+tiles' own brightness only over ~1 / balance_z_prior slices. The common window is then smoothed along z
+on that scale (``joint_window``), and each tile's window (common - o) / g follows the tile's jumps through
+its gain and offset.
+
 With ``patchgrid.enabled`` (and ``balance_source: overlaps``) the tiles are compared in their
 patchgrid-corrected values u (flat-field, then the tile position's within-tile shape, which render
 applies too): the solve per slice takes every patch bin of work/overlaps/patches.csv, its relation
@@ -89,6 +102,25 @@ DEFAULTS = {
         "balance_tissue_only": True,   # thumbnails: compare overlaps on tissue pixels only (background left out)
         "balance_smooth_slices": None,   # running median of the tile gains/offsets over this many selected
                                          # slices; null: smooth_slices
+        # Tiles and slices balanced together (Janelia render's intensity correction with --zDistance, after
+        # TrakEM2's "Match intensities"): 0: off, every slice balanced on its own as above | 1: every tile is also
+        # matched to itself in the next selected slice (the zrelations step), and the gain and offset of every
+        # (z, tile) of a block are solved at once, so the slice-wide jumps go too, not only each tile's own | 2: also
+        # to the slice after next. Needs balance_source: overlaps and per_slice: false (the solve follows the jumps);
+        # balance_smooth_slices is not used, and the common window is smoothed over z (smooth_slices).
+        "balance_z_distance": 0,
+        # balance_z_distance > 0: weight of one tile's relation to itself in another slice, relative to all its
+        # overlap relations in the slice together (the median tile's): small, so the overlaps keep setting the
+        # tiles' levels relative to each other (no new seams) and the z relations set what the overlaps can't see,
+        # the level the slice's tiles share
+        "balance_z_weight": 0.1,
+        # balance_z_distance > 0: every (z, tile)'s pull towards no change (log gain 0, and no change at the data's
+        # typical value), relative to one z relation. The common scale then follows the raw tiles' own brightness
+        # smoothed over ~1 / balance_z_prior slices (100, exponentially): jumps from slice to slice are removed, a
+        # drift is kept the more the slower it is (all of a steady one, half of one with a 600-slice period) and
+        # left to the windows to follow; without the pull the scale would wander with the z relations' errors
+        # (render: lambda 0.01)
+        "balance_z_prior": 0.01,
         # Follow slice-to-slice brightness jumps (tile median minus its running median), which the
         # smoothing above would otherwise leave as flicker when scrolling through z. true: each tile
         # its own jump; slice: one jump per slice (the median over its tiles, relative to their
@@ -285,6 +317,7 @@ def balanced_scale(cfg):
         raise ValueError(f"intensity.per_slice must be true, false or slice, not {c['per_slice']!r}")
     if c["balance_source"] not in ("thumbnails", "overlaps"):
         raise ValueError(f"intensity.balance_source must be thumbnails or overlaps, not {c['balance_source']!r}")
+    zdist = z_distance(c)
     df["g"], df["o"] = np.nan, np.nan
     if c["balance_tiles"]:
         df = df.drop(columns=["g", "o"])
@@ -292,7 +325,9 @@ def balanced_scale(cfg):
         if get(cfg, "patchgrid.enabled", False) and c["balance_source"] != "overlaps":
             raise ValueError("patchgrid.enabled needs intensity.balance_source: overlaps (render applies the "
                              "patch shapes, which the thumbnail balance does not know)")
-        if c["balance_source"] == "overlaps":
+        if zdist > 0:
+            df = balance(cfg, df, joint_measurements(cfg, df, zdist), 1, joint=True)
+        elif c["balance_source"] == "overlaps":
             meas, every = overlap_measurements(cfg)
             df = balance(cfg, df, meas, every)
         elif tiles_csv.exists():
@@ -797,14 +832,168 @@ def patch_measurements(cfg):
     return meas, every
 
 
-def balance(cfg, df, meas, every):
+def z_distance(c):
+    """intensity.balance_z_distance, checked against the settings it needs (0: off)."""
+    d = c.get("balance_z_distance") or 0
+    if isinstance(d, bool) or not isinstance(d, (int, np.integer)) or d < 0:
+        raise ValueError(f"intensity.balance_z_distance must be 0 (off), 1 or more, not {d!r}")
+    if d == 0:
+        return 0
+    if not c["balance_tiles"] or c["balance_source"] != "overlaps":
+        raise ValueError("intensity.balance_z_distance > 0 needs balance_tiles: true and balance_source: overlaps "
+                         "(it solves the overlaps' relations together with the zrelations step's)")
+    if c["per_slice"] is not False:
+        raise ValueError("intensity.balance_z_distance > 0 needs intensity.per_slice: false: the joint solve follows "
+                         "the slice-to-slice jumps itself, and the per-slice jumps would add them a second time")
+    for key in ("balance_z_weight", "balance_z_prior"):
+        if not float(c[key]) > 0:
+            raise ValueError(f"intensity.{key} must be positive")
+    return int(d)
+
+
+def inslice_relations(cfg):
+    """The overlaps step's relations within slices as one table (z, a, b, gain, offset, n, gw, centre),
+    u_a ~ gain u_b + offset: with patchgrid its patch bins carried over to the shape-corrected values (as
+    ``patch_measurements``), else relations.csv (as ``overlap_measurements``); gw the gain weight."""
+    if get(cfg, "patchgrid.enabled", False):
+        p = deep_merge(patchgrid.DEFAULTS, {"patchgrid": cfg.get("patchgrid") or {}})["patchgrid"]
+        shapes, R = patchgrid.load(cfg)
+        patchgrid.check_current(cfg)
+        bins = patchgrid.shape_corrected(patchgrid.read_bins(cfg), shapes, R)
+        bins["gw"] = patchgrid.bin_weights(bins, p["gain_power"], p["gain_cnr_min"])[1]
+        return bins[["z", "a", "b", "gain", "offset", "n", "gw", "centre"]].reset_index(drop=True)
+    path = step_path(cfg, "overlaps", "relations.csv")
+    if not path.exists():
+        raise FileNotFoundError(f"{path} not found: balance_source overlaps needs the overlaps step (run, merge)")
+    rel = pd.read_csv(path, dtype={"a": str, "b": str})
+    rel["gw"] = np.minimum(1.0, rel["cnr"] / GAIN_CNR)
+    return rel.rename(columns={"median_b": "centre"})[["z", "a", "b", "gain", "offset", "n", "gw", "centre"]]
+
+
+def joint_solve(n, ia, ib, gain, offset, w, wg, centre, prior_g, prior_o, R):
+    """(g, o) of n nodes (a tile in one slice each) on one common scale c = g u + o, from relations
+    u_a ~ gain u_b + offset between nodes ia and ib (arrays), each tying c of node a to c of node b.
+
+    As ``solve`` for one slice, gains first, as logs (w_g (log g_a - log g_b) = -w_g log gain), then the
+    offsets given the gains, each relation matched at its own centre (the typical u_b of its data):
+    w (o_a - o_b) = w (g_b m - g_a (gain m + offset)). Instead of a slice's mean constraints every node is
+    pulled weakly towards no change: prior_g log g = 0 and prior_o (o - R (1 - g)) = 0, i.e. g R + o = R,
+    no change at R, a value inside the data (at u = 0 the offset swings with every gain error). Weights
+    are per relation (w, wg) and per node (prior_g, prior_o). Sparse normal equations, solved directly:
+    the nodes of a block of slices couple only within a slice and to the next few slices, so the matrix
+    is banded and a run of 18,000 slices x 9 tiles is a few seconds."""
+    from scipy.sparse import diags
+    from scipy.sparse.linalg import spsolve
+    ia, ib = np.asarray(ia, int), np.asarray(ib, int)
+    gain, offset, centre = (np.asarray(v, float) for v in (gain, offset, centre))
+    w, wg = np.asarray(w, float), np.asarray(wg, float)
+    m = len(ia)
+    r = np.r_[np.arange(m), np.arange(m)]
+    usable = np.isfinite(gain) & (gain > 0)
+    wg = np.where(usable, wg, 0.0)
+
+    def normal(wr, rhs, prior, prior_rhs):
+        A = coo_matrix((np.r_[wr, -wr], (r, np.r_[ia, ib])), shape=(m, n)).tocsr()
+        N = (A.T @ A + diags(np.broadcast_to(np.asarray(prior, float) ** 2, (n,)))).tocsc()
+        return spsolve(N, A.T @ rhs + prior_rhs)
+
+    g = np.exp(normal(wg, -wg * np.log(np.where(usable, gain, 1.0)), prior_g, 0.0))
+    rhs = w * (g[ib] * centre - g[ia] * (gain * centre + offset))
+    o = normal(w, np.where(np.isfinite(rhs), rhs, 0.0), prior_o, np.asarray(prior_o, float) ** 2 * R * (1 - g))
+    return g, o
+
+
+def joint_measurements(cfg, df, distance):
+    """Per-tile gain/offset (z, tile, g, o) of every (z, tile) the relations reach, solved per block from the
+    overlaps' relations within slices and the zrelations step's relations of each tile to itself up to
+    ``distance`` slices on (``joint_solve``).
+
+    Weights: an in-slice relation sqrt(n) (its gain also by its gain weight, as in the per-slice solve); a z
+    relation balance_z_weight x w_ref x sqrt(n / the block's median n), w_ref the median over (z, tile) of
+    the root sum of squares of the node's in-slice weights (how firmly the overlaps hold a tile); every
+    node's pulls balance_z_prior x balance_z_weight x w_ref. Only the largest set of nodes linked by
+    relations in each block is solved (others keep their own levels, as unlinked tiles do per slice)."""
+    from . import zrelations
+    c = cfg["intensity"]
+    ins = inslice_relations(cfg)
+    zr = zrelations.read(cfg, distance)
+    nodes = df[["z", "tile", "block"]].reset_index(drop=True)
+    index = {(int(z), t): i for i, (z, t) in enumerate(zip(nodes["z"], nodes["tile"]))}
+    rels = pd.concat([
+        pd.DataFrame({"a": [index.get((int(z), t)) for z, t in zip(ins["z"], ins["a"])],
+                      "b": [index.get((int(z), t)) for z, t in zip(ins["z"], ins["b"])],
+                      "gain": ins["gain"], "offset": ins["offset"], "n": ins["n"], "gw": ins["gw"],
+                      "centre": ins["centre"], "z_rel": False}),
+        pd.DataFrame({"a": [index.get((int(z), t)) for z, t in zip(zr["z2"], zr["tile"])],
+                      "b": [index.get((int(z), t)) for z, t in zip(zr["z1"], zr["tile"])],
+                      "gain": zr["gain"], "offset": zr["offset"], "n": zr["n"], "gw": 1.0,
+                      "centre": zr["centre"], "z_rel": True})], ignore_index=True)
+    rels = rels.dropna(subset=["a", "b"])
+    rels = rels[np.isfinite(rels[["gain", "offset", "centre", "n"]].to_numpy(float)).all(axis=1)
+                & (rels["gain"] > 0) & (rels["n"] > 0)]
+    rels = rels.astype({"a": int, "b": int})
+    block = nodes["block"].to_numpy()
+    rels = rels[block[rels["a"]] == block[rels["b"]]]
+    found = []
+    for b, nb in nodes.groupby("block"):
+        idx = nb.index.to_numpy()
+        rb = rels[np.isin(rels["a"], idx)]
+        if rb.empty:
+            continue
+        local = {int(i): k for k, i in enumerate(idx)}
+        ia, ib = rb["a"].map(local).to_numpy(), rb["b"].map(local).to_numpy()
+        # The largest set of nodes linked by relations: other sets have no relation to it
+        k = len(idx)
+        _, label = connected_components(coo_matrix((np.ones(len(ia)), (ia, ib)), shape=(k, k)), directed=False)
+        linked = np.bincount(np.r_[ia, ib], minlength=k) > 0
+        big = np.bincount(label[linked]).argmax()
+        keep_rel = label[ia] == big
+        rb, ia, ib = rb[keep_rel], ia[keep_rel], ib[keep_rel]
+        zs = rb["z_rel"].to_numpy()
+        w = np.sqrt(rb["n"].to_numpy(float))
+        stiff = np.sqrt(np.bincount(ia[~zs], w[~zs] ** 2, minlength=k) + np.bincount(ib[~zs], w[~zs] ** 2, minlength=k))
+        w_ref = float(np.median(stiff[stiff > 0])) if (stiff > 0).any() else float(np.median(w[zs]))
+        wz = float(c["balance_z_weight"]) * w_ref
+        if zs.any():
+            w[zs] = wz * np.sqrt(rb["n"].to_numpy(float)[zs] / np.median(rb["n"].to_numpy(float)[zs]))
+        wg = w * rb["gw"].to_numpy(float)
+        R = float(np.median(rb["centre"]))
+        prior = float(c["balance_z_prior"]) * wz
+        g, o = joint_solve(k, ia, ib, rb["gain"], rb["offset"], w, wg, rb["centre"], prior, prior, R)
+        solved = np.flatnonzero(label == big)
+        solved = solved[np.bincount(np.r_[ia, ib], minlength=k)[solved] > 0]
+        sub = nb.iloc[solved]
+        found.append(pd.DataFrame({"z": sub["z"].to_numpy(), "tile": sub["tile"].to_numpy(),
+                                   "g": g[solved], "o": o[solved]}))
+        _log_joint(b, nb.iloc[solved], rb, ia, ib, g, o, R, zs, solved)
+    return _measurements(pd.concat(found, ignore_index=True) if found else [])
+
+
+def _log_joint(block, sub, rb, ia, ib, g, o, R, zs, solved):
+    """Log a block's joint solve: relations, how well they close, and the slice-wide change it made at R
+    (the median over a slice's tiles of g R + o - R)."""
+    gain, off, m = (rb[k].to_numpy(float) for k in ("gain", "offset", "centre"))
+    res = g[ia] * (gain * m + off) + o[ia] - (g[ib] * m + o[ib])   # common-scale mismatch at each centre
+
+    def rsd(v):
+        return float(1.4826 * np.median(np.abs(v - np.median(v)))) if len(v) else float("nan")
+    at_r = pd.Series(g[solved] * R + o[solved] - R).groupby(sub["z"].to_numpy()).median().to_numpy()
+    log.info("joint balance, block %s (z %d-%d): %d (z, tile) solved from %d in-slice and %d z relations; mismatch "
+             "at the centres (robust SD) %.1f in-slice, %.1f z (raw units); slice-wide change at R = %.0f: robust SD "
+             "%.1f, slice to slice %.1f", block, int(sub["z"].min()), int(sub["z"].max()), len(solved),
+             int((~zs).sum()), int(zs.sum()), rsd(res[~zs]), rsd(res[zs]), R, rsd(at_r), rsd(np.diff(at_r)))
+
+
+def balance(cfg, df, meas, every, joint=False):
     """Replace lo/hi by one common window per z, mapped through per-tile gain/offset.
 
     meas: (z, tile, g, o) measured every ``every`` selected slices; smoothed over
-    balance_smooth_slices (default smooth_slices) and interpolated in between."""
+    balance_smooth_slices (default smooth_slices) and interpolated in between. joint (the tiles and
+    slices solved together, ``joint_measurements``): not smoothed, only interpolated where a (z, tile)
+    has none, and the common window is smoothed over z instead (``joint_window``)."""
     c = cfg["intensity"]
     df = df.merge(meas, on=["z", "tile"], how="left")
-    window = max(1, round((c["balance_smooth_slices"] or c["smooth_slices"]) / every))
+    window = 1 if joint else max(1, round((c["balance_smooth_slices"] or c["smooth_slices"]) / every))
     # Smoothed (and interpolated) is each tile's map g v + o at two fixed intensities of its own,
     # r1, r2 (its median window ends in the block), not g and o apart: with noisy gains the offset
     # (the map's value at 0, far below the data) swings with the gain, and separate medians would
@@ -822,10 +1011,34 @@ def balance(cfg, df, meas, every):
         log.warning("%d (z, tile) have no overlap measurement in their smoothing block: left unbalanced",
                     int((~bal).sum()))
     b = df[bal]
+    if joint:
+        common = joint_window(b, int(c["smooth_slices"]))
+        for col in ("lo", "hi"):
+            df.loc[bal, col] = (b["z"].map(common[col]) - b["o"]) / b["g"]
+        return df
     for col in ("lo", "hi"):
         common = (b["g"] * b[col] + b["o"]).groupby(b["z"]).transform("median")
         df.loc[bal, col] = (common - b["o"]) / b["g"]
     return df
+
+
+def joint_window(b, smooth):
+    """Per z (index): the common window (lo, hi) on the scale the tiles and slices were balanced to together.
+
+    On that scale a tile's tissue doesn't jump from slice to slice (the solve took the jumps out), so the
+    window is each tile's own starting window of the slice (lo_raw, hi_raw; its running median would bring
+    the jump back, with the opposite sign, through the offset) mapped onto it, the median over the slice's
+    tiles, then a running median over ``smooth`` slices and a running mean over as many (the median alone
+    steps by ~1 grey where it passes from one tile's content to another's), restarting at every block:
+    smooth along z, and a tile's window (common - o) / g follows the tile's own jumps through its gain and
+    offset."""
+    per_z = pd.DataFrame({"z": b["z"], "block": b["block"], "lo": b["g"] * b["lo_raw"] + b["o"],
+                          "hi": b["g"] * b["hi_raw"] + b["o"]})
+    per_z = per_z.groupby("z").agg(block=("block", "first"), lo=("lo", "median"), hi=("hi", "median")).sort_index()
+    for col in ("lo", "hi"):
+        per_z[col] = per_z.groupby("block")[col].transform(
+            lambda s: running_median(s, smooth).rolling(int(smooth), center=True, min_periods=1).mean())
+    return per_z
 
 
 def measure(rows, stitch, thumbs_dir, fields=None, tissue_only=True):

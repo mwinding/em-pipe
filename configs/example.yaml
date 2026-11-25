@@ -151,6 +151,17 @@ intensity:
   balance_every: 10          # thumbnails: measure tile overlaps every N selected slices
   balance_tissue_only: true  # thumbnails: compare overlaps on tissue pixels only (background left out)
   balance_smooth_slices: null  # running median of tile gains/offsets over this many slices; null: smooth_slices
+  # Tiles and slices balanced together (as Janelia render's intensity correction with --zDistance, after TrakEM2's
+  # "Match intensities"): 0: off | 1: every tile is also matched to itself in the next slice (zrelations step) and
+  # the gains and offsets of all (z, tile) of a block are solved at once, removing the jumps the slice's tiles share
+  # too | 2: also the slice after next. Needs balance_source: overlaps and per_slice: false; the common window is
+  # smoothed over z (smooth_slices) and balance_smooth_slices is not used
+  balance_z_distance: 0
+  balance_z_weight: 0.1      # a tile's relation to itself in another slice, relative to all its in-slice overlap
+                             # relations together: the overlaps keep setting the tiles' relative levels (seams)
+  balance_z_prior: 0.01      # each (z, tile)'s pull towards no change, relative to one z relation: the common scale
+                             # follows the raw brightness smoothed over ~1 / prior slices (jumps from slice to slice
+                             # removed, slow drift kept for the windows to follow); render uses 0.01
   per_slice: true            # follow slice-to-slice jumps: true per tile | slice: one per slice (keeps tiles matched) | false
   slice_level: false         # last step: shift each slice's windows (all tiles alike) so its tissue median follows a
                              # slow trend: removes slice-wide flicker left when tiles jump independently (tools/zflicker.py)
@@ -212,6 +223,12 @@ patchgrid:                   # within-tile brightness shapes per tile position a
   gain_power: 2.0            # a bin's gain equation is weighted by min(1, cnr / 10) ** gain_power
   gain_cnr_min: 5.0          # bins with less contrast than this (resin) give no gain equation (8 for 2x2 tiles of ~13k px)
   reference: null            # R, the raw intensity at which the shapes' change c is defined; null: the median bin centre
+
+zrelations:                  # each tile against itself in the next slices (for intensity.balance_z_distance > 0), from
+                             # the preview thumbnails' tissue, flat-fielded and shape-corrected, percentile matched;
+                             # run_pipeline.sh runs it after patchgrid when intensity.balance_z_distance > 0
+  min_tissue: 0.05           # fraction of the thumbnail that must be tissue in both slices
+  chunk_slices: 100          # selected z per array-task chunk
 
 refstats:                    # reference tissue median and lc32 on the common scale, at sampled slices
   enabled: false             # run_pipeline.sh: after patchgrid (for intensity.window: reference)
@@ -326,8 +343,8 @@ serve:
 # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch (partition: SBATCH_PARTITION
 # from slurm/site.sh, else the cluster's default).
 # Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, shading, overlaps, overlaps_merge,
-# patchgrid, intensity, zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale, each with this
-# array size), export.
+# patchgrid, zrelations, zrelations_merge, intensity, zcorrect, zcorrect_solve, render_init, render, pyramid (one job
+# per scale, each with this array size), export.
 precomputed:
   enabled: false             # run_pipeline.sh: Neuroglancer precomputed export after pyramid
   name: null                 # folder in output_dir; null: <volume stem>.precomputed
@@ -395,6 +412,7 @@ slurm:
   stitch: {array: 10}
   align: {array: 20}
   overlaps: {array: 20}
+  zrelations: {array: 10}
   zcorrect: {array: 10}
   render_init: {mem: 16G}    # render.sbatch's 160G is sized for render run
   render: {array: 20}

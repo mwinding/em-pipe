@@ -4,7 +4,8 @@
 segment (and each segment's last) is read at full resolution, and each tile gets exactly what render
 applies before the window: decurtaining (destreak, when enabled), flat-field (shading), the patchgrid
 shape, then the tile's gain and offset
-onto the slice's common scale (intensity's tile balance, ``intensity.balanced_scale``). Inside the
+onto the slice's common scale (intensity's tile balance, ``intensity.balanced_scale``; with
+intensity.balance_z_distance > 0 the scale the tiles and slices are balanced to together). Inside the
 reference tissue's cells (work/refmask, eroded by ``erode_cells``, optionally only those whose centre
 lies in ``region``) it measures the tissue's median and lc32: the mean SD in 8 px windows at 32 nm
 (the 8 nm values area-averaged 4 x 4), as tools/refmask_check.py measures rendered volumes, here per

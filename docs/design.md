@@ -14,8 +14,9 @@ Raw data is never written to.
 | refmask | `pipeline.refmask` | array over z-chunks, then `merge` | `preview/` thumbnails | `refmask/` |
 | stitch | `pipeline.stitch` | array over sampled slices, then `merge` | raw pixels (sampled slices) | `stitch/` |
 | align | `pipeline.align` | array over z-chunks (`run`), then `solve` | raw pixels, `stitch/` | `align/` |
+| zrelations | `pipeline.zrelations` | array over z-chunks (`run`), then `merge`; only with `intensity.balance_z_distance` > 0 | `preview/` thumbnails, `shading/`, `patchgrid/` | `zrelations/` |
 | refstats | `pipeline.refstats` | array over chunks of sampled slices, then `merge` | raw pixels (sampled slices), `refmask/`, the shading, patchgrid and balance inputs | `refstats/` |
-| intensity | `pipeline.intensity` | no | `preview/`, `stitch/` (`refstats/` with window: reference) | `intensity/` |
+| intensity | `pipeline.intensity` | no | `preview/`, `stitch/` (`overlaps/`, `patchgrid/` with balance_source: overlaps; `zrelations/` with balance_z_distance > 0; `refstats/` with window: reference) | `intensity/` |
 | destreak | `pipeline.destreak` | no (`test` only; applied inside render) | raw pixels | `destreak/` |
 | zcorrect | `pipeline.zcorrect` | array over z-chunks (`run`), then `solve` | raw pixels, `stitch/`, `align/` | `zcorrect/` |
 | render | `pipeline.render` | `init`, then array over z-slabs (`run`) | everything above | `render/volume.ome.zarr` (scale 0) |
@@ -23,7 +24,7 @@ Raw data is never written to.
 | serve | `pipeline.serve` | interactive | `render/` | – |
 
 Order: check → preview → refmask (optional) → stitch → align → shading, overlaps, patchgrid (optional)
-→ refstats (optional) → intensity → zcorrect (optional) → render → pyramid.
+→ zrelations (optional) → refstats (optional) → intensity → zcorrect (optional) → render → pyramid.
 destreak has no batch stage: it is a function applied per tile inside render when
 `destreak.enabled: true`; its CLI only writes before/after test images for tuning.
 
@@ -168,6 +169,14 @@ as do the Slurm logs (`work/logs/`).
   tissue's quantiles `tq_*` (for the clipping estimate), all on the common scale, and a `digest` of
   every input (refmask, shading, patchgrid, destreak settings, balance). `qc/refstats[_<output>].png`.
 
+### work/zrelations/
+- `chunks/chunk_<z0>-<z1>.csv` (+ `.json`: settings, distance, thumbnails, shading and patchgrid digests;
+  a chunk whose inputs changed is measured again), merged into `relations.csv` — per (z1, tile, distance):
+  `z1, z2, tile, segment, distance, gain, offset, centre, n` with u_z2 ~ gain u_z1 + offset on the
+  corrected thumbnail values (flat-field, patchgrid shape), from the paired tissue percentiles of the two
+  slices (`n` tissue pixels), and the same on the raw thumbnails (`gain_raw, offset_raw, centre_raw`).
+  `relations.json` (distance, settings, digests) and `qc/zrelations.png`.
+
 ### work/intensity/ (or work/intensity/<output>/ with intensity.output)
 - `levels.csv` — per (z, tile): `z, tile, lo, hi` — uint16 values that render maps to 0 and 255
   (before CLAHE). Smooth over z.
@@ -217,6 +226,7 @@ Each step module defines `DEFAULTS = {"<section>": {...}}` and `main(argv=None)`
 | `pipeline.preview run` / `merge` | array / single | |
 | `pipeline.stitch run` / `merge` | array / single | |
 | `pipeline.align run` / `solve` | array / single | |
+| `pipeline.zrelations run` / `merge` | array / single | only when `intensity.balance_z_distance` > 0 |
 | `pipeline.intensity` | single | |
 | `pipeline.zcorrect run` / `solve` | array / single | only when `zcorrect.enabled` |
 | `pipeline.destreak test --z Z --tile r-c` | interactive | writes before/after PNGs |
