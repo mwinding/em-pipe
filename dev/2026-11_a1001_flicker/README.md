@@ -41,5 +41,16 @@ Measured with `tools/zflicker.py` (whole run, the run's config for raw tiles and
   balanced windows, the offsets' mean-zero anchor, the median jump), each moving by 7-11 greys as the
   tiles jump independently; no single one carries the left-over, and together they miss the raw
   slice-wide jump by 6.3 greys.
+- The same prediction (`zflicker.py --config` alone) for the two other volumes, which use the same
+  settings (window: reference or percentile, balance from overlaps every slice, per_slice: slice):
+
+  | volume | raw jump per tile | raw jump shared by the slice | left after the windows |
+  |---|---|---|---|
+  | A1001 | 23.1 | 10.8 | 6.3 |
+  | 35h (its current levels) | 5.7 | 45.2 | 2.9 |
+  | 37i decurtained | 2.1 | 1.5 | 0.9 |
+
+  The left-over grows with how much the tiles jump independently, as expected if it comes from
+  estimating the slice-wide level from the slice's few tiles.
 - Possible fix (not made): a last per-slice shift of every window by the left-over itself (the median
   over tiles of t_p50 - lo, minus its running mean), which the tiles share (0.15 greys apart).
