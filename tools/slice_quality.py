@@ -33,7 +33,10 @@ so the tissue's own texture cancels, and takes the median over a tile's squares:
     scanline_rel           h / the square's p5-p95 width against the trend (worst band)
     curtain_ratio          v / h per square (texture without direction gives ~1), 90th percentile over
                            the tile's squares; curtain_extent = share of the squares above --curtain-ratio
-    level_jump             tissue median against the trend, in units of the tissue's p5-p95 width
+    level_jump             how far the tile's tissue median is from that of BOTH neighbour slices, in units
+                           of the tissue's p5-p95 width (raw levels wander and step all the time, which the
+                           display windows follow; this is a slice that stands apart from both neighbours;
+                           its z-score is against the tile's usual slice-to-slice step)
     ncc_drop               trend of max(ncc_prev, ncc_next) minus its value: a slice unlike both neighbours
     align_rms              smallest residual of the slice's alignment pairs (a bad slice fits none of them)
 
@@ -51,8 +54,9 @@ are measured on the raw tiles, before any decurtaining, and only where they cros
 
 Outputs (default <output_dir>/qc/): slice_quality.csv (per z, tile: the metrics), slice_flags.csv
 (z, tile, reason, value, limit, severity, zscore, tiles_flagged: how many of the slice's tiles have that flag), slice_quality.png (metrics over z, flags marked),
-slice_quality/summary.json (counts per reason, settings), slice_quality/sheet_<reason>.png (the top
---top flagged slices per reason next to the previous and next slice, for checking by eye), and the
+slice_quality/summary.json (counts per reason, settings), slice_quality/sheet_<reason>.jpg (the --top
+strongest flagged slices per reason and the 4 weakest, each next to the previous and next slice, for
+checking by eye), and the
 chunk files of run in slice_quality/chunks/.
 
 run reads the raw stacks (three bands per tile slice): use slurm/slice_quality.sbatch as an array.
@@ -83,11 +87,11 @@ WINDOW_METRICS = ("sharp", "noise", "width", "v", "h", "tissue")
 ROW_METRICS = ("sat", "zero", "ncc_prev", "ncc_next", "bright", "dark")
 # reason -> (column, direction, limit): flagged when the value is beyond the limit in that direction
 LIMITS = {
-    "focus": ("sharp_rel", "below", 0.75),
+    "focus": ("sharp_rel", "below", 0.85),
     "noise": ("noise_rel", "above", 1.25),
     "scanline": ("scanline_rel", "above", 2.0),
     "brightness_jump": ("level_jump", "abs", 0.5),
-    "unlike_neighbours": ("ncc_drop", "above", 0.15),
+    "unlike_neighbours": ("ncc_drop", "above", 0.02),
     "align": ("align_rel", "above", 3.0),
     "saturated": ("sat", "above", 1e-3),
     "black": ("zero", "above", 1e-3),
@@ -417,6 +421,21 @@ def measure_table(segs, slices, args):
     return pd.concat(rows, ignore_index=True), worst_win, grids
 
 
+def lone_jump(level):
+    """(jump, usual): how far each slice's level is from BOTH neighbours (the smaller of the two steps, with
+    its sign; 0 when the level lies between them), and the robust sd of the series' slice-to-slice steps.
+    Raw levels wander and step all the time (the display windows follow that); this picks out a slice
+    that stands apart from the slices either side."""
+    level = np.asarray(level, float)
+    prev = level - np.r_[np.nan, level[:-1]]
+    nxt = level - np.r_[level[1:], np.nan]
+    with np.errstate(all="ignore"):
+        jump = np.where(np.sign(prev) == np.sign(nxt), np.sign(prev) * np.fmin(np.abs(prev), np.abs(nxt)), 0.0)
+    steps = prev[np.isfinite(prev)]
+    usual = 1.4826 * np.median(np.abs(steps - np.median(steps))) if len(steps) >= 5 else np.nan
+    return jump, usual
+
+
 def add_tables(cfg, q, args):
     """Add the tissue level (preview stats) and the alignment residual to the metrics."""
     sp = step_path(cfg, "preview", "stats.csv")
@@ -428,12 +447,12 @@ def add_tables(cfg, q, args):
                                                           on=["z", "tile"], how="left")
             for _, g in q.groupby(["segment", "tile"]):
                 g = g.sort_values("z")
-                med = running_median(g[["t_p50"]].to_numpy(float), args.trend)[:, 0]
+                level = g["t_p50"].to_numpy(float)
                 width = running_median((g["t_p95"] - g["t_p5"]).to_numpy(float)[:, None], args.trend)[:, 0]
+                jump, usual = lone_jump(level)
                 with np.errstate(all="ignore"):
-                    jump = (g["t_p50"].to_numpy(float) - med) / width
-                q.loc[g.index, "level_jump"] = jump
-                q.loc[g.index, "level_z"] = robust_z(jump)
+                    q.loc[g.index, "level_jump"] = jump / width
+                    q.loc[g.index, "level_z"] = jump / usual if usual > 0 else np.nan
             q = q.drop(columns=["t_p50", "t_p5", "t_p95"])
     q["align_rms"], q["align_rel"], q["align_rejected"] = np.nan, np.nan, False
     rp = step_path(cfg, "align", "residuals.csv")
@@ -576,8 +595,9 @@ def label(img, text):
     return img
 
 
-def sheets(cfg, out, flags, worst_win, grids, slices, top, panel=512):
-    """One PNG per reason: the top flagged tile slices (one per z), each next to its previous and next slice."""
+def sheets(cfg, out, flags, worst_win, grids, slices, top, weakest=4, panel=512):
+    """One JPEG per reason: the ``top`` strongest flagged tile slices (one per z) and the ``weakest`` few,
+    each next to its previous and next slice."""
     thumbs, cache = Thumbs(cfg), StackCache(cfg["raw_dir"])
     sp = step_path(cfg, "preview", "stats.csv")
     stats = pd.read_csv(sp, dtype={"tile": str}).set_index(["z", "tile"])[["p0_5", "p99_5"]] if sp.exists() else None
@@ -586,7 +606,9 @@ def sheets(cfg, out, flags, worst_win, grids, slices, top, panel=512):
     written = []
     for reason, g in flags[~flags["reason"].isin(["excluded", "missing_tile", "align_rejected"])].groupby("reason"):
         g = g.assign(dist=(g["value"] - NORMAL.get(reason, 0.0)).abs()).sort_values("dist", ascending=False)
-        g = g.drop_duplicates("z").head(top)
+        g = g.drop_duplicates("z")
+        # the strongest, and (when there are more) the weakest few: those just over the limit show what it lets in
+        g = pd.concat([g.head(top).assign(rank="strongest"), g.iloc[top:].tail(weakest).assign(rank="weakest")])
         strips = []
         for f in g.itertuples():
             tile = f.worst_tile if f.tile == "all" else f.tile
@@ -616,7 +638,7 @@ def sheets(cfg, out, flags, worst_win, grids, slices, top, panel=512):
                 im = cv2.resize(im, (max(1, round(im.shape[1] * s)), max(1, round(im.shape[0] * s))), interpolation=cv2.INTER_AREA)
                 canvas = np.full((panel, panel, 3), 255, np.uint8)
                 canvas[:im.shape[0], :im.shape[1]] = cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
-                text = f"z {z} tile {tile} {reason} {f.value:.3g} ({f.severity}) {where}" if z == f.z else f"z {z}"
+                text = f"z {z} tile {tile} {reason} {f.value:.3g} ({f.severity}, {f.rank}) {where}" if z == f.z else f"z {z}"
                 cells.append(label(canvas, text))
                 cells.append(np.full((panel, 4, 3), 255, np.uint8))
             strips.append(np.hstack(cells[:-1]))
@@ -624,8 +646,8 @@ def sheets(cfg, out, flags, worst_win, grids, slices, top, panel=512):
         if strips:
             width = max(s.shape[1] for s in strips)
             strips = [np.pad(s, ((0, 0), (0, width - s.shape[1]), (0, 0)), constant_values=255) for s in strips]
-            path = out / "slice_quality" / f"sheet_{reason}.png"
-            atomic_write(path, lambda t: cv2.imwrite(t, np.vstack(strips[:-1])), suffix=".tmp.png")
+            path = out / "slice_quality" / f"sheet_{reason}.jpg"
+            atomic_write(path, lambda t: cv2.imwrite(t, np.vstack(strips[:-1]), [cv2.IMWRITE_JPEG_QUALITY, 90]), suffix=".tmp.jpg")
             written.append(path.name)
     return written
 

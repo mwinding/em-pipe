@@ -58,6 +58,13 @@ def test_patches_need_both_neighbours():
     assert sq.patches(base, base, base) == (0.0, 0.0)
 
 
+def test_lone_jump_ignores_steps_and_wander():
+    level = np.array([10, 10, 10, 30, 10, 10, 20, 20, 20, 20, 21, 22, 23], float)
+    jump, usual = sq.lone_jump(level)
+    assert jump[3] == 20 and jump[6] == 0 and jump[10] == 0     # a lone slice; a step that stays; a ramp
+    assert np.count_nonzero(jump) == 1
+
+
 def test_window_grid_covers_width():
     size, tops, lefts = sq.window_grid(1000, 2100, 512, 3)
     assert size == 512 and len(tops) == 3 and len(lefts) == 4
@@ -123,7 +130,7 @@ def test_run_merge_flags_the_faults_only(faulty):
     assert summary["counts"]["focus"]["slices"] == 1 and summary["flagged_slices"] == 3
     assert (qc / "slice_quality.png").exists()
     for reason in ("focus", "saturated", "curtain"):
-        assert (qc / "slice_quality" / f"sheet_{reason}.png").exists(), reason
+        assert (qc / "slice_quality" / f"sheet_{reason}.jpg").exists(), reason
 
 
 def test_merge_refuses_incomplete_run(faulty, tmp_path):
