@@ -52,5 +52,24 @@ Measured with `tools/zflicker.py` (whole run, the run's config for raw tiles and
 
   The left-over grows with how much the tiles jump independently, as expected if it comes from
   estimating the slice-wide level from the slice's few tiles.
-- Possible fix (not made): a last per-slice shift of every window by the left-over itself (the median
+- Established methods (reviewed 25 Nov 2026 from code and papers; unverified where marked):
+  - Janelia render (saalfeldlab/render, `newsolver` branch, Java, GPL-2.0): the one method found that
+    solves tiles and slices together. Each tile in each slice gets gain/offset per 8x8 sub-tile, fitted
+    from percentile matches in the in-slice overlaps and, with `--zDistance 1`, against the same tile in
+    the neighbouring slices; weak pulls (0.01) towards offset-only and no change; one sub-tile pinned;
+    `--tetherCrossLayers` against wrong matches at tissue-resin edges in z. Used on Janelia FIB-SEM and
+    multi-SEM test stacks (how widely in production: unverified).
+  - TrakEM2 "Match intensities (layer-wise)": the original of render's model (matches up to 5 slices away).
+  - BigStitcher: the same scheme in 3D, for light-sheet.
+  - Hemibrain: slice-wise CLAHE (and CycleGAN for segmentation input). FAFB: Kazhdan et al. 2015
+    (z-smoothing of coarse brightness, then a Poisson solve per slice to keep the detail; mkazhdan/DMG).
+    OpenOrganelle, FlyWire, MICrONS main text, SOFIMA: no slice-to-slice brightness step stated. MANC and
+    male CNS: unverified.
+  - A per-slice running-median shift (as `intensity.slice_level`) is not a named step in any of these;
+    the closest are Kazhdan's z-smoothing and slice-wise CLAHE.
+  - em-pipe's balance is render's model without the cross-slice matches (one gain/offset per tile,
+    overlaps in the slice only). Adding the same tile's match to its neighbouring slices to that solve
+    would be the established way to remove the slice-wide flicker, in place of the per-slice jump and
+    slice_level.
+- Possible fix (made as `intensity.slice_level`, 25 Nov 2026, to test on A1001): a last per-slice shift of every window by the left-over itself (the median
   over tiles of t_p50 - lo, minus its running mean), which the tiles share (0.15 greys apart).
