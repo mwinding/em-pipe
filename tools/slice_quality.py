@@ -50,7 +50,7 @@ present in two neighbouring slices at the same place is not a "patch only this s
 are measured on the raw tiles, before any decurtaining, and only where they cross the bands.
 
 Outputs (default <output_dir>/qc/): slice_quality.csv (per z, tile: the metrics), slice_flags.csv
-(z, tile, reason, value, limit, severity, zscore), slice_quality.png (metrics over z, flags marked),
+(z, tile, reason, value, limit, severity, zscore, tiles_flagged: how many of the slice's tiles have that flag), slice_quality.png (metrics over z, flags marked),
 slice_quality/summary.json (counts per reason, settings), slice_quality/sheet_<reason>.png (the top
 --top flagged slices per reason next to the previous and next slice, for checking by eye), and the
 chunk files of run in slice_quality/chunks/.
@@ -72,7 +72,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipeline import background, destreak  # noqa: E402
 from pipeline.cli import atomic_write, my_chunks, task_info  # noqa: E402
 from pipeline.config import load_config, step_defaults, step_path  # noqa: E402
-from pipeline.preview import chunk_name, z_chunks  # noqa: E402
+from pipeline.preview import chunk_name, thumb_values, z_chunks  # noqa: E402
 from pipeline.slices import StackCache, load_slices  # noqa: E402
 
 VERSION = 1
@@ -480,6 +480,7 @@ def make_flags(q, all_slices, args):
     n_tiles = q.groupby("z")["tile"].nunique()
     merged = []
     for (z, reason), g in f.groupby(["z", "reason"]):
+        g = g.assign(tiles_flagged=f"{len(g)}/{n_tiles[z]}")
         if (len(g) == n_tiles[z] and n_tiles[z] > 1) or reason == "align":
             worst = g.iloc[(g["value"] - NORMAL.get(reason, 0.0)).abs().to_numpy().argmax()]
             merged.append({**worst.to_dict(), "tile": "all", "worst_tile": worst["tile"],
@@ -504,7 +505,8 @@ def make_flags(q, all_slices, args):
             merged.append({"z": int(z), "tile": t, "reason": "excluded", "value": 1.0, "limit": np.nan,
                            "severity": "major", "zscore": np.nan, "worst_tile": "",
                            "note": str(g["exclude_reason"].iloc[0])})
-    out = pd.DataFrame(merged, columns=["z", "tile", "reason", "value", "limit", "severity", "zscore", "worst_tile", "note"])
+    out = pd.DataFrame(merged, columns=["z", "tile", "reason", "value", "limit", "severity", "zscore", "tiles_flagged",
+                                        "worst_tile", "note"])
     return out.sort_values(["z", "reason", "tile"]).reset_index(drop=True)
 
 
@@ -539,8 +541,11 @@ def plot(path, q, flags, seams):
             ax.set_yscale("log")
         ax.set_ylabel(label, fontsize=8)
         ax.grid(alpha=0.3)
-        if ax.get_legend_handles_labels()[0]:
-            ax.legend(fontsize=6, ncol=12, loc="upper right", frameon=False)
+        handles, labels = ax.get_legend_handles_labels()
+        if handles and ax is axes[0]:
+            ax.legend(fontsize=6, ncol=14, loc="lower right", frameon=False)
+        elif labels and labels[-1].startswith("flagged"):
+            ax.legend(handles[-1:], labels[-1:], fontsize=6, loc="lower right", frameon=False)
     axes[-1].set_xlabel("z (slice)")
     fig.suptitle("Slice quality: metrics per tile over z, flagged slices circled (seams: grey lines)", fontsize=10)
     fig.tight_layout()
@@ -553,12 +558,15 @@ def plot(path, q, flags, seams):
 WINDOW_REASONS = ("focus", "noise", "scanline", "curtain")
 
 
-def to8(imgs):
-    """The images scaled together to 8 bit over the 0.5-99.5 percentiles of the first and last (the
-    neighbours), so the flagged slice in the middle shows its difference."""
-    ref = np.concatenate([np.asarray(imgs[0]).ravel()[::7], np.asarray(imgs[-1]).ravel()[::7]]).astype(np.float32)
-    lo, hi = np.percentile(ref, [0.5, 99.5])
-    return [np.clip((np.asarray(i, np.float32) - lo) / max(hi - lo, 1e-6) * 255, 0, 255).astype(np.uint8) for i in imgs]
+def to8(imgs, together=False):
+    """The images as 8 bit: each over its own 0.5-99.5 percentiles (structure is compared, whatever the
+    brightness), or ``together`` over the percentiles of all of them (brightness is compared)."""
+    def scale(i, lo, hi):
+        return np.clip((np.asarray(i, np.float32) - lo) / max(hi - lo, 1e-6) * 255, 0, 255).astype(np.uint8)
+    if together:
+        lo, hi = np.percentile(np.concatenate([np.asarray(i, np.float32).ravel()[::7] for i in imgs]), [0.5, 99.5])
+        return [scale(i, lo, hi) for i in imgs]
+    return [scale(i, *np.percentile(np.asarray(i).ravel()[::7], [0.5, 99.5])) for i in imgs]
 
 
 def label(img, text):
@@ -568,9 +576,11 @@ def label(img, text):
     return img
 
 
-def sheets(cfg, out, flags, worst_win, grids, slices, top, panel=384):
+def sheets(cfg, out, flags, worst_win, grids, slices, top, panel=512):
     """One PNG per reason: the top flagged tile slices (one per z), each next to its previous and next slice."""
     thumbs, cache = Thumbs(cfg), StackCache(cfg["raw_dir"])
+    sp = step_path(cfg, "preview", "stats.csv")
+    stats = pd.read_csv(sp, dtype={"tile": str}).set_index(["z", "tile"])[["p0_5", "p99_5"]] if sp.exists() else None
     rows = slices.set_index(["z", "tile"])
     nb = neighbours(slices)
     written = []
@@ -589,14 +599,17 @@ def sheets(cfg, out, flags, worst_win, grids, slices, top, panel=384):
             if reason in WINDOW_REASONS and w is not None:
                 size, tops, lefts = grids[seg]
                 y0, x0 = tops[w // len(lefts)], lefts[w % len(lefts)]
-                imgs = [cache.read(rows.loc[(z, tile)], slice(y0, y0 + size), slice(x0, x0 + size)) for z in trio]
-                where = f"window x{x0} y{y0}"
+                imgs = to8([cache.read(rows.loc[(z, tile)], slice(y0, y0 + size), slice(x0, x0 + size)) for z in trio])
+                where = f"window x{x0} y{y0}, each panel on its own grey scale"
             else:
                 imgs = [thumbs.get(z, tile) for z in trio]
-                where = "whole tile"
+                where = "whole tile, each panel on its own grey scale"
                 if any(i is None for i in imgs):
                     continue
-            imgs = to8(imgs) if reason in WINDOW_REASONS else [np.asarray(i) for i in imgs]
+                if reason == "brightness_jump" and stats is not None and all((z, tile) in stats.index for z in trio):
+                    # the thumbnails back in raw values (each was scaled to its own percentiles), on one grey scale
+                    imgs = to8([thumb_values(i, *stats.loc[(z, tile)]) for z, i in zip(trio, imgs)], together=True)
+                    where = "whole tile, one grey scale for the three"
             cells = []
             for z, im in zip(trio, imgs):
                 s = panel / max(im.shape)
