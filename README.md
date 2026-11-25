@@ -158,6 +158,27 @@ A local export serves like any volume: `python3 -m pipeline.serve FOLDER` lists 
   darkness, which wavelet details can't hold, spread over a few hundred px), only around the curtains
   (`band_max_px` limits it to bands up to that wide, so wider regions the detectors show differently keep
   the image's look).
+- **Flicker along z (recommended for multi-tile data):** raw FIB-SEM tiles jump in brightness from slice to
+  slice, each on its own. Balancing every slice on its own matches the tiles but leaves the level they share
+  jumping, which shows as stripes in x-z and y-z views. The recommended setting balances tiles and slices in
+  one solve, as Janelia's render does with `--zDistance` (after TrakEM2's "Match intensities"):
+
+  ```yaml
+  overlaps:
+    enabled: true
+  intensity:
+    balance_source: overlaps
+    balance_z_distance: 1      # each tile also matched to itself in the next slice (zrelations step)
+    per_slice: false           # the joint solve follows the jumps
+  ```
+
+  On a 487-slice 3x3-tile volume this cut the slice-wide flicker from 6.4 to 0.07 greys (rendered, measured
+  with `tools/zflicker.py`), with the tiles as well matched as before and the `window: reference` standard held
+  more tightly (the reference samples no longer fall on slices that jumped). With `window: reference`, run refstats
+  after zrelations (run_pipeline.sh does), as it measures on the balanced scale. Check a dataset's flicker
+  before and after with `tools/zflicker.py --config` (no render needed) and look at x-z/y-z views
+  (`tools/ortho_views.py`). Tested on that volume; volumes of ~18,000 slices are being tested. `intensity.slice_level`
+  (a last per-slice shift) is a simpler fallback. Details: `dev/2026-11_a1001_flicker/`.
 - **patchgrid** needs `overlaps.patch_grid` > 0 (e.g. 8) and `intensity.balance_source: overlaps`.
   Setting or changing `overlaps.patch_grid` re-measures every overlap chunk; new shapes change the
   levels and the render plan (render init then asks for `--overwrite`, and render run refuses to go on). With patchgrid off and

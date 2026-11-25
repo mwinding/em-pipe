@@ -155,7 +155,9 @@ intensity:
   # "Match intensities"): 0: off | 1: every tile is also matched to itself in the next slice (zrelations step) and
   # the gains and offsets of all (z, tile) of a block are solved at once, removing the jumps the slice's tiles share
   # too | 2: also the slice after next. Needs balance_source: overlaps and per_slice: false; the common window is
-  # smoothed over z (smooth_slices) and balance_smooth_slices is not used
+  # smoothed over z (smooth_slices) and balance_smooth_slices is not used.
+  # Recommended for multi-tile data: 1, with overlaps.enabled: true, balance_source: overlaps, per_slice: false
+  # (README, "Flicker along z"); 0 here so this example runs without the overlaps step.
   balance_z_distance: 0
   balance_z_weight: 0.1      # a tile's relation to itself in another slice, relative to all its in-slice overlap
                              # relations together: the overlaps keep setting the tiles' relative levels (seams)
