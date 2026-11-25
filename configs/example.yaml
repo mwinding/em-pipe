@@ -152,7 +152,10 @@ intensity:
   balance_tissue_only: true  # thumbnails: compare overlaps on tissue pixels only (background left out)
   balance_smooth_slices: null  # running median of tile gains/offsets over this many slices; null: smooth_slices
   per_slice: true            # follow slice-to-slice jumps: true per tile | slice: one per slice (keeps tiles matched) | false
-  output: null               # variant name: levels in work/intensity/<output>/ (render reads them there)
+  slice_level: false         # last step: shift each slice's windows (all tiles alike) so its tissue median follows a
+                             # slow trend: removes slice-wide flicker left when tiles jump independently (tools/zflicker.py)
+  slice_level_smooth: 25     # slice_level: running-median window over z (slices) for that trend
+  output: null              # variant name: levels in work/intensity/<output>/ (render reads them there)
   reference:                 # window: reference (needs refmask and refstats): the reference tissue's grey and contrast
     median: null             # grey of the reference tissue's median (0-255)
     contrast: null           # its spread in greys, as measured by measure

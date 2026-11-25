@@ -302,6 +302,48 @@ def test_per_slice_follows_tile_brightness_jumps(tmp_path):
     assert off.set_index(["z", "tile"]).loc[(7, "0-1"), "lo"] == pytest.approx(expected[7, "0-1"])
 
 
+def test_slice_level_follows_a_jump_shared_by_the_slice(tmp_path):
+    """slice_level: a slice whose tiles all jump (and which the windows don't follow) gets every window
+    shifted by the jump; other slices keep theirs, and the tiles stay as far apart as before."""
+    out = tmp_path / "out"
+    zs, expected = write_stats_only(out, seam_z=100, segment_z=100, excluded=(), outlier_z=-1)
+    stats = pd.read_csv(out / "work" / "preview" / "stats.csv", dtype={"tile": str})
+    cols = [c for c in stats.columns if c.startswith(("p", "t_")) or c in ("mean", "min", "max")]
+    stats.loc[stats.z == 7, cols] += 300.0
+    stats.to_csv(out / "work" / "preview" / "stats.csv", index=False)
+    lv = run_intensity(tmp_path, tmp_path, out, smooth_slices=11, balance_tiles=False,
+                       slice_level=True, slice_level_smooth=11).set_index(["z", "tile"])
+    for z in zs:
+        for tile in ("0-0", "0-1"):
+            assert lv.loc[(z, tile), "lo"] == pytest.approx(expected[z, tile] + (300.0 if z == 7 else 0.0))
+            assert lv.loc[(z, tile), "hi"] - lv.loc[(z, tile), "lo"] == pytest.approx(10000.0)
+    off = run_intensity(tmp_path, tmp_path, out, smooth_slices=11, balance_tiles=False).set_index(["z", "tile"])
+    assert off.loc[(7, "0-0"), "lo"] == pytest.approx(expected[7, "0-0"])
+
+
+def test_follow_slice_level_restarts_at_blocks_and_keeps_tiles_apart():
+    rng = np.random.default_rng(1)  # signs of the jumps
+    rows = []
+    for z in range(60):
+        block = int(z >= 30)
+        level = 0.4 if block == 0 else 0.7            # a step between blocks: kept, not smeared
+        jump = rng.choice([-0.05, 0.05]) if z % 5 == 2 else 0.0   # slice-wide jumps the windows missed
+        for t, own in (("0-0", 0.0), ("0-1", 0.02), ("1-0", -0.01)):
+            lo, hi = 1000.0 + 50 * t.count("1"), 3000.0 + 50 * t.count("1")
+            rows.append({"z": z, "tile": t, "block": block, "lo": lo, "hi": hi,
+                         "t_p50": lo + (level + own + jump) * (hi - lo)})
+    df = pd.DataFrame(rows)
+    res = intensity.follow_slice_level(df, "t_p50", 9)
+    grey = 255 * (res["t_p50"] - res["lo"]) / (res["hi"] - res["lo"])
+    per_z = grey.groupby(res["z"]).median()
+    assert per_z[:30].std() < 1e-6 and per_z[30:].std() < 1e-6                 # the jumps are gone
+    assert per_z[:30].mean() == pytest.approx(255 * 0.4)
+    assert per_z[30:].mean() == pytest.approx(255 * 0.7)                       # the step stays
+    np.testing.assert_allclose(res["hi"] - res["lo"], df["hi"] - df["lo"])
+    spread = grey.groupby(res["z"]).agg(lambda s: s.max() - s.min())
+    np.testing.assert_allclose(spread, 255 * 0.03, atol=1e-6)                 # tiles stay apart as they were
+
+
 def test_median_windows_hit_targets_and_ignore_a_dark_tail(tmp_path):
     """window median: the tissue median renders at target_median and the tissue p5-p95 spans
     target_span greys. A tile whose darkest 0.5 % of pixels gets much darker (as more dense dark

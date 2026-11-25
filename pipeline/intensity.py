@@ -94,6 +94,14 @@ DEFAULTS = {
         # its own jump; slice: one jump per slice (the median over its tiles, relative to their
         # windows), which keeps tiles matched when the balance follows every slice; false: off.
         "per_slice": True,
+        # A last step, after every other: shift each slice's windows (all its tiles by the same greys, widths
+        # unchanged) so its tissue median comes out on a slow trend, removing the slice-wide flicker the steps
+        # above can leave when the tiles jump independently (the slice's level is then estimated from a few
+        # tiles' statistics). Per slice: the median over its tiles of the grey its window gives the tile's
+        # tissue median (preview), minus that number's running median over slice_level_smooth slices
+        # (restarting at every block). false: off.
+        "slice_level": False,
+        "slice_level_smooth": 25,
         "output": None,           # variant name: levels in work/intensity/<output>/ (render reads them there)
         # window: reference (pipeline/refmask.py, refstats): the reference tissue's grey and contrast
         "reference": {
@@ -201,6 +209,37 @@ def compute_levels(cfg):
     if c["per_slice"]:
         df["lo"] += df["jump"]
         df["hi"] += df["jump"]
+    if c["slice_level"]:
+        df = follow_slice_level(df, tissue_median_column(c), int(c["slice_level_smooth"]))
+    return df
+
+
+def tissue_median_column(c):
+    """The preview statistic balanced_scale follows jumps with: the tissue median, or with
+    window: percentile of all pixels, the median of all pixels."""
+    return "p50" if c["window"] == "percentile" and c["percentile_of"] == "all" else "t_p50"
+
+
+def follow_slice_level(df, mid, smooth):
+    """intensity.slice_level: shift every tile's window in a slice by the slice's jump, so the grey its
+    tissue median comes out at (median over the slice's tiles) follows a running median over ``smooth``
+    slices (per block). Adds the column level_shift (greys). Widths and the tiles' relative positions are
+    unchanged."""
+    if int(smooth) < 1:
+        raise ValueError("intensity.slice_level_smooth must be at least 1")
+    width = df["hi"] - df["lo"]
+    grey = 255.0 * (df[mid] - df["lo"]) / width
+    per_z = pd.DataFrame({"z": df["z"], "block": df["block"] if "block" in df else 0, "grey": grey})
+    per_z = per_z.groupby("z").agg(block=("block", "first"), grey=("grey", "median")).sort_index()
+    trend = per_z.groupby("block")["grey"].transform(lambda s: running_median(s, smooth))
+    shift = (per_z["grey"] - trend).fillna(0.0)
+    df = df.copy()
+    df["level_shift"] = df["z"].map(shift).fillna(0.0)
+    df["lo"] += df["level_shift"] / 255.0 * width
+    df["hi"] += df["level_shift"] / 255.0 * width
+    log.info("slice_level: shifted %d slices by %.2f greys (robust SD; largest %.1f)", int(shift.size),
+             float(1.4826 * np.median(np.abs(shift - np.median(shift)))) if shift.size else 0.0,
+             float(np.abs(shift).max()) if shift.size else 0.0)
     return df
 
 
