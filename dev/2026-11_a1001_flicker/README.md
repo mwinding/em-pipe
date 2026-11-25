@@ -25,3 +25,21 @@ Measured with `tools/zflicker.py` (whole run, the run's config for raw tiles and
   tiles and windows (6.32), with the same worst slices (z 273, 287, 329, 248, 341: 18-27 greys).
   Decurtaining doesn't change it (6.43); CLAHE reduces it to 2.0. Lag-1 -0.11: independent jumps from
   slice to slice, not waves.
+- `levels_terms.py` (lo = (L - o) / g + jump; greys, minus a 9-slice running mean, median over tiles):
+
+  | term | shared by the slice | per tile | corr. with left-over |
+  |---|---|---|---|
+  | raw tile median t_p50 | 10.84 | 23.09 | +0.08 |
+  | common window L (= M, the median over tiles of the balanced starting windows) | 7.23 | 0 | -0.27 |
+  | balance offset -o/g | 6.72 | 22.91 | -0.06 |
+  | per-slice jump | 11.23 | 0 | -0.25 |
+  | lo | 11.60 | 22.91 | -0.47 |
+  | left-over t_p50 - lo | 6.32 | 0.15 | 1 |
+
+  The balance offsets carry each tile's own jump (22.9 of 23.1), which is why tiles stay matched. The
+  slice-wide level is set by three per-slice statistics over the slice's tiles (the median of the
+  balanced windows, the offsets' mean-zero anchor, the median jump), each moving by 7-11 greys as the
+  tiles jump independently; no single one carries the left-over, and together they miss the raw
+  slice-wide jump by 6.3 greys.
+- Possible fix (not made): a last per-slice shift of every window by the left-over itself (the median
+  over tiles of t_p50 - lo, minus its running mean), which the tiles share (0.15 greys apart).
