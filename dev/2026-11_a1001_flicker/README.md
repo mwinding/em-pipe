@@ -89,3 +89,16 @@ Measured with `tools/zflicker.py` (whole run, the run's config for raw tiles and
   - The reference standard holds better: neuropil predicted at 149.3-151.2 greys (p5-p95 of the 17 samples; the
     per-slice balance: 134.1-158.3, as the samples fall on slices that jumped), width 129.1-130.7, no clipping
     warnings. refstats had to be run again: it measures the neuropil on the balanced scale.
+- Result, rendered volumes measured at full resolution (`zflicker.py --scale 0 --box-px 512`, 36 boxes; greys):
+
+  | volume (decurtained) | shared by the slice | between boxes | worst slice |
+  |---|---|---|---|
+  | plain, current | 6.43 | 0.25 | 27.3 |
+  | plain, slice_level | 0.53 | 0.25 | 3.0 |
+  | plain, balance_z_distance 1 | 0.065 | 0.24 | 0.31 |
+  | CLAHE, current | 2.03 | 0.77 | 9.1 |
+  | CLAHE, slice_level | 0.20 | 0.62 | 1.0 |
+  | CLAHE, balance_z_distance 1 | 0.10 | 0.64 | 0.40 |
+
+  Both remove the stripes in x-z and y-z views; the joint solve leaves about a tenth of what slice_level leaves,
+  without a correction after the fact, and holds the neuropil standard tighter (149.3-151.2 vs 143.6-152.9).
