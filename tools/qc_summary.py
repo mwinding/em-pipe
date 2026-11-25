@@ -330,15 +330,17 @@ def checks(cfg, R, facts):
         out.append(("Curtains (raw tiles)", "", "", NOTRUN, cmd(sq_cmd)))
         out.append(("Slice quality flags", "", "", NOTRUN, cmd(sq_cmd)))
     else:
-        c = sq["counts"].get("curtain", {"slices": 0, "major": 0, "minor": 0})
-        ds = (R.get("render") or {}).get("destreak") or cfg.get("destreak") or {}
-        out.append(("Curtains (measured on the raw tiles, before any curtain removal)",
-                    esc(f"{c['slices']} of {sq['slices']} slices have a tile with curtains across more than "
-                        f"{100 * sq['limits']['curtain']['limit']:g} % of its measured windows; curtain removal in this volume: "
-                        + ("on" if ds.get("enabled") else "off")), "information", INFO, ""))
         n = sq["slices"]
         flags = read_csv(qc / "slice_flags.csv", dtype={"tile": str})
-        major = flags[(flags["severity"] == "major") & ~flags["reason"].isin(["curtain", "excluded"])]["z"].nunique() if flags is not None else 0
+        flags = flags if flags is not None else pd.DataFrame(columns=["z", "reason", "severity"])
+        cur = flags[flags["reason"] == "curtain"]
+        ds = (R.get("render") or {}).get("destreak") or cfg.get("destreak") or {}
+        out.append(("Curtains (measured on the raw tiles, before any curtain removal)",
+                    esc(f"{cur['z'].nunique()} of {n} slices have a tile with at least one curtained window (stripe amplitude along the "
+                        f"curtain direction over {sq['settings'].get('curtain_ratio')} times that across it); in "
+                        f"{cur.loc[cur['severity'] == 'major', 'z'].nunique()} slices a tenth or more of a tile's windows are curtained. "
+                        "Curtain removal in this volume: " + ("on" if ds.get("enabled") else "off")), "information", INFO, ""))
+        major = flags[(flags["severity"] == "major") & ~flags["reason"].isin(["curtain", "excluded"])]["z"].nunique()
         txt = f"{sq['flagged_slices']} of {n} slices carry a flag; {major} with a major flag other than curtains"
         out.append(("Slice quality flags", esc(txt), f"slices with a major flag (curtains aside) <= {100 * LIMITS['major_flag_share']:g} %",
                     PASS if major <= LIMITS["major_flag_share"] * n else ATTN, "details below"))

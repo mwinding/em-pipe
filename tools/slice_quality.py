@@ -44,7 +44,8 @@ Flag rules (LIMITS below; each a limit on the value and, for trend comparisons, 
 of at least --z-score against the tile's own scatter):
     focus, noise, scanline, brightness_jump, unlike_neighbours, align   outliers against the trend
     saturated, black, bright_patch, dark_patch, curtain, align_rejected, missing_tile, excluded   absolute
-Severity: "major" at twice the limit's distance from normal, else "minor". When every tile of a
+Severity: "major" at twice the limit's distance from normal, else "minor" (curtains: "minor" from one
+curtained window, "major" when a tenth of the tile's windows are curtained). When every tile of a
 multi-tile slice has the same flag, they become one row with tile "all".
 
 Limits of the method: an event lasting longer than about half the trend window (e.g. defocus over
@@ -97,8 +98,9 @@ LIMITS = {
     "black": ("zero", "above", 1e-3),
     "bright_patch": ("bright", "above", 0.01),
     "dark_patch": ("dark", "above", 0.01),
-    "curtain": ("curtain_extent", "above", 0.15),
+    "curtain": ("curtain_extent", "above", 0.01),     # with up to 100 windows per tile: any curtained window
 }
+MAJOR = {"curtain": 0.10}   # reason -> value from which a flag is "major", where twice the limit's distance is not the rule
 NORMAL = {"focus": 1.0, "noise": 1.0, "scanline": 1.0, "align": 1.0}   # the value of an unremarkable slice (else 0)
 TREND_REASONS = {"focus": "sharp_z", "noise": "noise_z", "scanline": "scanline_z", "brightness_jump": "level_z",
                  "unlike_neighbours": "ncc_z", "align": None}
@@ -481,7 +483,7 @@ def make_flags(q, all_slices, args):
         elif direction == "abs":
             hit, major = np.abs(v) > limit, np.abs(v) > 2 * limit
         else:
-            hit, major = v > limit, v > normal + 2 * (limit - normal)
+            hit, major = v > limit, v > MAJOR.get(reason, normal + 2 * (limit - normal))
         zs = np.full(len(q), np.nan)
         if reason in TREND_REASONS:
             zc = TREND_REASONS[reason]
@@ -701,7 +703,7 @@ def main(argv=None):
     p.add_argument("--patch-iqr", type=float, default=1.0, help="patch: this many interquartile ranges from both neighbours")
     p.add_argument("--trend", type=int, default=51, help="running-median window along z (slices)")
     p.add_argument("--z-score", type=float, default=5.0, help="robust z-score a trend flag also needs")
-    p.add_argument("--curtain-ratio", type=float, default=3.0, help="v/h above which a window counts as curtained")
+    p.add_argument("--curtain-ratio", type=float, default=2.0, help="v/h above which a window counts as curtained")
     for reason, (col, _, limit) in LIMITS.items():
         p.add_argument(f"--limit-{reason.replace('_', '-')}", type=float, help=f"limit on {col} (default {limit})")
     p.add_argument("--top", type=int, default=12, help="flagged slices per reason on the contact sheets")

@@ -107,7 +107,8 @@ def faulty(tmp_path_factory):
     return cfg, out
 
 
-ARGS = ["--window", "128", "--trend", "21", "--chunk-slices", "10"]
+# 128 px windows: v/h scatters more than in the default 512 px ones, so a higher ratio counts as curtained
+ARGS = ["--window", "128", "--trend", "21", "--chunk-slices", "10", "--curtain-ratio", "3"]
 
 
 def test_run_merge_flags_the_faults_only(faulty):
