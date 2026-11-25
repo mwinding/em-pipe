@@ -9,6 +9,7 @@ Measured with `tools/zflicker.py` (whole run, the run's config for raw tiles and
 |---|---|
 | `scripts/tile_jump_mean_median.py` | From a `zflicker.py --config` CSV: does the flicker left after the windows follow the mean minus the median of the tiles' jumps, the raw common jump, the windows' common shift, or the middle tile's jump? |
 | `scripts/levels_terms.py` | Recomputes the run's levels with em-pipe's functions, keeping their terms apart (common window, balance offset, per-slice jump), and shows which carries the left-over flicker. |
+| `scripts/zrelations_check.py` | The zrelations step's slice-to-slice relations (each tile against itself in the next slice) on the corrected values u, against the same on the raw thumbnails and against the preview t_p50's change, in greys of the windows. |
 
 ## Findings so far
 
@@ -73,3 +74,18 @@ Measured with `tools/zflicker.py` (whole run, the run's config for raw tiles and
     slice_level.
 - Possible fix (made as `intensity.slice_level`, 25 Nov 2026, to test on A1001): a last per-slice shift of every window by the left-over itself (the median
   over tiles of t_p50 - lo, minus its running mean), which the tiles share (0.15 greys apart).
+- Plan 2, the established fix (made as `intensity.balance_z_distance`, 25 Nov 2026): tiles and slices balanced in one
+  solve as render does with `--zDistance`. The zrelations step relates each tile to itself in the next slice from the
+  tissue percentiles of the preview thumbnails (u: flat-field and patch shape applied, as the in-slice relations);
+  intensity solves the gain and offset of all 487 x 9 tile slices at once from the 50,648 in-slice patch relations and
+  the 4374 z relations (weak pulls to no change, 0.01 of a z relation; z relations 0.1 of a tile's in-slice ones).
+  - The z relations (`zrelations_check.py`): slice-to-slice changes of 34.6 greys (robust SD, each tile at its
+    centre); on u and on the raw thumbnails they differ by 0.010 greys, and from the preview t_p50's change by 0.056
+    (0.04-0.10 per tile, ~130,000-320,000 tissue pixels per tile). The raw thumbnails would have done as well; u is
+    used so the z relations are on the scale of the in-slice ones.
+  - The solve closes the z relations to 3.5 raw units (~0.3 greys) at their centres.
+  - Predicted from the raw tiles and the new windows (`zflicker.py --config`, decurtained): left after the windows
+    0.055 greys shared by the slice (was 6.32) and 0.145 between tiles (was 0.15); largest single slice 0.36 greys.
+  - The reference standard holds better: neuropil predicted at 149.3-151.2 greys (p5-p95 of the 17 samples; the
+    per-slice balance: 134.1-158.3, as the samples fall on slices that jumped), width 129.1-130.7, no clipping
+    warnings. refstats had to be run again: it measures the neuropil on the balanced scale.
