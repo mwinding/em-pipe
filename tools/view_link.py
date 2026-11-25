@@ -1,15 +1,16 @@
 """A neuroglancer link to served volumes as toggle layers (only the first one visible), opening at a given place.
 
-    python tools/view_link.py [--port 8000] [--voxel-m X Y Z] [--position X Y Z] [--layout 4panel] [--out FILE]
-                              NAME=VOLUME [NAME=VOLUME ...]
+    python tools/view_link.py [--port 8000] [--voxel-m X Y Z] [--position X Y Z] [--layout 4panel]
+                              [--cross-section-scale S] [--out FILE] NAME=VOLUME [NAME=VOLUME ...]
 
 VOLUME is a volume's folder name as pipeline.serve serves it (``*.zarr`` or ``*.precomputed``), NAME the layer's
 name. Sources are pipeline.serve's (``zarr3://http://localhost:PORT/VOLUME/``); the dimensions are declared in x, y, z
 order (the volumes' axes are z, y, x: see pipeline.serve.neuroglancer_link) with --voxel-m the voxel size in metres,
-as the volumes' OME metadata gives it; --position is in voxels (x y z).
+as the volumes' OME metadata gives it; --position is in voxels (x y z); --cross-section-scale the 2D panels' zoom
+(voxels per screen pixel).
 
 When the neuroglancer package is installed, the link is read back with ``neuroglancer.parse_url`` and checked:
-the same layers (names, sources, visibility), dimensions, position and layout, else it exits with an error. Prints
+the same layers (names, sources, visibility), dimensions, position, zoom and layout, else it exits with an error. Prints
 the link, and writes it to --out.
 """
 import argparse
@@ -24,7 +25,7 @@ from pipeline.serve import source  # noqa: E402
 PREFIX = "https://neuroglancer-demo.appspot.com/#!"
 
 
-def state(layers, port=8000, voxel_m=(8e-9, 8e-9, 8e-9), position=None, layout="xy"):
+def state(layers, port=8000, voxel_m=(8e-9, 8e-9, 8e-9), position=None, layout="xy", cross_section_scale=None):
     """Neuroglancer state with one image layer per (name, volume), only the first visible."""
     s = {"dimensions": {a: [float(v), "m"] for a, v in zip("xyz", voxel_m)},
          "displayDimensions": ["x", "y", "z"],
@@ -33,6 +34,8 @@ def state(layers, port=8000, voxel_m=(8e-9, 8e-9, 8e-9), position=None, layout="
          "layout": layout}
     if position is not None:
         s["position"] = [float(v) for v in position]
+    if cross_section_scale is not None:
+        s["crossSectionScale"] = float(cross_section_scale)
     return s
 
 
@@ -59,6 +62,8 @@ def check(url, s):
             diffs.append(f"dimension {a}: {dims.get(a)} != {[size, unit]}")
     if "position" in s and [float(p) for p in v.position] != s["position"]:
         diffs.append(f"position {list(v.position)} != {s['position']}")
+    if "crossSectionScale" in s and float(v.cross_section_scale) != s["crossSectionScale"]:
+        diffs.append(f"crossSectionScale {v.cross_section_scale} != {s['crossSectionScale']}")
     layout = v.layout.type if hasattr(v.layout, "type") else v.layout
     if layout != s["layout"]:
         diffs.append(f"layout {layout!r} != {s['layout']!r}")
@@ -73,6 +78,7 @@ def main(argv=None):
                    help="voxel size in metres (x y z)")
     p.add_argument("--position", type=float, nargs=3, metavar=("X", "Y", "Z"), help="where the view opens (voxels)")
     p.add_argument("--layout", default="xy", help="xy, xz, yz, 3d, 4panel, ...")
+    p.add_argument("--cross-section-scale", type=float, help="zoom of the 2D panels (voxels per screen pixel)")
     p.add_argument("--out", type=Path, help="also write the link to this file")
     args = p.parse_args(argv)
     layers = []
@@ -81,7 +87,7 @@ def main(argv=None):
         if not name or not volume:
             p.error(f"expected NAME=VOLUME, got {spec!r}")
         layers.append((name, volume.strip("/")))
-    s = state(layers, args.port, args.voxel_m, args.position, args.layout)
+    s = state(layers, args.port, args.voxel_m, args.position, args.layout, args.cross_section_scale)
     url = link(s)
     diffs = check(url, s)
     if diffs:

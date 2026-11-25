@@ -51,3 +51,6 @@ def test_neuroglancer_reads_it_back():
     assert view_link.check(view_link.link(s), s) == []
     other = dict(s, layout="xy")
     assert view_link.check(view_link.link(s), other)
+    zoomed = view_link.state([("old", "a.ome.zarr")], 8001, VOXEL, (1.5, 2.5, 3.5), "4panel", cross_section_scale=2)
+    assert zoomed["crossSectionScale"] == 2.0 and view_link.check(view_link.link(zoomed), zoomed) == []
+    assert view_link.check(view_link.link(zoomed), dict(zoomed, crossSectionScale=1.0))
