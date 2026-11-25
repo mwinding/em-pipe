@@ -7,7 +7,8 @@ present, ``qc/zstep_correction/tile_ncc/`` (tile_ncc.py). Prints, and writes to 
 
 - ``step_stats.json``: the spacing's distribution (nm; breaks left out, where zcorrect holds the spacing at
   nominal), counts of near-duplicate (< 0.5x) and thick (> 1.5x, > 2x) steps, the lag-1 autocorrelation of the
-  spacing, the adjacent-slice NCC, the most uneven ``window``-slice stretches and a typical one, the breaks with
+  spacing, the adjacent-slice NCC, a model with a factor per slice next to the spacing (is a low NCC a thick
+  cut or a slice that looks different?), the most uneven ``window``-slice stretches and a typical one, the breaks with
   the cut across them read from the NCC of the slices before, and the agreement between tiles;
 - ``spacing.csv``: per slice z, spacing_nm (from the previous slice), break, ncc1 (NCC with the previous slice)
   and, with tile_ncc, the spacing solved from each tile alone.
@@ -18,6 +19,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import sparse
+from scipy.sparse.linalg import spsolve
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from pipeline import zcorrect  # noqa: E402
@@ -26,7 +29,7 @@ from pipeline.config import qc_path, step_path  # noqa: E402
 from pipeline.slices import load_slices, voxel_size_nm, z_values  # noqa: E402
 
 
-def solve_pairs(zs, brk, ia, ib, ncc, zc):
+def solve_pairs(zs, brk, ia, ib, ncc, zc, full=False):
     """Spacing / nominal per step, as pipeline.zcorrect.solve computes it (same functions, same loop)."""
     nominal = np.diff(zs).astype(float)
     block = np.concatenate([[0], np.cumsum(brk)])
@@ -45,7 +48,49 @@ def solve_pairs(zs, brk, ia, ib, ncc, zc):
         s = zcorrect._constrain(s, nominal, brk, zc["min_spacing_fraction"], zc["nominal_window"])
     covered = np.zeros(len(nominal), bool)
     covered[ia[adjacent]] = True
-    return np.where(covered, s / nominal, np.nan)
+    if not full:
+        return np.where(covered, s / nominal, np.nan)
+    pos = np.concatenate([[0.0], np.cumsum(s)])
+    xs, ys = zcorrect._fit_curve(pos[ib] - pos[ia], ncc)
+    return np.where(covered, s / nominal, np.nan), keep, np.interp(pos[ib] - pos[ia], xs, ys)
+
+
+def slice_factors(n, ia, ib, resid):
+    """Per-slice u with u[a] + u[b] ~ resid for every pair (least squares, lightly damped towards 0)."""
+    m = len(ia)
+    A = sparse.csr_matrix((np.ones(2 * m), (np.r_[np.arange(m), np.arange(m)], np.r_[ia, ib])), shape=(m, n))
+    return spsolve((A.T @ A + 1e-3 * sparse.eye(n)).tocsc(), A.T @ resid)
+
+
+def quality_model(zs, brk, ia, ib, ncc, zc):
+    """Is a low NCC a thick cut, or a slice that looks different (noise, focus, charging)?
+
+    zcorrect reads every NCC as a distance. Hanslovsky et al. also give each section a scaling factor, so a slice
+    that correlates poorly with all its neighbours is not read as two thick cuts. Two one-cause models of
+    log NCC(a, b), each compared with the per-lag median alone: the spacing zcorrect solved (log f(distance)), and
+    a factor per slice at nominal spacing (u_a + u_b + per-lag level). Returns the share of the variance about
+    the per-lag median that each explains, and the SD of the slice factors exp(u).
+    """
+    _, keep, pred_t = solve_pairs(zs, brk, ia, ib, ncc, zc, full=True)
+    ia, ib, ncc = ia[keep], ib[keep], ncc[keep]
+    good = ncc > 0.02
+    ia, ib, ncc, pred_t = ia[good], ib[good], ncc[good], pred_t[good]
+    lag, y = ib - ia, np.log(ncc)
+    base = np.zeros_like(y)
+    for k in np.unique(lag):
+        base[lag == k] = np.median(y[lag == k])
+    total = float(((y - base) ** 2).sum())
+
+    def share(pred_log):
+        r = y - pred_log
+        for k in np.unique(lag):                      # each model may keep its own per-lag level
+            r[lag == k] -= np.median(r[lag == k])
+        return round(1 - float((r ** 2).sum()) / total, 3)
+
+    u = slice_factors(len(zs), ia, ib, y - base)
+    return {"variance_explained_by_spacing": share(np.log(np.clip(pred_t, 1e-3, None))),
+            "variance_explained_by_slice_factors": share(base + u[ia] + u[ib]),
+            "slice_factor_sd": round(float(np.std(np.exp(u))), 4)}
 
 
 def across(z, lag_ncc, before=60):
@@ -91,6 +136,8 @@ def main(argv=None):
     lag_ncc = {(int(a), int(b)): float(v) for a, b, v in zip(pairs["z_a"], pairs["z_b"], pairs["ncc"])}
     ncc1 = np.array([lag_ncc.get((int(a), int(b)), np.nan) for a, b in zip(zs[:-1], zs[1:])])
 
+    pia, pib = np.searchsorted(zs, pairs["z_a"]), np.searchsorted(zs, pairs["z_b"])
+    qual = quality_model(zs, brk, pia, pib, pairs["ncc"].to_numpy(float), zc)
     r, nm = ratio[ok], ratio[ok] * vz
     dev = np.where(ok, ratio - 1, 0.0)
     out = {"slices": int(len(zs)), "voxel_z_nm": float(vz), "breaks": int(brk.sum()),
@@ -135,6 +182,7 @@ def main(argv=None):
     out["typical_stretch"] = stretch(int(mid[0] if mid else typical[0]))
     out["stretch_sd_ratio"] = {"median": round(float(np.nanmedian(sd)), 3), "p95": round(float(np.nanpercentile(sd, 95)), 3)}
 
+    out["slice_quality_model"] = qual
     out["breaks_cut"] = []
     for i in np.where(brk)[0]:
         z = int(zs[i + 1])
