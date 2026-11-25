@@ -11,6 +11,7 @@ adapting before they run again. General-purpose checks live in `tools/` instead.
 | [2026-10_qc_stitch_align/](2026-10_qc_stitch_align/) | Oct 2026 | stitching and alignment checks (solvers, layout changes, tile-level windows, seams), display-window and normalisation options, background mask, flat-field tests, CLAHE variants, spot-check stacks, a real-size synthetic dataset |
 | [2026-11_37i_processing/](2026-11_37i_processing/) | 12-14 Nov 2026 | checks made while processing the 37i volume: duplicate/label checks of re-exported files, a segment whose tile columns could not be matched, the junction after a long pause, slice-thickness (z-step) profiles |
 | [2026-11_contrast_matching/](2026-11_contrast_matching/) | 13 Nov 2026 | matching 37i's plain and CLAHE contrast to 35h's on neuropil (the basis of 37i's `intensity.window: median` settings) |
+| [2026-11_a1001_flicker/](2026-11_a1001_flicker/) | 24 Nov 2026 | where A1001's slice-to-slice flicker comes from: raw tile jumps, and what the display windows leave of them |
 | [_assembly/](_assembly/) | 19 Nov 2026 | the scripts used to put this folder together (see below) |
 
 Curtain and EsB work (destreak tests, the curtain "arches") is in a separate repository,
