@@ -28,7 +28,8 @@ SMALL = {
     "intensity": {"smooth_slices": 9, "balance_every": 3, "per_slice": False},
     "render": {"slab": 8, "chunk": [8, 32, 32], "shard_xy": 64, "num_scales": 1, "clahe": {"enabled": False}, "threads": 2},
 }
-SECTIONS = ("Dataset", "Processing settings", "Checks", "Slice quality flags", "Figures", "Files")
+SECTIONS = ("Dataset", "Processing settings", "Checks", "Slice quality flags", "Figures", "Files", "The run",
+            "Decisions for a person")
 
 
 def step(cfg, name, *args):
@@ -110,3 +111,72 @@ def test_page_before_anything_has_run(tmp_path):
     page = (tmp_path / "page.html").read_text()
     check_page(page, tmp_path)
     assert "--steps check" in page
+
+
+# ----- the run's outcome: where a chain stopped, the verdict, the decisions left to a person ---------------------
+
+SACCT = """101|COMPLETED|0:0|12|48
+102_0|COMPLETED|0:0|300|600
+102_1|COMPLETED|0:0|420|840
+103|FAILED|1:0|30|60
+104_[0-9]|CANCELLED|0:0|0|0
+105|CANCELLED by 0|0:0|0|0
+"""
+CHAIN = [("em-check", "101"), ("em-preview-run", "102"), ("em-preview-merge", "103"), ("em-stitch-run", "104"),
+         ("em-stitch-merge", "105")]
+
+
+def test_job_states_from_slurm_accounting():
+    jobs = qs.job_states(CHAIN, SACCT)
+    assert [j["state"] for j in jobs] == ["COMPLETED", "COMPLETED", "FAILED", "CANCELLED", "CANCELLED"]
+    assert jobs[1] == {"name": "em-preview-run", "id": "102", "state": "COMPLETED", "tasks": 2, "elapsed_s": 420, "cpu_s": 1440}
+    # an array with one failed task is failed; a job the accounting does not list is unknown
+    assert qs.job_states([("a", "7")], "7_0|COMPLETED|0:0|5|5\n7_1|TIMEOUT|0:0|9|9\n")[0]["state"] == "TIMEOUT"
+    assert qs.job_states([("a", "8")], "")[0]["state"] == "unknown"
+
+
+def test_page_says_where_the_chain_stopped_and_why(run):
+    tmp, cfg = run
+    logs = tmp / "out" / "work" / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / "em-preview-merge-103.out").write_text("2026-01-01 00:00:00 INFO start\n"
+                                                   "2026-01-01 00:00:01 ERROR pipeline.preview: 3 chunks missing: run preview\n")
+    chain = tmp / "chain.tsv"
+    chain.write_text("".join(f"{n}\t{i}\n" for n, i in CHAIN))
+    assert qs.read_chain(chain) == CHAIN
+    R = {"chain": CHAIN, "sacct": SACCT}
+    html, stopped = qs.run_section(qs.load_config(str(cfg), None, None, qs.step_defaults()), R)
+    assert stopped == ("The chain stopped at em-preview-merge (job 103, FAILED). 2 later jobs did not run: "
+                       "em-stitch-run, em-stitch-merge.")
+    assert "3 chunks missing: run preview" in html and "core-hours" in html
+    cls, word, detail = qs.verdict([("Stitch", "", "", qs.PASS, "")], stopped)
+    assert (cls, word) == ("stopped", "STOPPED") and "em-preview-merge" in detail
+    # a chain that ran through: no stop
+    ok = "".join(f"{i}|COMPLETED|0:0|10|20\n" for _, i in CHAIN)
+    assert qs.run_section(qs.load_config(str(cfg), None, None, qs.step_defaults()), {"chain": CHAIN, "sacct": ok})[1] is None
+
+
+def test_verdict_and_decisions():
+    rows = [("Stitch", "", "", qs.PASS, ""), ("Align", "", "", qs.PASS, ""), ("Flicker along z", "", "", qs.NOTRUN, "")]
+    cls, word, detail = qs.verdict(rows, None)
+    assert (cls, word) == ("pass", "PASSED") and "Every check that ran passed (2)" in detail and "Flicker along z" in detail
+    cls, word, detail = qs.verdict(rows + [("Tile jumps", "", "", qs.ATTN, "")], None)
+    assert (cls, word) == ("attention", "ATTENTION") and "1 check to look at: Tile jumps" in detail
+    html = qs.decisions_section(rows + [("Tile jumps", "", "", qs.ATTN, "")])
+    for words in ("Leaving out files or slices", "reference-tissue mask", "Judging the result", "Uploading", "Deleting"):
+        assert words in html
+    assert "Tile jumps" in html
+
+
+def test_page_with_the_chain_and_the_predicted_flicker(run):
+    """As the chain's last job writes it: the levels' predicted flicker measured and marked, the verdict on top."""
+    tmp, cfg = run
+    chain = tmp / "chain.tsv"
+    chain.write_text("em-check\t101\n")
+    out = tmp / "chain_page.html"
+    assert qs.main([str(cfg), "--out", str(out), "--chain", str(chain), "--predict-flicker"]) == 0
+    page = out.read_text()
+    check_page(page, tmp)
+    assert 'class="verdict ' in page and "raw - windows (zflicker_levels)" in page
+    assert (tmp / "out" / "qc" / "zflicker_levels" / "zflicker.json").exists()
+    assert "em-check" in page and "Slurm id" in page

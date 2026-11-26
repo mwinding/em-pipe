@@ -1,6 +1,7 @@
 """A one-page QC summary of a rendered volume: one self-contained HTML file.
 
-    python tools/qc_summary.py CONFIG [--volume NAME] [--out HTML] [--flicker DIR[:SERIES,...] ...] [--disk-size]
+    python tools/qc_summary.py CONFIG [--volume NAME] [--out HTML] [--flicker DIR[:SERIES,...] ...]
+                               [--predict-flicker] [--chain FILE] [--disk-size]
 
 CONFIG names the dataset and the volume (render.name; --volume picks another volume of the same
 output_dir, which then shows the volume's own render settings from its render.json). The page is put
@@ -21,7 +22,15 @@ means "look at this", not "the volume is bad".
                 measurement. A folder name alone is looked for in the qc folder. Without --flicker every
                 qc/zflicker*/ folder is listed, without a pass / attention mark (the page cannot tell
                 which series is this volume).
+--predict-flicker   first write the flicker the levels predict (tools/zflicker.py --config, no volume read) to
+                qc/zflicker_levels[_<intensity.output>]/ and mark its "raw - windows" series as this volume's
+--chain FILE    the job list run_pipeline.sh wrote for this chain (name, Slurm job id per line): the page then
+                starts with the run's outcome: every job's state from Slurm's accounting (sacct), and when a job
+                failed, which one, the last lines of its log, and that the jobs after it did not start
 --disk-size     also add up the volume's size on disk (walks every file: slow on large volumes)
+
+The page starts with one verdict: STOPPED (a job of the chain failed), ATTENTION (checks to look at, listed) or
+PASSED (every check that ran passed), and ends with the decisions that stay with a person.
 
 Writes <output_dir>/qc/summary_<volume>.html (or --out). Paths on the page are relative to the qc
 folder; images are embedded, there are no scripts and nothing is loaded from the network.
@@ -502,17 +511,184 @@ figcaption{color:var(--muted);font-size:.88rem;margin-top:4px}
 def build(cfg, R, disk=False):
     data_html, facts = dataset_section(cfg, R)
     rows = checks(cfg, R, facts)
+    run_html, stopped = run_section(cfg, R)
     counts = {s: sum(1 for r in rows if r[3] == s) for s in (PASS, ATTN, NOTRUN)}
     title = f"QC summary: {Path(R['volume']).name}"
-    head = (f"<h1>{esc(title)}</h1><p class=\"sub\">Dataset {esc(cfg.get('name') or '')}. Written {datetime.now():%Y-%m-%d %H:%M} by "
+    cls, word, detail = verdict(rows, stopped)
+    head = (f"<h1>{esc(title)}</h1><p class=\"verdict {cls}\"><b>{word}.</b> {detail}</p>"
+            f"<p class=\"sub\">Dataset {esc(cfg.get('name') or '')}. Written {datetime.now():%Y-%m-%d %H:%M} by "
             f"<code>tools/qc_summary.py</code> from the run's existing outputs. Checks: {counts[PASS]} pass, {counts[ATTN]} attention, "
             f"{counts[NOTRUN]} not run. The limits are working values stated in the table, not validated standards: "
             "&ldquo;attention&rdquo; means the numbers are worth looking at.</p>")
-    parts = [("Dataset", data_html), ("Processing settings", settings_section(cfg, R)), ("Checks", checks_section(rows)),
-             ("Slice quality flags", quality_section(R)), ("Figures", figures_section(cfg, R)), ("Files", files_section(cfg, R, disk))]
+    parts = [("Dataset", data_html + before_run_section(R)), ("Processing settings", settings_section(cfg, R)),
+             ("Checks", checks_section(rows)), ("Slice quality flags", quality_section(R)), ("Figures", figures_section(cfg, R)),
+             ("Files", files_section(cfg, R, disk)), ("The run", run_html), ("Decisions for a person", decisions_section(rows))]
     body = "".join(f"<section><h2>{esc(t)}</h2>{h}</section>" for t, h in parts)
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{esc(title)}</title><style>{CSS}</style></head><body><div class=\"page\"><header>{head}</header>{body}</div></body></html>")
+            f"<title>{esc(title)}</title><style>{CSS}{VERDICT_CSS}</style></head><body><div class=\"page\"><header>{head}</header>{body}</div></body></html>")
+
+
+VERDICT_CSS = (".verdict{padding:10px 14px;border-radius:6px;border:2px solid var(--rule);margin:10px 0;color:var(--ink)}"
+               ".verdict.pass{background:var(--ok-soft);border-color:var(--ok)}"
+               ".verdict.attention{background:var(--warn-soft);border-color:var(--warn)}"
+               ".verdict.stopped{background:var(--warn-soft);border-color:#b3261e}"
+               "pre{white-space:pre-wrap;font-size:12px;background:var(--none-soft);padding:8px;border-radius:4px}")
+
+
+BAD_STATES = ("FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "BOOT_FAIL", "DEADLINE", "PREEMPTED")
+DECISIONS = (
+    ("Leaving out files or slices", "Nothing is excluded automatically. The raw data check and the slice quality flags above say "
+     "what to look at; exclusions are stated in the config (check.known_issues, check.exclude_slices)."),
+    ("Where the contrast standard is measured", "By default in all reference tissue of every sampled slice. If part of the volume "
+     "should not count (tissue other volumes do not have), set refstats.region and run refstats and intensity again."),
+    ("The reference-tissue mask for this stain", "The mask classifier was trained on our stain. Look at refmask.png (Figures): if it "
+     "marks the wrong tissue, new labels and a retrained model are needed (tools/refmask_train.py)."),
+    ("Judging the result", "This page reports numbers against working limits; whether the volume is good is judged by looking at "
+     "it (the view link under Files) and at the figures."),
+    ("Uploading to a bucket", "Not part of this run: an upload is a config of its own with its destination."),
+    ("Deleting volumes or work folders", "Nothing is deleted by the pipeline; superseded volumes stay until a person removes them."),
+)
+
+
+def read_chain(path):
+    """[(job name, job id)] from the file run_pipeline.sh wrote; None when there is none."""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    rows = [line.split("\t") for line in path.read_text().splitlines() if line.strip()]
+    return [(r[0], r[1]) for r in rows if len(r) >= 2]
+
+
+def sacct_text(ids):
+    """Slurm's accounting lines for the jobs (one per job or array task), '' when sacct cannot be asked."""
+    try:
+        r = subprocess.run(["sacct", "-n", "-P", "-X", "-j", ",".join(ids), "--format=JobID,State,ExitCode,ElapsedRaw,CPUTimeRAW"],
+                           capture_output=True, text=True, timeout=120)
+        return r.stdout if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def job_states(chain, text):
+    """Per job of the chain: {name, id, state, tasks, elapsed_s (longest task), cpu_s (all tasks)} from sacct's
+    lines. An array's state is its worst task's; a job sacct does not list is 'unknown'."""
+    per = {}
+    for line in text.splitlines():
+        f = line.split("|")
+        if len(f) < 5:
+            continue
+        base = f[0].split("_")[0].split(".")[0]
+        d = per.setdefault(base, {"states": [], "elapsed": 0, "cpu": 0})
+        d["states"].append(f[1].split()[0] if f[1].strip() else "unknown")
+        d["elapsed"] = max(d["elapsed"], int(f[3] or 0))
+        d["cpu"] += int(f[4] or 0)
+    order = (*BAD_STATES, "CANCELLED", "RUNNING", "PENDING", "COMPLETED")
+    out = []
+    for name, jid in chain:
+        d = per.get(jid)
+        if d is None:
+            out.append({"name": name, "id": jid, "state": "unknown", "tasks": 0, "elapsed_s": 0, "cpu_s": 0})
+            continue
+        state = min(d["states"], key=lambda x: order.index(x) if x in order else len(order) - 1.5)
+        out.append({"name": name, "id": jid, "state": state, "tasks": len(d["states"]), "elapsed_s": d["elapsed"], "cpu_s": d["cpu"]})
+    return out
+
+
+def log_tail(logs, name, jid, lines=4):
+    """The last ERROR lines (else the last lines) of a job's log files in work/logs, as text."""
+    found = sorted(Path(logs).glob(f"{name}-{jid}*.out")) if Path(logs).is_dir() else []
+    out = []
+    for f in found:
+        try:
+            text = f.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        err = [t for t in text if " ERROR " in t or "Error" in t or "error:" in t.lower()]
+        keep = (err or [t for t in text if t.strip()])[-lines:]
+        if err or len(found) == 1:
+            out += [f"{f.name}: {t.strip()[:600]}" for t in keep]
+        if len(out) >= 3 * lines:
+            break
+    return out
+
+
+def run_section(cfg, R):
+    """(html, stopped: None or a sentence) for the chain this page ends."""
+    chain = R.get("chain")
+    if chain is None:
+        return ("<p>This page was written outside a job chain (no <code>--chain</code>): the jobs' states are not listed.</p>", None)
+    if not chain:
+        return ("<p>The chain held no job before this page.</p>", None)
+    jobs = job_states(chain, R.get("sacct") if R.get("sacct") is not None else sacct_text([j for _, j in chain]))
+    bad = next((j for j in jobs if j["state"] in BAD_STATES), None)
+    stopped = None
+    notes = ""
+    if bad is not None:
+        after = [j["name"] for j in jobs[jobs.index(bad) + 1:] if j["state"] != "COMPLETED"]
+        tail = log_tail(Path(cfg["output_dir"]) / "work" / "logs", bad["name"], bad["id"])
+        stopped = (f"The chain stopped at {bad['name']} (job {bad['id']}, {bad['state']})."
+                   + (f" {len(after)} later jobs did not run: {', '.join(after[:12])}{' ...' if len(after) > 12 else ''}." if after else ""))
+        notes = ("<p><b>" + esc(stopped) + "</b></p>"
+                 + ("<p>From its log:</p><pre>" + esc("\n".join(tail)) + "</pre>" if tail else
+                    f"<p>Its log: <code>work/logs/{esc(bad['name'])}-{esc(bad['id'])}*.out</code></p>"))
+    elif any(j["state"] == "unknown" for j in jobs):
+        notes = "<p>Slurm's accounting gave no state for some jobs (sacct not available here, or not yet written).</p>"
+    hours = sum(j["cpu_s"] for j in jobs) / 3600.0
+    rows = [[esc(j["name"]), esc(j["id"]), esc(j["state"]), fmt(j["tasks"]) if j["tasks"] else "",
+             f"{j['elapsed_s'] / 60:.1f}" if j["tasks"] else "", f"{j['cpu_s'] / 3600:.2f}" if j["tasks"] else ""] for j in jobs]
+    return (notes + f"<p>{len(jobs)} jobs before this page; {hours:,.1f} core-hours in all (allocated cores x run time).</p>"
+            + table(["job", "Slurm id", "state", "tasks", "longest task (min)", "core-hours"], rows), stopped)
+
+
+def before_run_section(R):
+    """What the em-pipe command found before it submitted the chain (qc/em_pipe_detected.json), as html; ''
+    when the run was not started by it."""
+    d = read_json(R["qc"] / "em_pipe_detected.json")
+    if not d:
+        return ""
+    rows = [["Raw files", esc(d.get("raw", ""))], ["EsB files", esc(d.get("esb", ""))], ["Curtain direction", esc(d.get("direction", ""))]]
+    return "<h3>Found before the run (em-pipe)</h3>" + table(["", ""], [r for r in rows if r[1]])
+
+
+def verdict(rows, stopped):
+    """(css class, headline, detail html) of the page's one-line outcome."""
+    attn = [r[0] for r in rows if r[3] == ATTN]
+    notrun = [r[0] for r in rows if r[3] == NOTRUN]
+    npass = sum(1 for r in rows if r[3] == PASS)
+    if stopped:
+        return "stopped", "STOPPED", esc(stopped) + " See &ldquo;The run&rdquo; below for its log; the checks listed are those of the steps that did run."
+    if attn:
+        return "attention", "ATTENTION", (f"{len(attn)} check{'s' if len(attn) != 1 else ''} to look at: " + esc("; ".join(attn))
+                                          + f". {npass} passed" + (f", {len(notrun)} not run." if notrun else "."))
+    return "pass", "PASSED", (f"Every check that ran passed ({npass})"
+                              + (f"; not run: {esc('; '.join(notrun))}." if notrun else "."))
+
+
+def decisions_section(rows):
+    items = "".join(f"<li><b>{esc(t)}.</b> {esc(d)}</li>" for t, d in DECISIONS)
+    attn = [r[0] for r in rows if r[3] == ATTN]
+    lead = ("<p>Checks marked attention, to be looked at first: " + esc("; ".join(attn)) + ".</p>") if attn else ""
+    return lead + "<p>The pipeline does not take these; each is stated in the config or done by a person.</p><ul>" + items + "</ul>"
+
+
+def predict_flicker(cfg, config_path, qc):
+    """Run tools/zflicker.py on the levels (no volume read); (folder, ['raw - windows']) or None when there are
+    no levels yet."""
+    from pipeline import intensity
+    if not intensity.levels_path(cfg).exists() or not step_path(cfg, "preview", "stats.csv").exists():
+        return None
+    out = (cfg.get("intensity") or {}).get("output")
+    folder = qc / ("zflicker_levels" + (f"_{out}" if out else ""))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("zflicker", ROOT / "tools" / "zflicker.py")
+    zf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(zf)
+    try:
+        zf.main(["--out", str(folder), "--config", str(config_path)])
+    except Exception as e:   # the page is still written
+        print(f"qc_summary: the predicted flicker could not be measured ({type(e).__name__}: {e})")
+        return None
+    return folder, ["raw - windows"]
 
 
 def flicker_arg(text, qc):
@@ -529,6 +705,9 @@ def main(argv=None):
     p.add_argument("--out", help="HTML path (default <output_dir>/qc/summary_<volume>.html)")
     p.add_argument("--flicker", action="append", default=[], metavar="DIR[:SERIES,...]",
                    help="zflicker output folder (and series) of this volume; repeatable")
+    p.add_argument("--predict-flicker", action="store_true",
+                   help="first measure the flicker the levels predict (tools/zflicker.py --config) and mark it as this volume's")
+    p.add_argument("--chain", help="the chain's job list written by run_pipeline.sh: the page starts with the run's outcome")
     p.add_argument("--disk-size", action="store_true")
     p.add_argument("--raw-dir")
     p.add_argument("--output-dir")
@@ -541,6 +720,12 @@ def main(argv=None):
     R = {"qc": qc, "volume": volume, "stem": stem, "own_config": Path(volume).name == Path(own).name, "commit": commit(),
          "render": read_json(step_path(cfg, "render", stem, "render.json")), "flicker": [flicker_arg(f, qc) for f in a.flicker],
          "plan": read_csv(step_path(cfg, "render", stem, "tiles.csv"), usecols=["z"])}
+    if a.chain:
+        R["chain"] = read_chain(a.chain) or []
+    if a.predict_flicker and not R["flicker"] and R["own_config"]:
+        got = predict_flicker(cfg, a.config, qc)
+        if got:
+            R["flicker"] = [got]
     out = Path(a.out) if a.out else qc / f"summary_{stem}.html"
     page = build(cfg, R, a.disk_size)
     atomic_write(out, lambda t: Path(t).write_text(page, encoding="utf-8"))

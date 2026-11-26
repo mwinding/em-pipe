@@ -13,7 +13,8 @@ from pipeline import config
 
 ROOT = Path(__file__).resolve().parents[1]
 CHAIN = ["em-check", "em-preview-run", "em-preview-merge", "em-stitch-run", "em-stitch-merge", "em-align-run",
-         "em-align-solve", "em-intensity", "em-render-init", "em-render-run", "em-pyramid-s1", "em-pyramid-s2", "em-export"]
+         "em-align-solve", "em-intensity", "em-render-init", "em-render-run", "em-pyramid-s1", "em-pyramid-s2", "em-export",
+         "em-quality-run", "em-quality-merge", "em-qc-summary"]
 FAKE_SBATCH = """#!/bin/bash
 # Records its arguments (one call per line) and prints a job id like sbatch --parsable.
 echo "$*" >> "$SBATCH_LOG"
@@ -77,9 +78,17 @@ def test_submits_the_chain(tmp_path, env):
     assert all(j["parsable"] is True for j in jobs)
     # Each job waits for the previous one (ids from the fake sbatch, cluster suffix stripped).
     assert "dependency" not in jobs[0]
-    for k, j in enumerate(jobs[1:], start=1):
+    for k, j in enumerate(jobs[1:-1], start=1):
         assert j["dependency"] == f"afterok:{1000 + k}" and j["kill-on-invalid-dep"] == "yes"
-    assert f"em-export: job {1000 + len(CHAIN)}" in p.stdout
+    assert f"em-export: job {1000 + CHAIN.index('em-export') + 1}" in p.stdout
+    # The summary is the last job: it waits for every job before it, however they end, and is given their list.
+    last = jobs[-1]
+    assert last["dependency"] == "afterany:" + ":".join(str(1000 + k) for k in range(1, len(CHAIN)))
+    assert "kill-on-invalid-dep" not in last and last["script"] == "slurm/qc_summary.sbatch"
+    chain = Path(last["args"][last["args"].index("--chain") + 1])
+    assert chain.parent == tmp_path / "out" / "work" / "logs"
+    assert [line.split("\t") for line in chain.read_text().splitlines()] == [
+        [name, str(1000 + k)] for k, name in enumerate(CHAIN[:-1], start=1)]
 
     by_name = {j["job-name"]: j for j in jobs}
     cfg_abs = str(cfg.resolve())
@@ -107,6 +116,7 @@ def test_dry_run_prints_without_submitting(tmp_path, env):
     assert len(lines) == len(CHAIN) and all(line.startswith("sbatch --parsable ") for line in lines)
     assert [shlex.split(line)[2] for line in lines] == [f"--job-name={name}" for name in CHAIN]
     assert "--dependency=afterok:<em-check>" in shlex.split(lines[1])
+    assert any(w.startswith("--dependency=afterany:<em-check>:<em-preview-run>:") for w in shlex.split(lines[-1]))
 
 
 def test_steps_from_and_zcorrect(tmp_path, env):
@@ -116,6 +126,16 @@ def test_steps_from_and_zcorrect(tmp_path, env):
     assert [j["job-name"] for j in jobs] == ["em-align-run", "em-align-solve", "em-render-init", "em-render-run"]
     assert "dependency" not in jobs[0] and jobs[2]["dependency"] == "afterok:<em-align-solve>"
     assert names(run(cfg, env, "--from", "intensity", "--dry-run").stdout) == CHAIN[CHAIN.index("em-intensity"):]
+    assert names(run(cfg, env, "--to", "intensity", "--dry-run").stdout) == CHAIN[:CHAIN.index("em-intensity") + 1]
+    assert names(run(cfg, env, "--from", "align", "--to", "intensity", "--dry-run").stdout) == [
+        "em-align-run", "em-align-solve", "em-intensity"]
+    assert "comes after" in run(cfg, env, "--from", "render", "--to", "align", "--dry-run", check=False).stderr
+    # the summary alone: after the given jobs, and nothing waits for it
+    jobs = calls(run(cfg, env, "--steps", "render,summary", "--after", "77", "--summary-after", "88:99",
+                     "--dry-run").stdout.splitlines())
+    assert [j["job-name"] for j in jobs] == ["em-render-init", "em-render-run", "em-qc-summary"]
+    assert jobs[0]["dependency"] == "afterok:77"
+    assert jobs[2]["dependency"] == "afterany:<em-render-init>:<em-render-run>:88:99"
     cfg = write_cfg(tmp_path, zcorrect={"enabled": True})
     assert names(run(cfg, env, "--from", "intensity", "--dry-run").stdout)[:4] == [
         "em-intensity", "em-zcorrect-run", "em-zcorrect-solve", "em-render-init"]
@@ -208,12 +228,16 @@ def test_precomputed_and_upload_steps_when_enabled(tmp_path, env):
     cfg = write_cfg(tmp_path, precomputed={"enabled": True}, upload={"enabled": True, "destination": "gs://bucket/prefix"},
                     slurm_extra={"precomputed": {"array": 5}, "upload": {"array": 3, "time": "24:00:00"}})
     jobs = calls(run(cfg, env, "--from", "export", "--dry-run").stdout.splitlines())
-    assert [j["job-name"] for j in jobs] == ["em-export", "em-precomputed-init", "em-precomputed-run",
+    assert [j["job-name"] for j in jobs] == ["em-export", "em-quality-run", "em-quality-merge", "em-qc-summary",
+                                             "em-precomputed-init", "em-precomputed-run",
                                              "em-precomputed-verify", "em-upload-run", "em-upload-finish"]
+    jobs = [j for j in jobs if "quality" not in j["job-name"] and j["job-name"] != "em-qc-summary"]
     assert jobs[2]["array"] == "0-4" and jobs[2]["args"][1:] == ["run"] and jobs[4]["array"] == "0-2"
     assert jobs[5]["args"][1:] == ["finish"] and jobs[5]["dependency"] == "afterok:<em-upload-run>"
+    assert jobs[1]["dependency"] == "afterok:<em-quality-merge>"     # not the summary: nothing waits for it
     p = run(write_cfg(tmp_path), env, "--from", "export", "--dry-run")
-    assert names(p.stdout) == ["em-export"] and "precomputed.enabled is false" in p.stderr
+    assert names(p.stdout) == ["em-export", "em-quality-run", "em-quality-merge", "em-qc-summary"]
+    assert "precomputed.enabled is false" in p.stderr
 
 
 def test_shading_and_overlaps_steps_when_enabled(tmp_path, env):
