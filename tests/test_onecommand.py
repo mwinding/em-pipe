@@ -156,3 +156,15 @@ def test_the_preset_is_valid_and_lab_neutral():
     assert not {"raw_dir", "output_dir", "name"} & set(user)          # settings only: no paths, no names
     assert "zcorrect" not in user and user["slurm"] == {"auto": True}   # the removed step is not named any more
     assert (ROOT / "em-pipe").stat().st_mode & 0o111                    # the entry script is executable
+
+
+def test_image_files_that_would_be_left_out_stop_the_run(tmp_path, raw, sbatch, capsys):
+    """A stack whose name the file pattern does not match is data left out: stated, never silent."""
+    import numpy as np
+    synth.write_imagej(raw / "M09_D24D25_tile0-0.tif", np.zeros((2, 8, 8), np.uint16), ["a", "b"])
+    out = tmp_path / "out"
+    assert run(raw, out, "--dry-run") == onecommand.STOP
+    text = capsys.readouterr().out
+    assert "1 image files" in text and "M09_D24D25_tile0-0.tif" in text and "--skip-unmatched" in text
+    assert run(raw, out, "--dry-run", "--skip-unmatched") == 0
+    assert "left out, as stated with --skip-unmatched" in capsys.readouterr().out

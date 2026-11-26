@@ -5,7 +5,8 @@ with this dataset's paths and what was detected in its files, checks it, and sub
 the plain volume and for the CLAHE volume. It stops before anything is submitted, with a message that names
 what a person has to decide, when
 
-- raw_dir holds no files matching the raw file pattern,
+- raw_dir holds no files matching the raw file pattern, or image files that do not match it (they would be
+  left out; ``--skip-unmatched`` states that they are not part of the volume),
 - EsB files are missing or do not match their raw files (decurtaining needs every one; ``--no-esb`` states
   that this run is without decurtaining),
 - the curtain direction is conflicting or at an angle (``--direction`` states it),
@@ -13,7 +14,7 @@ what a person has to decide, when
 - OUTPUT_DIR already holds another config.yaml.
 
     em-pipe RAW_DIR OUTPUT_DIR [--name N] [--no-clahe] [--no-esb] [--direction vertical|horizontal]
-                               [--to STEP] [--dry-run]
+                               [--skip-unmatched] [--to STEP] [--dry-run]
 
 --dry-run prints the config, the detected facts, the chosen Slurm resources and the sbatch commands, and
 writes and submits nothing.
@@ -161,6 +162,8 @@ def main(argv=None):
     p.add_argument("--no-esb", action="store_true", help="run without decurtaining (stated in the config)")
     p.add_argument("--direction", choices=["vertical", "horizontal"],
                    help="curtain direction, as a person's statement (not measured)")
+    p.add_argument("--skip-unmatched", action="store_true",
+                   help="image files that do not match the raw file pattern are not part of the volume (stated)")
     p.add_argument("--preset", default="standard", help="preset name in configs/presets, or a YAML path")
     p.add_argument("--to", metavar="STEP", help="submit the chain only up to and including this step (e.g. intensity, to "
                    "look at the levels before anything is rendered); continue with ./run_pipeline.sh CONFIG --from STEP")
@@ -190,6 +193,17 @@ def main(argv=None):
         say(f"em-pipe: no file in {raw_dir} matches the raw file pattern (e.g. M10_D06_tile1-1.tif){eg}. For other "
             "names set raw.file_pattern in a config of your own (configs/example.yaml)")
         return 1
+    # Image stacks that are not read are data left out: that is a person's decision, never a silent one.
+    stray = [f for f in ignored if f.lower().endswith((".tif", ".tiff")) and not esb._TOKEN.search(os.path.basename(f))]
+    if stray:
+        say(f"{len(stray)} image files in {raw_dir} do not match the raw file pattern and would be left out, e.g. "
+            f"{', '.join(stray[:4])}")
+        if not a.skip_unmatched:
+            say("If they are not part of the volume (e.g. joined copies of the per-day files), say so with "
+                "--skip-unmatched. If they are, they need a raw.file_pattern that matches them: write a config of "
+                "your own (configs/example.yaml) and use ./run_pipeline.sh.\nSTOPPED: nothing was written or submitted.")
+            return STOP
+        say("  left out, as stated with --skip-unmatched")
     shapes, unreadable = read_shapes(raw_dir, files)
     if not shapes:
         say(f"em-pipe: none of the {len(files)} raw files has a readable TIFF header, e.g. {files[0]}: "

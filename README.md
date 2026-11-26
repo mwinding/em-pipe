@@ -33,6 +33,9 @@ chain for the plain volume and for a second volume with CLAHE. It ends with a QC
   is without decurtaining; nothing falls back silently.
 - **the curtain direction is conflicting**, or the curtains run at an angle. The direction is measured on
   sampled windows (`pipeline/curtains.py`); `--direction vertical|horizontal` states it instead.
+- **image files in the raw folder do not match the raw file pattern** (they would be left out):
+  `--skip-unmatched` states that they are not part of the volume; otherwise they need a config of your own
+  with a `raw.file_pattern` that matches them.
 - **the config fails its checks** (`pipeline/preflight.py`: unknown or misspelled keys, settings that do not
   work together, a raw folder without matching files).
 
