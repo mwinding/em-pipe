@@ -39,8 +39,10 @@ JOBS = {
     "precomputed_init": (2, 8, None), "precomputed": (4, 16, 40), "precomputed_verify": (2, 16, None),
     "upload": (4, 8, 16), "upload_finish": (2, 8, None),
 }
-# Expected task-seconds of a whole job per 10^9 raw pixels read (from the accounting, rounded up)
-PER_GPX = {"preview": 11, "refmask": 8, "stitch": 27, "align": 31, "overlaps": 10, "zrelations": 4,
+# Expected task-seconds of a whole job per 10^9 raw pixels read (from the accounting, rounded up). stitch: its
+# tasks are uneven (slices between two samples are stitched too where tiles move), the longest took 3 x the
+# mean, so its rate is set from the longest task, not the mean
+PER_GPX = {"preview": 11, "refmask": 8, "stitch": 60, "align": 31, "overlaps": 10, "zrelations": 4,
            "slice_quality": 6}
 # ... per output plane of a 700 Mpx canvas
 PER_PLANE = {"render": 18, "pyramid": 4, "precomputed": 70, "upload": 26}

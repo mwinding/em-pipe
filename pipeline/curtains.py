@@ -41,7 +41,10 @@ sampled, and without any EsB file the direction is not measured: destreak.direct
 states, and the message says so.
 
 Checked on real data (26 Nov 2026, 64 windows each): three volumes with vertical curtains gave vertical
-(61, 56 and 45 of 64 windows, none horizontal), and the same windows transposed gave horizontal.
+(61, 56 and 45 of 64 windows, none horizontal), and the same windows transposed gave horizontal. "Unclear"
+has only been shown on synthetic windows without curtains: no stretch of those volumes is free of them by this
+measure (the four files a coarser measure, tools/slice_quality.py, rates as least curtained still gave vertical
+in 44 of 64 windows, at 0.8 % of the contrast; whether those are weak curtains was not checked by eye).
 
     python -m pipeline.curtains RAW_DIR [--reference-to PATTERN] [--files N] [--transpose]
     python -m pipeline.curtains --config CONFIG [...]          raw_dir, file pattern and reference from a config
@@ -240,7 +243,8 @@ def decide(windows, configured="vertical", s=SETTINGS):
     amp = {v: [w["amplitude"] for w in windows if w["vote"] == v] for v in ("vertical", "horizontal", "angle")}
     med = lambda v: f"{100 * float(np.median(amp[v])):.2f} % of the contrast" if amp[v] else "-"
     why = {k: sum(w.get("why") == k for w in windows) for k in ("not in both slices", "EsB shows it too")}
-    notes = [f"{v} with stripes {'that are ' if k.startswith('not') else 'that '}{k}" for k, v in why.items() if v]
+    words = {"not in both slices": "with stripes that are not in both slices", "EsB shows it too": "with stripes that EsB shows too"}
+    notes = [f"{v} {words[k]}" for k, v in why.items() if v]
     counts = (f"{c['vertical']} vertical, {c['horizontal']} horizontal, {c['angle']} at an angle, {c['none']} none "
               f"of {n} windows" + (f" (not counted: {'; '.join(notes)})" if notes else ""))
     out = {"counts": c, "windows": n, "needed": need, "not_counted": why}
