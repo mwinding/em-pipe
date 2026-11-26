@@ -15,9 +15,10 @@ key
 qc/
 
 # site-specific: dataset configs (paths on your storage) and cluster settings stay outside the
-# repository; configs/example.yaml and slurm/site.example.sh are the templates
+# repository; configs/example.yaml, configs/presets/ (lab-neutral settings, no paths) and slurm/site.example.sh are the templates
 configs/*
 !configs/example.yaml
+!configs/presets/
 slurm/site.sh
 
 # local, private settings for dev/ scripts and the privacy check: never commit

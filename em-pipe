@@ -1,0 +1,18 @@
+#!/bin/bash
+# The one-command run: the whole pipeline with the standard settings, from a raw folder to the volumes.
+#
+#   ./em-pipe RAW_DIR OUTPUT_DIR [--name N] [--no-clahe] [--no-esb] [--direction vertical|horizontal] [--dry-run]
+#
+# It writes OUTPUT_DIR/config.yaml (the preset configs/presets/standard.yaml plus this dataset's paths and what
+# was detected in its raw files), checks it, and submits the Slurm job chain for the plain volume and the
+# CLAHE volume. Before anything is submitted it stops with a message when EsB files are missing, the curtain
+# direction is conflicting, or the config fails its checks. --dry-run shows everything and changes nothing.
+# See `./em-pipe --help` and the README's Quick start. Set EM_PIPE_SKIP_ENV=1 when the environment is active.
+set -eo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+export EM_PIPE_ROOT=$ROOT
+if [ "${EM_PIPE_SKIP_ENV:-0}" != 1 ]; then
+  source "$ROOT/slurm/env.sh"
+  export EM_PIPE_SKIP_ENV=1    # run_pipeline.sh, called below, need not set it up again
+fi
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" exec python -m pipeline.onecommand "$@"

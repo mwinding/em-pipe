@@ -1,0 +1,87 @@
+# em-pipe preset "standard": the settings our volumes are currently made with, for use as a base:
+#
+#   base: /path/to/em-pipe/configs/presets/standard.yaml
+#   raw_dir: ...
+#   output_dir: ...
+#
+# The `em-pipe RAW_DIR OUTPUT_DIR` command writes such a config (README, Quick start). These are not the
+# code defaults (configs/example.yaml lists those): the preset carries the choices made on our volumes,
+# each with the reason in the README section it names. Dataset-specific choices are not here and stay a
+# person's: excluded files and slices (check.known_issues, check.exclude_slices), the part of the volume
+# the contrast standard is measured in (refstats.region), rotation (render.rotate_deg), alignment windows,
+# uploads.
+
+# Tile brightness: flat-field per tile position, relations between overlapping tiles measured on the raw
+# tiles in every slice, smooth within-tile shapes from 8 x 8 patches (README: the step table).
+shading:
+  enabled: true
+overlaps:
+  enabled: true
+  patch_grid: 8
+patchgrid:
+  enabled: true
+  every: 20
+  smooth: 1.0
+  prior: 0.02
+  gain_power: 2.0
+  gain_cnr_min: 8.0
+
+stitch:
+  coarse_factor: 4
+
+# Contrast: the standard of README "Consistent contrast across volumes": the neuropil's median at grey 150
+# and its 5th-95th percentile width at 130 greys, followed along z per slice (adaptive). Tiles and slices
+# balanced in one solve (README "Flicker along z"): balance_z_distance 1, per_slice off.
+refmask:
+  enabled: true
+refstats:
+  enabled: true
+  every: 32
+intensity:
+  window: reference
+  balance_source: overlaps
+  balance_smooth_slices: 1
+  balance_z_distance: 1
+  per_slice: false
+  reference:
+    median: 150
+    contrast: 130
+    measure: p5_p95
+    per: slice
+
+# Curtains: the stripe part of each tile swapped from the EsB detector's image of the same scan (8 wavelet
+# levels, stripes at least 256 px long), broad curtain bands up to 768 px wide matched to EsB, strong
+# curtain cores filled from EsB. mode: reference makes a config without the EsB files' pattern
+# (reference_from / reference_to) an error instead of a silent fall-back to the filter; the em-pipe command
+# finds the pattern and checks that every raw file has its EsB file. direction: as measured by
+# pipeline/curtains.py (the em-pipe command sets it); vertical if it could not be measured.
+destreak:
+  enabled: true
+  mode: reference
+  direction: vertical
+  levels: 8
+  stripe_px: 256
+  core_threshold: 2.0
+  band_match: true
+  band_zone: 1.0
+  band_zone_px: 256
+  band_max_px: 768
+
+# Slice-thickness correction was tested and is not used (dev/2026-11_zstep_correction).
+zcorrect:
+  enabled: false
+
+# Tiles joined with a sharp cut. The plain volume has no CLAHE; the CLAHE volume is a second config that
+# only switches it on (clip limit 1.5, 256 px tiles).
+render:
+  blend: cut
+  downsample: 1
+  clahe:
+    enabled: false
+    clip_limit: 1.5
+    tile_px: 256
+
+# Job sizes from the dataset's size (pipeline/resources.py, the config's detected: section); a job's
+# explicit settings here or in the dataset config win.
+slurm:
+  auto: true
