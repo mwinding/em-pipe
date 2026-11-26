@@ -10,6 +10,7 @@ Measured with `tools/zflicker.py` (whole run, the run's config for raw tiles and
 | `scripts/tile_jump_mean_median.py` | From a `zflicker.py --config` CSV: does the flicker left after the windows follow the mean minus the median of the tiles' jumps, the raw common jump, the windows' common shift, or the middle tile's jump? |
 | `scripts/levels_terms.py` | Recomputes the run's levels with em-pipe's functions, keeping their terms apart (common window, balance offset, per-slice jump), and shows which carries the left-over flicker. |
 | `scripts/zrelations_check.py` | The zrelations step's slice-to-slice relations (each tile against itself in the next slice) on the corrected values u, against the same on the raw thumbnails and against the preview t_p50's change, in greys of the windows. |
+| `scripts/breaks_flicker.py` | Two or more level sets of one run compared before rendering: the predicted flicker (as `zflicker.py --config`) and seam steps (from intensity's in-slice relations), over the whole run and in windows around every block boundary (segment changes, tile layout changes, seams), with the step in the slices' tissue grey across each. |
 
 ## Findings so far
 
@@ -102,3 +103,23 @@ Measured with `tools/zflicker.py` (whole run, the run's config for raw tiles and
 
   Both remove the stripes in x-z and y-z views; the joint solve leaves about a tenth of what slice_level leaves,
   without a correction after the fact, and holds the neuropil standard tighter (149.3-151.2 vs 143.6-152.9).
+
+## 35h: the joint solve on 17,689 slices (26 Nov 2026)
+
+`intensity.balance_z_distance: 1` on all of 35h (6 segments, 3x3 then 2x2 tiles, 17 blocks: 5 segment changes, all
+also tile size changes, one from 3x3 to 2x2 tiles, and 11 seams), other settings as 35h's current levels (tissue 1-99 %
+percentile windows, overlaps + patchgrid balance).
+
+- Scaling: zrelations 87,117 relations, 52 min wall over a 30-task array (3x3 chunks ~1.5 min per 100 slices, 2x2
+  chunks of the larger tiles ~6-7 min), at most 2.1 GB per task; merge 75 s; intensity (joint solve per block, up to
+  12,636 tile slices in one) 41 s and 0.8 GB.
+- Predicted (`breaks_flicker.py`): flicker shared by the slice 2.89 -> 0.037 greys, between tiles 0.175 -> 0.093, seam
+  steps unchanged (median 1.35 greys, p95 4.8); around every break 0.03-0.07 (was 1.6-3.7).
+- Measured on a 512-slice slab across the 3x3 -> 2x2 change (full resolution, 36 boxes): 1.84 -> 0.081 greys.
+- Steps at breaks: each block's common scale is anchored to the raw scale only by the weak prior, so blocks sit on
+  scales hundreds of raw units apart; with window: percentile (or median) the common window is taken on that same
+  scale, so the anchor cancels and the steps are as with the per-slice balance (predicted: largest -6.3 vs -4.5 greys
+  at one segment change, others the same or smaller; rendered slab: +10.2 vs +10.0 at the 3x3 -> 2x2 change, from the
+  per-block windows). With window: reference the neuropil statistics (refstats) must be measured on the joint scale:
+  statistics from the per-slice balance, reused, place each block's neuropil off by the difference between the two
+  scales.
