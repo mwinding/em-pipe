@@ -205,7 +205,7 @@ def test_precomputed_and_upload_steps_when_enabled(tmp_path, env):
     """After export: the precomputed export (init, array run, verify), then the upload (array run,
     finish), each only when enabled."""
     env, log = env
-    cfg = write_cfg(tmp_path, precomputed={"enabled": True}, upload={"enabled": True, "destination": "gs://b/x"},
+    cfg = write_cfg(tmp_path, precomputed={"enabled": True}, upload={"enabled": True, "destination": "gs://bucket/prefix"},
                     slurm_extra={"precomputed": {"array": 5}, "upload": {"array": 3, "time": "24:00:00"}})
     jobs = calls(run(cfg, env, "--from", "export", "--dry-run").stdout.splitlines())
     assert [j["job-name"] for j in jobs] == ["em-export", "em-precomputed-init", "em-precomputed-run",
