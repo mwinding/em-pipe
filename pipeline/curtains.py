@@ -64,6 +64,7 @@ import numpy as np
 from scipy import ndimage
 
 from .imagej_tiff import ImageJStack
+from .stats import robust_sd
 
 log = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ def peak(profile, s=SETTINGS):
     """(index, angle, z, power above the baseline) of the sharpest peak of an angle profile; z in robust
     standard deviations of the profile above its baseline."""
     above = _above(profile, s)
-    sd = 1.4826 * np.median(np.abs(above - np.median(above))) + 1e-30
+    sd = robust_sd(above) + 1e-30
     i = int(np.argmax(above))
     return i, float(_angles(s["angle_step"])[i]), float(above[i] / sd), float(above[i])
 
@@ -191,7 +192,7 @@ def measure_window(a, b, ea=None, eb=None, s=SETTINGS):
         ra, rb = fa, fb
     prof = angle_profile(ra, rb, s)
     above = _above(prof, s)
-    sd = 1.4826 * np.median(np.abs(above - np.median(above))) + 1e-30
+    sd = robust_sd(above) + 1e-30
     angles, width = _angles(s["angle_step"]), _width(a)
     own = eprof = None
     left = above.copy()
@@ -214,7 +215,7 @@ def measure_window(a, b, ea=None, eb=None, s=SETTINGS):
         elif ea is not None:
             if eprof is None:
                 eprof = _above(angle_profile(fea, feb, s), s)
-                esd = 1.4826 * np.median(np.abs(eprof - np.median(eprof))) + 1e-30
+                esd = robust_sd(eprof) + 1e-30
             epower = float(eprof[near].max())
             eamp = math.sqrt(max(epower, 0.0)) / _width(ea) if epower / esd >= s["min_z"] else 0.0
             if eamp >= s["esb_ratio"] * amp:

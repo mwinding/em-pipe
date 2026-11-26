@@ -16,6 +16,7 @@ adapting before they run again. General-purpose checks live in `tools/` instead.
 | [2026-11_reference_standard/](2026-11_reference_standard/) | 19-20 Nov 2026 | three tools that were in `tools/` until 26 Nov 2026, used to set the contrast standard (neuropil median 150, p5-p95 width 130): the reference volume's neuropil numbers, volumes side by side at candidate widths, and two refstats runs (plain and decurtained) compared; with the test of one of them |
 | [2026-11_a1001_flicker/](2026-11_a1001_flicker/) | 24 Nov 2026 | where A1001's slice-to-slice flicker comes from: raw tile jumps, and what the display windows leave of them |
 | [2026-11_zstep_correction/](2026-11_zstep_correction/) | 25-26 Nov 2026 | whether slice-thickness (z-step) correction matters: the zcorrect step's estimate on A1001 and 37i, its agreement between tiles, test slabs with and without it; and the step itself, removed from the pipeline on 26 Nov 2026 (`zcorrect_step/`: module, Slurm script, tests) |
+| [2026-11_shared_helpers/](2026-11_shared_helpers/) | 26 Nov 2026 | the check that sharing two small helpers (robust SD, 8-bit stretch) left every result as it was: the functions that used them, before and after, on synthetic data |
 | [_assembly/](_assembly/) | 19 Nov 2026 | the scripts used to put this folder together (see below) |
 
 Curtain and EsB work (destreak tests, the curtain "arches") is in a separate repository,

@@ -21,6 +21,14 @@ def to_uint8(img, lo=None, hi=None, percentiles=(0.5, 99.5)):
     return np.clip((img - lo) * scale, 0, 255).astype(np.uint8)
 
 
+def stretch_to_uint8(img, lo, hi, min_span=1e-6):
+    """(img - lo) / (hi - lo) x 255, clipped to 0-255 and truncated to uint8, in img's own dtype; the span
+    is at least ``min_span``. The tools' 8-bit stretch (for background masks and contact sheets).
+    to_uint8 multiplies by 255 / (hi - lo) instead, which truncates the odd pixel one grey differently,
+    so each keeps its own callers' results."""
+    return np.clip((img - lo) / max(hi - lo, min_span) * 255, 0, 255).astype(np.uint8)
+
+
 def downsample(img, factor):
     """Area-average downsample by an integer or float factor (factor 1 returns img)."""
     if factor == 1:

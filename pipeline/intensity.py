@@ -80,6 +80,7 @@ from .cli import atomic_write, base_parser, setup  # noqa: E402
 from .config import deep_merge, get, qc_path, step_path  # noqa: E402
 from .preview import PERCENTILES, TISSUE, plot_tiles, save, thumb_to_tile, thumb_values  # noqa: E402
 from .slices import load_slices  # noqa: E402
+from .stats import robust_sd  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -276,7 +277,7 @@ def follow_slice_level(df, mid, smooth):
     df["lo"] += df["level_shift"] / 255.0 * width
     df["hi"] += df["level_shift"] / 255.0 * width
     log.info("slice_level: shifted %d slices by %.2f greys (robust SD; largest %.1f)", int(shift.size),
-             float(1.4826 * np.median(np.abs(shift - np.median(shift)))) if shift.size else 0.0,
+             float(robust_sd(shift)) if shift.size else 0.0,
              float(np.abs(shift).max()) if shift.size else 0.0)
     return df
 
@@ -442,7 +443,7 @@ def sample_noise(series):
     if not d:
         return float("nan")
     d = np.concatenate(d)
-    return float(1.4826 * np.median(np.abs(d - np.median(d))) / np.sqrt(2))
+    return float(robust_sd(d) / np.sqrt(2))
 
 
 def follow_samples(pos, values, all_pos, smooth, ramp, sigma, sigmas):
@@ -1019,7 +1020,7 @@ def _log_joint(block, sub, rb, ia, ib, g, o, R, zs, solved):
     res = g[ia] * (gain * m + off) + o[ia] - (g[ib] * m + o[ib])   # common-scale mismatch at each centre
 
     def rsd(v):
-        return float(1.4826 * np.median(np.abs(v - np.median(v)))) if len(v) else float("nan")
+        return float(robust_sd(v)) if len(v) else float("nan")
     at_r = pd.Series(g[solved] * R + o[solved] - R).groupby(sub["z"].to_numpy()).median().to_numpy()
     log.info("joint balance, block %s (z %d-%d): %d (z, tile) solved from %d in-slice and %d z relations; mismatch "
              "at the centres (robust SD) %.1f in-slice, %.1f z (raw units); slice-wide change at R = %.0f: robust SD "

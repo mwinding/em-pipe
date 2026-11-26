@@ -53,6 +53,7 @@ from . import cli, features, transforms
 from .config import deep_merge, step_dir, step_path
 from .slices import StackCache
 from .elastic import _bilinear, field_at
+from .stats import robust_sd
 
 log = logging.getLogger(__name__)
 
@@ -312,7 +313,7 @@ def solve_window(T0, shapes, matches, inside, a, matched=None):
     for it in range(int(a["robust_iterations"]) + 1):
         if it:   # the first solve uses every match: before it, a layout change is off by tens of px
             comp = r[is_match].ravel()
-            sigma = 1.4826 * np.median(np.abs(comp - np.median(comp))) if len(comp) else 0.0
+            sigma = robust_sd(comp) if len(comp) else 0.0
             keep = ~is_match | (np.linalg.norm(r, axis=1) <= max(float(a["reject_px"]), 3 * sigma))
         if spacing:
             U = _solve_warp(A, grids, ia, ib, is_match, r0, w * keep, float(a["local_regularization"]),

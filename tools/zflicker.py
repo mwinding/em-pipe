@@ -33,12 +33,14 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from pipeline import stats  # noqa: E402
 
 
 def robust_sd(a):
+    """pipeline.stats.robust_sd of the finite values, as a float (NaN when there are none)."""
     a = np.asarray(a, float)
     a = a[np.isfinite(a)]
-    return float(1.4826 * np.median(np.abs(a - np.median(a)))) if a.size else float("nan")
+    return float(stats.robust_sd(a)) if a.size else float("nan")
 
 
 def lag1(a):

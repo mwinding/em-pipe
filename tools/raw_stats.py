@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipeline import background  # noqa: E402
 from pipeline.cli import task_info  # noqa: E402
 from pipeline.config import load_config, step_defaults  # noqa: E402
+from pipeline.features import stretch_to_uint8  # noqa: E402
 from pipeline.imagej_tiff import ImageJStack  # noqa: E402
 from pipeline.slices import load_slices  # noqa: E402
 
@@ -70,15 +71,11 @@ INK, MUTED, GRID = "#1a1a19", "#6b6a64", "#e4e3dd"
 # --- classification ---------------------------------------------------------------------------------
 
 def downsample(img, factor):
-    """Area mean over factor x factor blocks (cropped to a whole number of blocks)."""
+    """Area mean over factor x factor blocks (cropped to a whole number of blocks), averaged in img's own
+    dtype (integer data come out rounded), unlike pipeline.features.downsample (float32, no crop)."""
     h, w = (img.shape[0] // factor) * factor, (img.shape[1] // factor) * factor
     small = cv2.resize(np.ascontiguousarray(img[:h, :w]), (w // factor, h // factor), interpolation=cv2.INTER_AREA)
     return small.astype(np.float32), (h, w)
-
-
-def to8(small):
-    lo, hi = np.percentile(small, [0.5, 99.5])
-    return np.clip((small - lo) / max(hi - lo, 1e-6) * 255, 0, 255).astype(np.uint8)
 
 
 def strict_resin(resin, min_px=1500, rim=8, edge=16):
@@ -103,7 +100,7 @@ def strict_resin(resin, min_px=1500, rim=8, edge=16):
 
 def classify(small, min_resin_px=1500, rim=8, edge=16):
     """(label map, strict-resin mask) of a downsampled tile: TISSUE / RESIN / OFFSAMPLE per pixel."""
-    img8 = to8(small)
+    img8 = stretch_to_uint8(small, *np.percentile(small, [0.5, 99.5]))
     bg = background.mask(img8)
     dark = background._dark_at_border(img8.astype(np.float32), background.DARK_EDGE, background.MIN_DARK_PX)
     lab = np.full(small.shape, TISSUE, np.uint8)

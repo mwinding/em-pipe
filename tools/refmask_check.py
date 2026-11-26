@@ -33,6 +33,7 @@ from scipy import ndimage
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipeline import omezarr, preview, refmask  # noqa: E402
 from pipeline.config import load_config, step_path  # noqa: E402
+from pipeline.stats import robust_sd  # noqa: E402
 
 METRICS = ["lc8", "lc32", "noise8", "std", "p5", "p50", "p95"]
 WIN = 1024      # stats window, 8 nm px
@@ -49,7 +50,7 @@ def metrics(x):
     m = ndimage.uniform_filter(y, 8)
     lc32 = np.sqrt(np.maximum(ndimage.uniform_filter(y * y, 8) - m * m, 0)).mean()
     d = np.diff(x, axis=1).ravel()
-    noise = 1.4826 * np.median(np.abs(d - np.median(d))) / math.sqrt(2)
+    noise = robust_sd(d) / math.sqrt(2)
     p5, p50, p95 = np.percentile(x, [5, 50, 95])
     return {"lc8": float(lc8), "lc32": float(lc32), "noise8": float(noise), "std": float(x.std()),
             "p5": float(p5), "p50": float(p50), "p95": float(p95)}

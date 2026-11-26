@@ -54,6 +54,7 @@ sys.path.insert(0, str(ROOT))
 from pipeline import render  # noqa: E402
 from pipeline.cli import atomic_write  # noqa: E402
 from pipeline.config import REMOVED_STEPS, load_config, step_defaults, step_path  # noqa: E402
+from pipeline.stats import robust_sd  # noqa: E402
 
 LIMITS = {
     "stitch_failed_samples": 0,        # stitched samples without a solution
@@ -343,7 +344,7 @@ def checks(cfg, R, facts):
     if pos is not None and len(pos) > 1:
         sp = np.diff(pos["position_nm"].to_numpy(float)) / np.maximum(np.diff(pos["z"].to_numpy(float)), 1)
         nominal = float(np.median(sp))
-        cv = float(1.4826 * np.median(np.abs(sp - nominal)) / nominal) if nominal else np.nan
+        cv = float(robust_sd(sp) / nominal) if nominal else np.nan      # nominal is sp's median
         txt = (f"estimated spacing: median {fmt(nominal)} nm, 5th-95th percentile {fmt(np.percentile(sp, 5))}-{fmt(np.percentile(sp, 95))} nm, "
                f"robust scatter {100 * cv:.1f} % of the median; " + ("applied in this volume" if (R.get("render") or {}).get("zcorrected") else "not applied in this volume"))
         out.append(("Slice thickness (from an earlier run)", esc(txt), "no limit set: listed for information", INFO, esc(ZCORRECT_REMOVED)))

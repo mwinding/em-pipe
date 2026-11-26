@@ -77,8 +77,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipeline import background, destreak  # noqa: E402
 from pipeline.cli import atomic_write, my_chunks, task_info  # noqa: E402
 from pipeline.config import load_config, step_defaults, step_path  # noqa: E402
+from pipeline.features import stretch_to_uint8  # noqa: E402
 from pipeline.preview import chunk_name, thumb_values, z_chunks  # noqa: E402
 from pipeline.slices import StackCache, load_slices  # noqa: E402
+from pipeline.stats import robust_sd  # noqa: E402
 
 VERSION = 1
 # spectrum bands in cycles per pixel
@@ -320,7 +322,7 @@ def robust_z(resid):
     ok = np.isfinite(r)
     if ok.sum() < 5:
         return np.full(r.shape, np.nan)
-    sd = 1.4826 * np.median(np.abs(r[ok] - np.median(r[ok])))
+    sd = robust_sd(r[ok])
     return (r - np.median(r[ok])) / sd if sd > 0 else np.full(r.shape, np.nan)
 
 
@@ -435,7 +437,7 @@ def lone_jump(level):
     with np.errstate(all="ignore"):
         jump = np.where(np.sign(prev) == np.sign(nxt), np.sign(prev) * np.fmin(np.abs(prev), np.abs(nxt)), 0.0)
     steps = prev[np.isfinite(prev)]
-    usual = 1.4826 * np.median(np.abs(steps - np.median(steps))) if len(steps) >= 5 else np.nan
+    usual = robust_sd(steps) if len(steps) >= 5 else np.nan
     return jump, usual
 
 
@@ -586,12 +588,11 @@ WINDOW_REASONS = ("focus", "noise", "scanline", "curtain")
 def to8(imgs, together=False):
     """The images as 8 bit: each over its own 0.5-99.5 percentiles (structure is compared, whatever the
     brightness), or ``together`` over the percentiles of all of them (brightness is compared)."""
-    def scale(i, lo, hi):
-        return np.clip((np.asarray(i, np.float32) - lo) / max(hi - lo, 1e-6) * 255, 0, 255).astype(np.uint8)
     if together:
         lo, hi = np.percentile(np.concatenate([np.asarray(i, np.float32).ravel()[::7] for i in imgs]), [0.5, 99.5])
-        return [scale(i, lo, hi) for i in imgs]
-    return [scale(i, *np.percentile(np.asarray(i).ravel()[::7], [0.5, 99.5])) for i in imgs]
+        return [stretch_to_uint8(np.asarray(i, np.float32), lo, hi) for i in imgs]
+    return [stretch_to_uint8(np.asarray(i, np.float32), *np.percentile(np.asarray(i).ravel()[::7], [0.5, 99.5]))
+            for i in imgs]
 
 
 def label(img, text):

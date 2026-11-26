@@ -33,6 +33,7 @@ from scipy.sparse.linalg import spsolve
 from . import cli, elastic, features, tilesolve, transforms
 from .config import qc_path, step_dir, step_path
 from .slices import StackCache, load_slices, z_values
+from .stats import robust_sd
 
 log = logging.getLogger(__name__)
 
@@ -688,7 +689,7 @@ def _point_errors(m, mats, block=1 << 20):
 def _reject(err, pid, P, reject_px):
     """Points beyond max(reject_px, 3 sigma) (sigma from the MAD), and pairs that mostly fail."""
     comp = err.ravel()
-    sigma = 1.4826 * np.median(np.abs(comp - np.median(comp))) if len(comp) else 0.0
+    sigma = robust_sd(comp) if len(comp) else 0.0
     keep = np.linalg.norm(err, axis=1) <= max(reject_px, 3 * sigma)
     total = np.bincount(pid, minlength=P)
     rejected = np.bincount(pid, keep, minlength=P) < MIN_PAIR_FRACTION * total

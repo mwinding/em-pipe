@@ -56,6 +56,7 @@ from .cli import atomic_write, base_parser, my_chunks, setup, task_info  # noqa:
 from .config import deep_merge, qc_path, step_dir, step_path  # noqa: E402
 from .preview import chunk_name, z_chunks  # noqa: E402
 from .slices import StackCache, load_slices  # noqa: E402
+from .stats import robust_sd  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ def fit_relation(va, vb, reject=3.0, iterations=4, min_pixels=500):
     for _ in range(iterations):
         r = va - (gain * vb + offset)
         mid = np.median(r)
-        sigma = 1.4826 * np.median(np.abs(r - mid))
+        sigma = robust_sd(r)
         keep = np.abs(r - mid) <= reject * max(sigma, 1e-6)
         if keep.sum() < min_pixels:
             return None

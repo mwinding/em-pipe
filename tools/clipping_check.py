@@ -37,6 +37,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipeline import background, omezarr, patchgrid, render, shading  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
+from pipeline.features import stretch_to_uint8  # noqa: E402
 
 F = 16   # downsampling for the tissue mask, as the preview step
 
@@ -47,7 +48,7 @@ def tissue_mask(plane):
     small = cv2.resize(plane, (w // F, h // F), interpolation=cv2.INTER_AREA)
     valid = small > 0
     lo, hi = np.percentile(small[valid], (0.5, 99.5)) if valid.any() else (0, 255)
-    s8 = np.clip((small.astype(float) - lo) / max(hi - lo, 1) * 255, 0, 255).astype(np.uint8)
+    s8 = stretch_to_uint8(small.astype(float), lo, hi, min_span=1)
     s8[~valid] = 0
     bg = background.mask(s8) | ~valid
     return cv2.resize((~bg).astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0

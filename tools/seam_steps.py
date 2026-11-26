@@ -55,6 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipeline import background, render, shading  # noqa: E402
 from pipeline.cli import atomic_write  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
+from pipeline.features import stretch_to_uint8  # noqa: E402
 
 NEAR, FAR, STRETCH, MIN_PX = 8, 30, 150, 150
 OPEN = 5   # clean-up: label pixels that an OPEN x OPEN opening of their own label removes become 0
@@ -121,7 +122,7 @@ def classes(before):
     valid = before > 0
     small = cv2.resize(before, (before.shape[1] // 4, before.shape[0] // 4), interpolation=cv2.INTER_AREA)
     lo, hi = np.percentile(small[small > 0], (0.5, 99.5))
-    s8 = np.clip((small.astype(float) - lo) / max(hi - lo, 1) * 255, 0, 255).astype(np.uint8)
+    s8 = stretch_to_uint8(small.astype(float), lo, hi, min_span=1)
     s8[small == 0] = 0
     bg = background.mask(s8)
     bg = cv2.resize(bg.astype(np.uint8), (before.shape[1], before.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
