@@ -6,8 +6,61 @@ slice-to-slice drift, normalises intensity and writes a multi-resolution volume 
 [neuroglancer](https://github.com/google/neuroglancer). It runs as Slurm jobs on an HPC cluster.
 
 ```
-check → preview → [refmask] → stitch → align → [shading] → [overlaps] → [patchgrid] → [zrelations] → [refstats] → intensity → render → pyramid
+check → preview → refmask → stitch → align → shading → overlaps → patchgrid → zrelations → refstats → intensity
+      → render → pyramid → export → quality → summary → [precomputed] → [upload]
 ```
+
+Steps in brackets run only when switched on. `quality` writes per-slice quality flags and `summary` the QC
+page of the volume, which says whether every check passed or where the job chain stopped.
+
+## Quick start
+
+With the setup below done once, one command takes a folder of raw tile stacks to the volumes:
+
+```bash
+./em-pipe /path/to/raw/my_volume /path/to/output/my_volume --dry-run     # show everything, change nothing
+./em-pipe /path/to/raw/my_volume /path/to/output/my_volume               # write the config, submit the jobs
+```
+
+It reads the raw files' headers, writes `OUTPUT_DIR/config.yaml` (the preset `configs/presets/standard.yaml`
+plus this dataset's paths and what was detected in its files) and `config_clahe.yaml`, and submits the job
+chain for the plain volume and for a second volume with CLAHE. It ends with a QC page
+(`OUTPUT_DIR/qc/summary_<name>.html`). Before anything is submitted it stops, with a message, when
+
+- **EsB files are missing.** Curtains are removed with the second detector's image of the same scan
+  (EsB, in `Backscatter/` next to the raw files), so every raw file needs its EsB file, including raw files in
+  subfolders such as `Approach/`. The message lists what is missing by day. `--no-esb` states that this run
+  is without decurtaining; nothing falls back silently.
+- **the curtain direction is conflicting**, or the curtains run at an angle. The direction is measured on
+  sampled windows (`pipeline/curtains.py`); `--direction vertical|horizontal` states it instead.
+- **the config fails its checks** (`pipeline/preflight.py`: unknown or misspelled keys, settings that do not
+  work together, a raw folder without matching files).
+
+`--name N` names the volumes (default: the raw folder's name), `--no-clahe` leaves out the second volume,
+`--to STEP` submits only up to a step (e.g. `--to intensity`, to look at the levels before rendering). Slurm
+array sizes, memory and time are sized from the dataset (`pipeline/resources.py`); the dry run shows them.
+The command reads about 1.5 GB of sampled windows for the direction (a few minutes on network storage).
+
+What it never decides, because a person has to: leaving out files or slices, where in the volume the contrast
+standard is measured (`refstats.region`), whether the reference-tissue mask fits a new stain, rotation,
+whether the result is good, uploads, and deleting anything. The QC page lists these.
+
+To change a setting afterwards, edit `OUTPUT_DIR/config.yaml` and use `./run_pipeline.sh` (below).
+
+### Words used here
+
+| Word | Meaning |
+|---|---|
+| slice | One imaged face of the block: one z position. A slice is made of one or more tiles. |
+| tile | One image of the tile grid of a slice (e.g. 3 x 3), stored as a stack per tile per day. |
+| segment | A run of slices with the same tile grid and tile size. A new segment starts where the layout changes. |
+| seam | A slice where the acquisition was interrupted (a long pause, a restart): alignment and brightness are not assumed to continue across it. |
+| block | A stretch of slices that is smoothed or solved as one: a segment, split at seams (and at `intensity.reference.breaks`). |
+| levels | Per tile and slice, the two raw values that are shown as grey 0 and 255 (`work/intensity/levels.csv`). |
+| neuropil | The reference tissue the contrast standard is measured in (with tracts; found by the refmask step). |
+| curtains | Stripes along the milling direction, from the ion beam passing material of different hardness. |
+| EsB | The second detector's image of the same scan (backscatter), which hardly shows curtains; used to remove them. |
+| CLAHE | Local contrast equalisation of each plane, written as a second volume. |
 
 A plain-language walk through the whole pipeline, with pictures: `docs/pipeline_explainer.html`.
 
@@ -15,18 +68,20 @@ A plain-language walk through the whole pipeline, with pictures: `docs/pipeline_
 |---|---|
 | check | Inventory of the raw files: truncated or unreadable files, copied tiles, label/filename mismatches, missing tiles, time gaps, restarts and grid changes. Writes the global slice list every later step uses. |
 | preview | Per-slice intensity statistics and thumbnails (contact sheet per day). |
-| refmask | Optional (for `intensity.window: reference`): where the reference tissue (neuropil, with tracts) is, as a yes/no per ~2 µm square of each thumbnail, from a small trained classifier (`qc/refmask.png`). Never applied to the image; it only chooses where refstats measures. See *Consistent contrast across volumes* below. |
+| refmask | For `intensity.window: reference` (`refmask.enabled`, on by default): where the reference tissue (neuropil, with tracts) is, as a yes/no per ~2 µm square of each thumbnail, from a small trained classifier (`qc/refmask.png`). Never applied to the image; it only chooses where refstats measures. See *Consistent contrast across volumes* below. |
 | stitch | Tile layout within each slice: SIFT matches in the tile overlaps (overlap found automatically) and a least-squares solve, on every 50th slice. Where tiles move between two of those by more than `stitch.refine_px` (5 px), the slices in between are stitched too (bisection), so a sudden tile jump is placed at the right slice instead of being interpolated. |
 | align | Slice-to-slice drift: SIFT matches between each slice and its next few neighbours, then one global least-squares solve. Where the tile layout changes (e.g. 3×3 → 2×2 tiles), one affine transform between the two montage frames is fitted first (`align.segment_change_model`; results in `work/align/segment_changes.csv`). Where that leaves a median mismatch above `align.elastic_min_px` (5 px), a smooth displacement field is fitted to the matches across the change and applied to every slice before the change (`align.elastic_side`; across other layout changes up to the previous corrected one), warping them into the later layout's geometry (`pipeline/elastic.py`; `work/align/elastic_interfaces.csv` reports the mismatch before and after); render cuts sharply between tiles in those slices (`render.local_blend`). A tile-level affine solve (`align.local_*`, off by default) is also available; it leaves out matches across elastic interfaces. A slice whose own montage is off right at an interface (e.g. the first after a long pause) can be left out of those fits (`align.interface_skip_slices`) and its tiles fitted with a one-slice local window; `align.local_warp_px` adds a smooth warp per tile there, for a distortion within a tile that no affine captures, `align.local_seams: matched` holds the seams matched in the image instead of where the stitch put them, and `align.local_rematch` matches the window's slices again block by block, so a distorted tile gets matches over all of it. |
-| shading | Optional: a flat-field per tile position and acquisition segment (the SEM's brightness fall-off across a tile), estimated from the thumbnails as in BaSiC/CIDRE (`qc/shading.png`); overlaps, intensity and render divide it out of every tile slice. |
-| overlaps | Optional: the brightness relation (gain, offset) of every overlapping tile pair, measured on the raw tiles at 32 nm in every slice by a robust fit on pixel pairs, tissue and resin alike (`qc/overlaps.png`). With `overlaps.patch_grid` > 0 also one relation per pair of tile patches (each tile cut into a grid of patches), for patchgrid. |
-| patchgrid | Optional: smooth brightness maps within each tile for what the flat-field leaves near tile edges and corners (after Janelia's tile intensity correction, saalfeldlab/render): a gain and offset per patch, solved from the patch relations; their within-tile shape, the median over every 20th slice, per tile position and segment (`qc/patchgrid.png`). Intensity then balances the tiles on the patch relations with the shapes applied, and render applies flat-field and shape before each tile's window. |
-| zrelations | Optional (for `intensity.balance_z_distance` > 0): each tile against itself in the next slice(s), from the tissue of the preview thumbnails, flat-fielded and shape-corrected as render corrects the tile, by matching the two slices' tissue percentiles (`qc/zrelations.png`). |
-| refstats | Optional (for `intensity.window: reference`): the reference tissue's histogram (median, 5th–95th percentiles) at every `refstats.every`-th slice, measured inside the refmask on the 8 nm tiles with every correction render applies (flat-field, patch shapes, tile balance, and decurtaining when destreak is on), before any contrast window (`qc/refstats.png`). |
+| shading | (`shading.enabled`, on by default) A flat-field per tile position and acquisition segment (the SEM's brightness fall-off across a tile), estimated from the thumbnails as in BaSiC/CIDRE (`qc/shading.png`); overlaps, intensity and render divide it out of every tile slice. |
+| overlaps | (`overlaps.enabled`, on by default) The brightness relation (gain, offset) of every overlapping tile pair, measured on the raw tiles at 32 nm in every slice by a robust fit on pixel pairs, tissue and resin alike (`qc/overlaps.png`). With `overlaps.patch_grid` > 0 also one relation per pair of tile patches (each tile cut into a grid of patches), for patchgrid. |
+| patchgrid | (`patchgrid.enabled`, on by default) Smooth brightness maps within each tile for what the flat-field leaves near tile edges and corners (after Janelia's tile intensity correction, saalfeldlab/render): a gain and offset per patch, solved from the patch relations; their within-tile shape, the median over every 20th slice, per tile position and segment (`qc/patchgrid.png`). Intensity then balances the tiles on the patch relations with the shapes applied, and render applies flat-field and shape before each tile's window. |
+| zrelations | For `intensity.balance_z_distance` > 0 (the default is 1): each tile against itself in the next slice(s), from the tissue of the preview thumbnails, flat-fielded and shape-corrected as render corrects the tile, by matching the two slices' tissue percentiles (`qc/zrelations.png`). |
+| refstats | For `intensity.window: reference` (`refstats.enabled`, on by default): the reference tissue's histogram (median, 5th–95th percentiles) at every `refstats.every`-th slice, measured inside the refmask on the 8 nm tiles with every correction render applies (flat-field, patch shapes, tile balance, and decurtaining when destreak is on), before any contrast window (`qc/refstats.png`). |
 | intensity | Per-tile contrast levels (the raw values render maps to 0 and 255), balanced across tile overlaps and smoothed over time. The balance comes from the preview thumbnails every few slices (`balance_source: thumbnails`) or from the overlaps step, slice by slice (`balance_source: overlaps`; with patchgrid, from the patch relations). With `balance_z_distance` > 0 the tiles of all slices are balanced in one solve, with each tile also matched to itself in the next slice (zrelations), as Janelia's render does with `--zDistance` (after TrakEM2's "Match intensities"): this removes the brightness jumps a slice's tiles share, which a slice-by-slice balance leaves as flicker along z. The window: `median` (the tissue's median at a set grey), `percentile`, or `reference` (the reference tissue at a set grey and width, so volumes match; below). |
 | render | Applies everything in one pass and writes OME-Zarr (Zarr v3, sharded), optionally downsampled; CLAHE; optional destreaking (filter, or swap from a second detector). |
 | pyramid | Lower-resolution scales of the volume. |
 | export | Quick-look TIFF of the volume for Fiji (finest scale under `export.max_gb`). |
+| quality | Per-slice quality flags from the raw tiles and the thumbnails (`tools/slice_quality.py`): focus, noise, saturation, charging patches, scan-line faults, curtains, a bad alignment fit, missing tiles. Flags only: nothing is excluded. |
+| summary | The QC page of the volume (`tools/qc_summary.py`, `qc/summary_<volume>.html`), the last job. It starts with one verdict: PASSED (every check that ran passed), ATTENTION (the checks to look at) or STOPPED (the job that failed, the last lines of its log, the jobs that did not run), and ends with the decisions that stay with a person. |
 | precomputed | Optional: the volume as Neuroglancer precomputed (all scales, sharded), e.g. for segmentation with CloudVolume-based tools. |
 | upload | Optional: copies the precomputed export to a Google Cloud Storage bucket (resumable, checksummed). |
 
@@ -46,9 +101,17 @@ a direct `sbatch slurm/<step>.sbatch` needs `--partition` unless the cluster's d
 ## Running
 
 Each dataset (volume) has a YAML config with `raw_dir`, `output_dir`, an optional `selection` (date
-or z range) and per-step settings. Start from `configs/example.yaml`, which lists every setting with
-its default. Dataset configs hold paths on your storage, so keep them outside the repository:
-`configs/` ignores everything but `example.yaml`, and a symlink such as `configs/lab` pointing at
+or z range) and per-step settings: the one `em-pipe` wrote, or one of your own. `configs/example.yaml`
+lists every setting with its default. Since 26 Nov 2026 the defaults are the settings our volumes are made
+with (the same as `configs/presets/standard.yaml`): flat-field, tile balance from the overlaps with patch
+shapes, tiles and slices balanced together, the reference window (neuropil median 150, p5-p95 width 130),
+decurtaining from EsB, cut blend, no CLAHE. A config of your own therefore needs, besides the two paths, the
+EsB files' pattern (`destreak.reference_from` / `reference_to`; `python -m pipeline.esb RAW_DIR` finds it) or
+the statement `destreak.enabled: false`; the check below says what is missing. Configs written before that
+date stated or relied on the earlier defaults (flat-field, overlaps, patchgrid, refmask, refstats and
+destreak off, `window: median`, thumbnail balance, seam blend, CLAHE 2.0 / 512 on): they must state those
+values to give what they gave. Dataset configs hold paths on your storage, so keep them outside the repository:
+`configs/` ignores everything but `example.yaml` and `presets/`, and a symlink such as `configs/lab` pointing at
 your group's config folder keeps the commands short.
 
 ```bash
@@ -58,9 +121,13 @@ squeue --me                                                  # follow; logs in <
 ./run_pipeline.sh configs/lab/my_volume.yaml --from align    # re-run from a step
 ```
 
-Every job waits for the previous one (`afterok`), so a failed step cancels the rest. Steps skip
+The config is checked before anything is submitted (`python -m pipeline.config --config C --validate`):
+unknown keys, settings that do not work together, a raw folder without matching files, missing EsB files.
+Every job waits for the previous one (`afterok`), so a failed step cancels the rest; the last job, the QC
+page, waits for all of them however they end and says where a chain stopped and why. Steps skip
 work whose output already exists, so re-submitting resumes. Array sizes, CPUs, memory, time and
-partition come from the config's `slurm:` section. Jobs read their config when they start, so
+partition come from the config's `slurm:` section (`slurm.auto: true` sizes them from the dataset; a job's
+explicit keys win). Jobs read their config when they start, so
 editing a config changes jobs that are still queued.
 
 A variant of a volume (another render, a movie, an upload) is a small config with
@@ -148,19 +215,21 @@ A local export serves like any volume: `python3 -m pipeline.serve FOLDER` lists 
 - **Several volumes** (e.g. a 32 nm overview and a full-resolution `render.bbox` region) can share
   one `output_dir` if they have different `render.name`s.
 - **Slice-thickness correction (zcorrect)** was removed from the pipeline on 26 Nov 2026; the step is kept in `dev/2026-11_zstep_correction/zcorrect_step` with its tests and its test results on two volumes.
-- **destreak** is off by default; tune it with
-  `python -m pipeline.destreak test --config C --z Z --tile 0-0` first. If the microscope recorded a
-  second detector that doesn't see the curtains (e.g. backscatter next to in-lens SE, the same scan),
-  `destreak.reference_from` / `reference_to` swap the stripe part from it instead of removing it, so
-  structure that runs along the curtains is kept; `stripe_px` sets what counts as a stripe by length,
+- **destreak** (curtain removal) is on by default and swaps the stripe part of each tile from a second
+  detector that doesn't see the curtains (e.g. backscatter next to in-lens SE, the same scan), named by
+  `destreak.reference_from` / `reference_to`, so structure that runs along the curtains is kept. Without such
+  files the choice is stated: `destreak.enabled: false`, or `destreak.mode: filter` for the filter-only path
+  (the wavelet-FFT filter, which also removes the image's own structure along the stripes; tune it with
+  `python -m pipeline.destreak test --config C --z Z --tile 0-0` first). `destreak.direction` must match the
+  curtains: `python -m pipeline.curtains --config C` measures it (it needs the EsB files); `stripe_px` sets what counts as a stripe by length,
   `core_threshold` fills the cores of strong curtains from the matched reference, and `band_match`
   matches to the reference the broad band a cluster of curtains leaves after the swap (the curtains' own
   darkness, which wavelet details can't hold, spread over a few hundred px), only around the curtains
   (`band_max_px` limits it to bands up to that wide, so wider regions the detectors show differently keep
   the image's look).
-- **Flicker along z (recommended for multi-tile data):** raw FIB-SEM tiles jump in brightness from slice to
+- **Flicker along z:** raw FIB-SEM tiles jump in brightness from slice to
   slice, each on its own. Balancing every slice on its own matches the tiles but leaves the level they share
-  jumping, which shows as stripes in x-z and y-z views. The recommended setting balances tiles and slices in
+  jumping, which shows as stripes in x-z and y-z views. The default balances tiles and slices in
   one solve, as Janelia's render does with `--zDistance` (after TrakEM2's "Match intensities"):
 
   ```yaml
@@ -183,15 +252,17 @@ A local export serves like any volume: `python3 -m pipeline.serve FOLDER` lists 
   **With `window: reference`, refstats must be run again for the z-balanced config** (its own `refstats.output`;
   run_pipeline.sh runs it after zrelations): it measures the reference tissue on the balanced scale, and every
   separately solved block (segment, seam) sits on its own scale. Statistics reused from a per-slice balance
-  misplace whole blocks (seen as a 26-grey step at a segment change in a test); intensity does not yet check
-  this. Check a dataset before rendering with `tools/zflicker.py --config` and
+  misplace whole blocks (seen as a 26-grey step at a segment change in a test). intensity checks this: it
+  refuses statistics measured with other tile gains and offsets, corrections or masks than the config gives
+  now, and names the command that re-runs them (`intensity.reference.allow_stale_refstats: true` reuses them
+  deliberately). Check a dataset before rendering with `tools/zflicker.py --config` and
   `dev/2026-11_a1001_flicker/scripts/breaks_flicker.py` (flicker and level steps around every break), and look
   at x-z/y-z views (`tools/ortho_views.py`). `intensity.slice_level` (a last per-slice shift) is a simpler
   fallback. Details: `dev/2026-11_a1001_flicker/`.
 - **patchgrid** needs `overlaps.patch_grid` > 0 (e.g. 8) and `intensity.balance_source: overlaps`.
   Setting or changing `overlaps.patch_grid` re-measures every overlap chunk; new shapes change the
-  levels and the render plan (render init then asks for `--overwrite`, and render run refuses to go on). With patchgrid off and
-  `patch_grid: 0`, every output is as before the step existed.
+  levels and the render plan (render init then asks for `--overwrite`, and render run refuses to go on). With `patchgrid.enabled: false` and
+  `overlaps.patch_grid: 0`, every output is as before the step existed.
 - Design notes and file formats: `docs/design.md`. Tests: `python -m pytest tests`.
 
 ## Fly-through movie
@@ -222,6 +293,7 @@ timeline changed.
 | `slice_quality.py` (+ `slurm/slice_quality.sbatch`) | Per-slice quality flags, per tile: poor focus, more noise, saturation, bright or dark patches only one slice has (charging), scan-line faults, curtains, a bad alignment fit, missing tiles. Each against the tile's own trend along z or an absolute limit, with reason, value and severity (`qc/slice_flags.csv`, metrics in `qc/slice_quality.csv`, a plot over z, and contact sheets of the top flagged slices next to their neighbours for checking by eye). Flags only: nothing is excluded. |
 | `qc_summary.py` | A one-page QC summary of a rendered volume, as one self-contained HTML file (`qc/summary_<volume>.html`): dataset facts, the settings that define the volume, every check with its numbers and a pass / attention mark against a stated limit, the slice quality flags, the run's qc plots and the files. Put together from what the pipeline and tools already wrote; parts not run are listed with the command that makes them. |
 | `tile_jumps.py` | Tile jumps and alignment problems over a whole run (plot + summary): candidates for `align.local_windows`. |
+| `levels_compare.py` | Two level tables of the same dataset (`work/intensity/.../levels.csv`) compared per slice and tile in greys: lo, hi, the brightness difference split into what a slice's tiles share and each tile's own, and the window width; e.g. an automatic run against a hand-made config. |
 | `zflicker.py` (+ `slurm/zflicker.sbatch`) | Slice-to-slice brightness flicker of rendered volumes (the stripes in x-z and y-z views), split into the part shared by the whole plane and each region's own; with `--config`, the same for the raw tiles and the display windows, to show which one it comes from. |
 | `reference_from_volume.py`, `reference_preview.py`, `standard_compare.py`, `refstats_compare.py`, `segment_overview.py`, `refmask_check.py`, `refmask_train.py` | The reference contrast (below): a volume's neuropil numbers under its levels, before/after crops of new levels, volumes side by side at candidate standards, two refstats runs compared, one slice per segment with its tile outlines, the neuropil mask drawn over a volume, the mask model rebuilt from labelled boxes. |
 | `seam_steps.py`, `shading_measure.py`, `shading_before_after.py`, `clipping_check.py`, `map_point.py`, `triptych.py` | Seam brightness steps, flat-field measurements and before/after stacks, clipping, mapping a point between volume and raw tiles, side-by-side figures. |
