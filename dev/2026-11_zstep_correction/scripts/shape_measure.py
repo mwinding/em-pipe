@@ -2,10 +2,11 @@
 without z-correction, and what the correction's interpolation does to in-plane detail.
 
     python dev/2026-11_zstep_correction/scripts/shape_measure.py OUT.json LABEL=VOLUME.ome.zarr [LABEL=VOLUME ...]
-        [--crop 2048] [--sigma 2] [--positions positions.csv --z0 Z]
+        [--crop 2048] [--sigma 2] [--sigma-high 6] [--positions positions.csv --z0 Z]
 
-Each volume (scale 0, central ``crop`` px square, all planes) is smoothed with a 3-D Gaussian (``sigma`` voxels,
-the same along every axis, so pixel noise does not set the result). Per plane z: the correlation of the plane
+Each volume (scale 0, central ``crop`` px square, all planes) is band-passed with two 3-D Gaussians (``sigma``
+minus ``sigma_high`` voxels, the same along every axis): pixel noise does not set the result, and neither do
+structures much larger than organelles, whose correlation does not fall within a few voxels. Per plane z: the correlation of the plane
 with itself shifted k px along x and along y, and with plane z + k; the correlation length along each axis is
 the shift at which that falls to 0.5. anisotropy = L_z / sqrt(L_x L_y): 1 when structures are as deep as wide,
 > 1 where slices are thinner than the voxel (structures drawn out along z), < 1 where they are thicker.
@@ -48,7 +49,27 @@ def length(curve, level=0.5):
     return float(i - 1 + (c[i - 1] - level) / (c[i - 1] - c[i]))
 
 
-def measure(path, crop, sigma):
+def band_pass(v, sigma, sigma_high):
+    """3-D band-pass of a (z, y, x) volume, with the edge voxels the wider Gaussian cannot fill left out in y, x."""
+    f = v.astype(np.float32)
+    g = ndimage.gaussian_filter(f, sigma) - ndimage.gaussian_filter(f, sigma_high)
+    m = int(np.ceil(3 * sigma_high))
+    return g[:, m:-m, m:-m], m
+
+
+def lengths(g):
+    """Per plane: correlation lengths along x, y (px) and z (planes) of the band-passed volume g."""
+    nz = g.shape[0]
+    lx, ly, lz = [], [], []
+    for z in range(nz):
+        p = g[z]
+        lx.append(length([ncc(p[:, :-k], p[:, k:]) for k in range(1, K + 1)]))
+        ly.append(length([ncc(p[:-k], p[k:]) for k in range(1, K + 1)]))
+        lz.append(length([ncc(p, g[z + k]) for k in range(1, K + 1)]) if z + K < nz else np.nan)
+    return np.array(lx), np.array(ly), np.array(lz)
+
+
+def measure(path, crop, sigma, sigma_high):
     a = omezarr.open_scale(str(path).rstrip("/"), 0)
     nz, ny, nx = (int(v) for v in a.shape)
     c = min(crop, ny, nx)
@@ -69,19 +90,14 @@ def measure(path, crop, sigma):
         planes = json.loads(plan.read_text())["planes"]
         if len(planes) == nz:
             weight = np.array([max(w for _, w in q) for q in planes])
-    m = int(np.ceil(3 * sigma))
-    g = ndimage.gaussian_filter(v.astype(np.float32), sigma)[:, m:-m, m:-m]
-    lx, ly, lz = [], [], []
-    for z in range(nz):
-        p = g[z]
-        lx.append(length([ncc(p[:, :-k], p[:, k:]) for k in range(1, K + 1)]))
-        ly.append(length([ncc(p[:-k], p[k:]) for k in range(1, K + 1)]))
-        lz.append(length([ncc(p, g[z + k]) for k in range(1, K + 1)]) if z + K < nz else np.nan)
-    lx, ly, lz = (np.array(x) for x in (lx, ly, lz))
+    g, m = band_pass(v, sigma, sigma_high)
+    lx, ly, lz = lengths(g)
     aniso = lz / np.sqrt(lx * ly)
     ok = np.isfinite(aniso)
     ok[:m] = False                                    # planes the z-smoothing could not fill evenly
     ok[-m:] = False
+    if not ok.any():
+        sys.exit(f"{path}: no plane where the correlation falls to 0.5 within {K} voxels along every axis")
     q = np.percentile(aniso[ok], [5, 25, 50, 75, 95])
     by_weight = None
     if weight is not None:
@@ -111,6 +127,7 @@ def main(argv=None):
     p.add_argument("volumes", nargs="+", metavar="LABEL=VOLUME")
     p.add_argument("--crop", type=int, default=2048)
     p.add_argument("--sigma", type=float, default=2.0)
+    p.add_argument("--sigma-high", type=float, default=6.0)
     p.add_argument("--positions", type=Path)
     p.add_argument("--z0", type=int)
     args = p.parse_args(argv)
@@ -119,7 +136,7 @@ def main(argv=None):
     res = {}
     for item in args.volumes:
         label, path = item.split("=", 1)
-        res[label] = measure(path, args.crop, args.sigma)
+        res[label] = measure(path, args.crop, args.sigma, args.sigma_high)
         print(label, json.dumps({k: v for k, v in res[label].items() if k != "per_plane"}), flush=True)
     if args.positions and args.z0 is not None:
         import pandas as pd
