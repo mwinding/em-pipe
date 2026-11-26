@@ -1,6 +1,6 @@
 """Statistics of the slice spacing the zcorrect step estimated, and how far independent areas agree on it.
 
-    python dev/2026-11_zstep_correction/scripts/step_stats.py --config CONFIG [--window 64] [--top 8]
+    python dev/2026-11_zstep_correction/scripts/step_stats.py --config CONFIG [--window 64] [--top 8] [--tag TAG]
 
 Reads ``work/zcorrect/positions.csv`` and ``ncc/`` (zcorrect run + solve), ``work/check/slices.csv`` and, when
 present, ``qc/zstep_correction/tile_ncc/`` (tile_ncc.py). Prints, and writes to ``qc/zstep_correction/``:
@@ -120,6 +120,7 @@ def main(argv=None):
     p = base_parser(__doc__.splitlines()[0])
     p.add_argument("--window", type=int, default=64, help="slices per stretch when ranking uneven stretches")
     p.add_argument("--top", type=int, default=8)
+    p.add_argument("--tag", default="", help="suffix of the output names (step_stats_TAG.json, spacing_TAG.csv)")
     args = p.parse_args(argv)
     cfg = setup(args, zcorrect.DEFAULTS)
     zc = cfg["zcorrect"]
@@ -228,12 +229,21 @@ def main(argv=None):
                                    "median_abs_difference_nm": round(float(np.median(np.abs(sa[m] - sb[m])) * vz), 3),
                                    "p95_abs_difference_nm": round(float(np.percentile(np.abs(sa[m] - sb[m]), 95) * vz), 3)}
             table["half_a_nm"], table["half_b_nm"] = sa * vz, sb * vz
+            # What the two halves share (thickness, or anything else common to the whole slice): the square
+            # root of their covariance; the rest of each half's variance is its own.
+            cov = float(np.cov(sa[m], sb[m])[0, 1])
+            agree["split_half"]["half_sd_nm"] = [round(float(sa[m].std() * vz), 3), round(float(sb[m].std() * vz), 3)]
+            agree["split_half"]["shared_sd_nm"] = round(float(np.sqrt(max(cov, 0.0)) * vz), 3)
         out["tile_agreement"] = agree
 
     odir = qc_path(cfg, "zstep_correction")
     odir.mkdir(parents=True, exist_ok=True)
-    table.round(4).to_csv(odir / "spacing.csv", index=False)
-    (odir / "step_stats.json").write_text(json.dumps(out, indent=1))
+    suffix = f"_{args.tag}" if args.tag else ""
+    for name in (f"spacing{suffix}.csv", f"step_stats{suffix}.json"):
+        if (odir / name).exists():
+            sys.exit(f"{odir / name} exists: choose another --tag")
+    table.round(4).to_csv(odir / f"spacing{suffix}.csv", index=False)
+    (odir / f"step_stats{suffix}.json").write_text(json.dumps(out, indent=1))
     print(json.dumps(out, indent=1))
     return 0
 

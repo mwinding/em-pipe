@@ -12,6 +12,8 @@ the shift at which that falls to 0.5. anisotropy = L_z / sqrt(L_x L_y): 1 when s
 Uneven slice spacing shows as anisotropy that changes from plane to plane (its spread along z), not in the mean.
 
 detail: SD of the 1-2 px band-pass of the unsmoothed plane over the plane's SD (lower = blurrier / less noise).
+blend: with the volume's render plan (work/render/<volume>/render.json), detail of the planes that are almost one
+slice (largest source weight >= 0.9) against those that are an even mix of two (<= 0.6).
 With --positions (zcorrect's positions.csv) and --z0 (global z of the volume's first plane, uncorrected volume):
 the correlation between the first volume's per-plane anisotropy and the estimated spacing of its planes.
 """
@@ -58,6 +60,15 @@ def measure(path, crop, sigma):
         band = cv2.GaussianBlur(f, (0, 0), 1.0) - cv2.GaussianBlur(f, (0, 0), 2.0)
         detail.append(float(band[8:-8, 8:-8].std() / max(f.std(), 1e-6)))
     empty = float((v == 0).mean())
+    # How much each plane is a blend: the largest weight among its source slices (1 = one slice, 0.5 = an even
+    # mix of two), from the render plan next to the volume (<output_dir>/work/render/<volume>/render.json).
+    root = Path(str(path).rstrip("/"))
+    plan = root.parent / "work" / "render" / root.name.replace(".ome.zarr", "") / "render.json"
+    weight = None
+    if plan.exists():
+        planes = json.loads(plan.read_text())["planes"]
+        if len(planes) == nz:
+            weight = np.array([max(w for _, w in q) for q in planes])
     m = int(np.ceil(3 * sigma))
     g = ndimage.gaussian_filter(v.astype(np.float32), sigma)[:, m:-m, m:-m]
     lx, ly, lz = [], [], []
@@ -72,7 +83,16 @@ def measure(path, crop, sigma):
     ok[:m] = False                                    # planes the z-smoothing could not fill evenly
     ok[-m:] = False
     q = np.percentile(aniso[ok], [5, 25, 50, 75, 95])
-    return {"volume": Path(str(path).rstrip("/")).name, "shape": [nz, ny, nx], "crop_px": c, "empty_fraction": round(empty, 4),
+    by_weight = None
+    if weight is not None:
+        d = np.array(detail)
+        one, mix = weight >= 0.9, weight <= 0.6
+        by_weight = {"mean_largest_weight": round(float(weight.mean()), 3),
+                     "planes_from_one_slice": int((weight > 0.999).sum()),
+                     "detail_weight_above_0.9": [int(one.sum()), round(float(np.median(d[one])), 4) if one.any() else None],
+                     "detail_weight_below_0.6": [int(mix.sum()), round(float(np.median(d[mix])), 4) if mix.any() else None],
+                     "r_detail_weight": round(float(np.corrcoef(d, weight)[0, 1]), 3) if weight.std() > 0 else None}
+    return {"volume": Path(str(path).rstrip("/")).name, "blend": by_weight, "shape": [nz, ny, nx], "crop_px": c, "empty_fraction": round(empty, 4),
             "planes_measured": int(ok.sum()),
             "L_x_px": round(float(np.nanmedian(lx[ok])), 3), "L_y_px": round(float(np.nanmedian(ly[ok])), 3),
             "L_z_planes": round(float(np.nanmedian(lz[ok])), 3),
