@@ -136,10 +136,10 @@ SD would fall.
   slice that looks different lowers both measures.
 - **The pause is the one place with a real, visible z-error.** In the uncorrected x-z and y-z views
   structures break off at z 2083 and the planes after it are squashed along z (anisotropy down to
-  0.46; the thick slices measured earlier). The correction adds 16 planes to the slab, 9 of them
-  in one band between z 2083 and 2084: those planes are blends of the distorted slice 2083 and
+  0.46; the thick slices measured earlier). The correction adds 16 planes to the slab, about 9 of
+  them in one band between z 2083 and 2084: those planes are blends of the distorted slice 2083 and
   slice 2084 (vertical smears in x-z, anisotropy up to 2.2), not recovered tissue, and the break in
-  the structures one slice earlier stays. The median anisotropy moves from 0.82 to 0.91.
+  the structures is still there in the corrected views (looked at). The median anisotropy moves from 0.82 to 0.91.
 - In the other three slabs the x-z and y-z views with and without the correction show the same
   shapes; the corrected views are slightly smoother (looked at, not measured).
 
