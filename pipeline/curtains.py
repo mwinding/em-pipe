@@ -18,11 +18,10 @@ What is measured, per window (a square of a raw tile, in two consecutive slices)
   the two consecutive slices (allowing a shift of up to ``max_lag`` px across the stripes, for drift).
   Curtains come from the material above the imaged face and stay at the same place over consecutive slices;
   scan-line noise changes with every slice and cancels.
-- with EsB files (the second detector, which hardly shows curtains): the stripes are looked for in the InLens
-  window minus the gain-matched EsB window. The tissue, which both detectors show, largely cancels, so curtains
-  of well under 1 % of the contrast stand out; stripes that both detectors show alike cancel too (structure
-  of the sample, a scan fault), and a peak that EsB alone shows as well does not count. Without EsB the
-  tissue's own profile is the background and only strong curtains are seen.
+- the stripes are looked for in the InLens window minus the gain-matched EsB window (the second detector,
+  which hardly shows curtains). The tissue, which both detectors show, largely cancels, so curtains of about
+  1 % of the contrast stand out; stripes that both detectors show alike cancel too (structure of the sample,
+  a scan fault), and a peak that EsB alone shows as well does not count.
 
 A window votes vertical (peak within ``tolerance`` degrees of the y axis), horizontal (of the x axis), at an
 angle (anything else) or nothing (no peak above ``min_z`` robust standard deviations of the angle profile and
@@ -35,7 +34,16 @@ angle (anything else) or nothing (no peak above ``min_z`` robust standard deviat
     conflicting             otherwise (both directions, or curtains at an angle, which destreak cannot
                             remove): stop, a person has to look
 
-    python -m pipeline.curtains RAW_DIR [--reference-to PATTERN | --no-esb] [--files N] [--transpose]
+The measure needs the EsB files. Without them the tissue's own straight structures are taken for stripes:
+on two volumes with vertical curtains the measure without EsB gave "conflicting" (a quarter of the curtained
+windows found, and peaks at other angles that are tissue). So only raw files that have their EsB file are
+sampled, and without any EsB file the direction is not measured: destreak.direction stays a setting a person
+states, and the message says so.
+
+Checked on real data (26 Nov 2026, 64 windows each): three volumes with vertical curtains gave vertical
+(61, 56 and 45 of 64 windows, none horizontal), and the same windows transposed gave horizontal.
+
+    python -m pipeline.curtains RAW_DIR [--reference-to PATTERN] [--files N] [--transpose]
     python -m pipeline.curtains --config CONFIG [...]          raw_dir, file pattern and reference from a config
 Exit code 0 for vertical, horizontal and unclear, 2 for conflicting.
 """
@@ -291,43 +299,57 @@ def detect(raw_dir, files, reference=None, configured="vertical", n_files=12, pe
             stacks[f] = ImageJStack(raw_dir / f)
         return stacks[f]
 
+    with_esb = [f for f in files if reference is not None and reference(f) is not None]
+    not_measured = ("curtain direction not measured: {why}. Without EsB the tissue's own straight structures are "
+                    f"taken for stripes, so the measure is not used. The configured direction ({configured}) is "
+                    "kept; it was not measured: a person has to look at the raw tiles and state destreak.direction")
+    if not with_esb:
+        return {"direction": "unclear", "use": configured, "counts": {}, "windows": 0, "samples": [],
+                "message": not_measured.format(why="no raw file has an EsB file")}
     shapes = {}
-    for f in files:
+    for f in with_esb:
         try:
             shapes[f] = stack(f).shape
         except Exception as e:   # unreadable files are check's business
             log.warning("%s: header not readable (%s): not sampled", f, e)
     samples = []
+    rows_cache = {}
+
+    def read(name, k, y0, x0, size):
+        # whole rows in one read, then the columns: far fewer reads than one per row of a narrow strip
+        key = (name, k, y0, size)
+        if key not in rows_cache:
+            if len(rows_cache) >= 8:
+                rows_cache.clear()
+            rows_cache[key] = stack(name).read(k, slice(y0, y0 + size), slice(None))
+        return rows_cache[key][:, x0:x0 + size].astype(np.float32)
+
     for f, i, y0, x0, size in plan(list(shapes), shapes, n_files, per_file, s):
         if index is not None:
             i = max(0, min(shapes[f][0] - 2, int(index)))
-        rows, cols = slice(y0, y0 + size), slice(x0, x0 + size)
-        read = lambda name, k: stack(name).read(k, rows, cols).astype(np.float32)
-        a, b = read(f, i), read(f, i + 1)
-        ea = eb = None
-        ref = reference(f) if reference is not None else None
-        if ref is not None:
-            try:
-                ea, eb = read(ref, i), read(ref, i + 1)
-            except Exception as e:
-                log.warning("%s: EsB window not readable (%s): measured without it", ref, e)
-                ea = eb = None
+        ref = reference(f)
+        try:
+            a, b = read(f, i, y0, x0, size), read(f, i + 1, y0, x0, size)
+            ea, eb = read(ref, i, y0, x0, size), read(ref, i + 1, y0, x0, size)
+        except Exception as e:
+            log.warning("%s slice %d: window not readable (%s): not measured", f, i, e)
+            continue
         if transpose:
-            a, b = a.T, b.T
-            ea, eb = (ea.T, eb.T) if ea is not None else (None, None)
+            a, b, ea, eb = a.T, b.T, ea.T, eb.T
         m = measure_window(a, b, ea, eb, s)
-        samples.append({"file": f, "index": int(i), "y0": y0, "x0": x0, "size": size, "esb": ea is not None, **m})
+        samples.append({"file": f, "index": int(i), "y0": y0, "x0": x0, "size": size, **m})
         log.info("%s slice %d window y %d x %d: %s (angle %.1f, z %.1f, amplitude %.2f %%, coherence %s%s)", f, i,
                  y0, x0, m["vote"] + (f" ({m['why']})" if m.get("why") else ""), m["angle"], m["z"],
                  100 * m["amplitude"], m["coherence"],
                  f", EsB alone {100 * m['esb_amplitude']:.2f} %" if m["esb_amplitude"] is not None else "")
     if not samples:
         return {"direction": "unclear", "use": configured, "counts": {}, "windows": 0, "samples": [],
-                "message": "curtain direction not measured: no raw file with two slices of at least 256 px. The "
-                           f"configured direction ({configured}) is kept; it was not measured"}
+                "message": not_measured.format(why="no raw file with an EsB file has two slices of at least 256 px")}
     out = decide(samples, configured, s)
     out["samples"] = samples
-    out["with_esb"] = sum(x["esb"] for x in samples)
+    out["files_with_esb"], out["files"] = len(with_esb), len(files)
+    if len(with_esb) < len(files):
+        out["message"] += f" (measured on the {len(with_esb)} of {len(files)} raw files that have an EsB file)"
     out["settings"] = dict(s)
     return out
 
@@ -341,7 +363,6 @@ def main(argv=None):
     p.add_argument("--config", help="take raw_dir, raw.file_pattern and destreak's reference from this config")
     p.add_argument("--file-pattern", default=DEFAULTS["raw"]["file_pattern"])
     p.add_argument("--reference-to", help="destreak.reference_to of the EsB files (default: detected, pipeline/esb.py)")
-    p.add_argument("--no-esb", action="store_true", help="measure the raw tiles only")
     p.add_argument("--files", type=int, default=12, help="raw files sampled (spread over the sorted list)")
     p.add_argument("--per-file", type=int, default=4, help="windows per sampled file")
     p.add_argument("--only", help="regex: sample only raw files whose relative path matches")
@@ -364,14 +385,13 @@ def main(argv=None):
     found, _ = scan(a.raw_dir, re.compile(a.file_pattern), recursive, os.devnull)
     files = [f for f in sorted(found) if not a.only or re.search(a.only, f)]
     reference = None
-    if not a.no_esb:
-        rep = esb.check(a.raw_dir, files, a.reference_to, reference_from, headers=False)
-        if rep.reference_to:
-            have = {raw for raw, _ in rep.present}
-            reference = lambda f: esb.reference_of(f, reference_from, rep.reference_to) if f in have else None
-            print(f"EsB: {rep.summary()} (reference_to '{rep.reference_to}')")
-        else:
-            print("EsB: no EsB files found; measured on the raw tiles only")
+    rep = esb.check(a.raw_dir, files, a.reference_to, reference_from, headers=False)
+    if rep.reference_to:
+        have = {raw for raw, _ in rep.present}
+        reference = lambda f: esb.reference_of(f, reference_from, rep.reference_to) if f in have else None
+        print(f"EsB: {rep.summary()} (reference_to '{rep.reference_to}')")
+    else:
+        print("EsB: no EsB files found")
     res = detect(a.raw_dir, files, reference, configured, a.files, a.per_file, a.transpose, a.index)
     print(res["message"])
     if a.json:

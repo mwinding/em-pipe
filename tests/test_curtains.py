@@ -128,6 +128,19 @@ def test_detect_reads_sampled_windows_of_raw_files(tmp_path):
         files.append(name)
     ref = lambda f: "Backscatter/" + f.replace("_tile", "_EsB_tile")
     res = curtains.detect(raw, files, ref, per_file=1, s=S)
-    assert res["direction"] == "vertical" and res["windows"] == 3 and res["with_esb"] == 3
+    assert res["direction"] == "vertical" and res["windows"] == 3 and res["files_with_esb"] == 3
     assert curtains.detect(raw, files, ref, per_file=1, transpose=True, s=S)["direction"] == "horizontal"
     assert curtains.main([str(raw), "--per-file", "1"]) == 0
+
+
+def test_without_esb_files_the_direction_is_not_measured(tmp_path):
+    """Without EsB the tissue's own structures give false directions: nothing is measured, and that is said."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    a, b, _, _ = pair(0)
+    synth.write_imagej(raw / "M10_D06_tile0-0.tif", np.clip(np.stack([a, b]) * 20, 0, 65535).astype(np.uint16), ["s"] * 2)
+    for reference in (None, lambda f: None):
+        res = curtains.detect(raw, ["M10_D06_tile0-0.tif"], reference, configured="horizontal", s=S)
+        assert res["direction"] == "unclear" and res["use"] == "horizontal" and res["windows"] == 0
+        assert "not measured: no raw file has an EsB file" in res["message"] and "a person has to look" in res["message"]
+    assert curtains.main([str(raw)]) == 0
