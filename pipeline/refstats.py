@@ -385,14 +385,33 @@ def plot_stats(st, path):
 def main(argv=None):
     from . import intensity, preview, render
     p = base_parser("Reference tissue statistics on the common scale, for intensity.window: reference")
-    p.add_argument("command", choices=["run", "merge"])
+    p.add_argument("command", choices=["run", "merge", "check"],
+                   help="check: only compare stats.csv with what this config would measure with now (writes nothing)")
     args = p.parse_args(argv)
     defaults = DEFAULTS
     for d in (intensity.DEFAULTS, shading.DEFAULTS, patchgrid.DEFAULTS, refmask.DEFAULTS, preview.DEFAULTS,
               render.DEFAULTS):
         defaults = deep_merge(defaults, d)
     cfg = setup(args, defaults)
+    if args.command == "check":
+        return check(cfg)
     return run(cfg, args) if args.command == "run" else merge(cfg, args)
+
+
+def check(cfg):
+    """Are the statistics those of this config's balance and corrections? Reads only; exit code 1 if not."""
+    from .intensity import balanced_scale
+    path = stats_path(cfg, "stats.csv")
+    if not path.exists():
+        log.error("%s not found: run refstats (run, merge)", path)
+        return 1
+    bad, compared = stale(cfg, balanced_scale(cfg))
+    if bad is None:
+        log.error("%s records no digests: it cannot be checked", path)
+        return 1
+    log.info("%s: %d of %d sampled slices were measured with this config's tile balance and corrections%s", path,
+             len(compared) - len(bad), len(compared), f"; {len(bad)} differ, e.g. z {bad[0]}" if bad else "")
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

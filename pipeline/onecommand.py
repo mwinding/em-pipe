@@ -97,8 +97,8 @@ def config_text(a, preset, name, facts, n_files, esb_rep, direction):
     L = [f"# Written by `em-pipe RAW_DIR OUTPUT_DIR` on {datetime.now():%Y-%m-%d %H:%M} (em-pipe {_commit()}).",
          "# The settings come from the preset (base:); below are this dataset's paths and what was found in its raw",
          "# files. To change something, edit this file and run  ./run_pipeline.sh <this file>  (--dry-run first).",
-         f"base: {preset}", "", f"name: {name}", f"raw_dir: {Path(a.raw_dir).resolve()}",
-         f"output_dir: {Path(a.output_dir).resolve()}", "",
+         f"base: {preset}", "", f"name: {name}", f"raw_dir: {os.path.abspath(a.raw_dir)}",
+         f"output_dir: {os.path.abspath(a.output_dir)}", "",
          f"# From the headers of the {n_files} raw files: the automatic Slurm resources are sized from these",
          "# (slurm.auto, pipeline/resources.py). tiles: the most tiles in one slice; tile_px: the largest tile.",
          "detected:"]
@@ -168,7 +168,8 @@ def main(argv=None):
     a = p.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     say = lambda *x: print(*x, flush=True)
-    raw_dir, out_dir = Path(a.raw_dir).resolve(), Path(a.output_dir).resolve()
+    # as typed, made absolute: links in the path are kept (a share is often reached through one)
+    raw_dir, out_dir = Path(os.path.abspath(a.raw_dir)), Path(os.path.abspath(a.output_dir))
     if not raw_dir.is_dir():
         say(f"em-pipe: RAW_DIR {raw_dir} " + ("is not a folder" if raw_dir.exists() else "does not exist"))
         return 1
