@@ -166,6 +166,11 @@ def combinations(cfg):
             if isinstance(c.get("lo_percentile"), (int, float)) and isinstance(c.get("hi_percentile"), (int, float)) \
                     and c["lo_percentile"] >= c["hi_percentile"]:
                 E.append("intensity.lo_percentile must be below hi_percentile")
+    if g("slurm.auto"):
+        from . import resources
+        problem = resources.check_facts(cfg.get("detected"))
+        if problem:
+            E.append(problem)
     if g("refstats.enabled") and not g("refmask.enabled"):
         E.append("refstats.enabled needs refmask.enabled: true (it measures inside the refmask step's mask)")
     if g("destreak.enabled"):

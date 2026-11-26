@@ -30,6 +30,9 @@ DEFAULTS = {
     },
     # Restricts every step after check. Keys: start, end (timestamps), z_start, z_end (inclusive).
     "selection": {},
+    # What the `em-pipe` command found in the raw files' headers: slices, tiles (the most in one slice), tile_px
+    # ([height, width] of the largest tile), tile_images, raw_gpx (raw pixels, 10^9), canvas_mpx. Used by slurm.auto.
+    "detected": {},
     # Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
     # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch (partition: SBATCH_PARTITION
     # from slurm/site.sh, else the cluster's default).
@@ -38,6 +41,9 @@ DEFAULTS = {
     # zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale), export.
     "slurm": {
         "mail_user": None,          # sbatch --mail-user (failure mails); null: Slurm's default
+        # true: every job's array size, cpus, mem and time from the dataset's size (the detected: section;
+        # pipeline/resources.py). A job's keys set in the config still win, key by key
+        "auto": False,
         "preview": {"array": 20},
         "refmask": {"array": 10},
         "refstats": {"array": 10},
@@ -57,14 +63,19 @@ STEPS = ("check", "preview", "refmask", "stitch", "align", "shading", "overlaps"
          "intensity",
          "destreak", "zcorrect",
          "render", "pyramid", "export", "precomputed", "upload", "serve", "movie")
+# run_pipeline.sh's steps, in its order (quality: tools/slice_quality.py; summary: tools/qc_summary.py)
+STEPS_IN_ORDER = ("check", "preview", "refmask", "stitch", "align", "shading", "overlaps", "patchgrid", "zrelations",
+                  "refstats", "intensity", "zcorrect", "render", "pyramid", "export", "quality", "summary", "precomputed",
+                  "upload")
 JOBS = ("check", "preview", "preview_merge", "refmask", "refmask_merge", "stitch", "stitch_merge", "align",
         "align_solve", "shading", "overlaps", "overlaps_merge", "patchgrid", "zrelations", "zrelations_merge", "refstats",
         "refstats_merge", "intensity",
-        "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid", "export", "precomputed_init",
+        "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid", "export", "slice_quality",
+        "slice_quality_merge", "qc_summary", "precomputed_init",
         "precomputed", "precomputed_verify", "upload", "upload_finish")
 ARRAY_JOBS = ("preview", "refmask", "stitch", "align", "overlaps", "zrelations", "refstats", "zcorrect", "render", "pyramid",
-              "precomputed", "upload")
-SLURM_KEYS = ("mail_user",)   # keys of the slurm: section that are not jobs
+              "slice_quality", "precomputed", "upload")
+SLURM_KEYS = ("mail_user", "auto")   # keys of the slurm: section that are not jobs
 _SBATCH = {"cpus": "--cpus-per-task", "mem": "--mem", "time": "--time", "partition": "--partition",
            "gres": "--gres"}
 
@@ -155,20 +166,35 @@ def step_defaults(*sections):
     return out
 
 
-def sbatch_args(cfg, job):
-    """sbatch options (job name aside) for one run_pipeline.sh job from the config's ``slurm`` section."""
+def job_options(cfg, job):
+    """One job's Slurm settings (array, cpus, mem, time, partition, gres). With slurm.auto the values sized
+    from the dataset (pipeline/resources.py), overridden key by key by what the config file itself sets for
+    the job; else the config's values over config.py's defaults."""
     if job not in JOBS:
         raise ValueError(f"unknown job {job!r}; expected one of {JOBS}")
     slurm = cfg.get("slurm") or {}
     opts = slurm.get(job) or {}
     if not isinstance(opts, dict):
         raise ValueError(f"slurm.{job} must be a group of settings ({', '.join(('array', *_SBATCH))})")
+    if slurm.get("auto"):
+        from . import resources
+        # what the config file itself sets (cfg's slurm section also holds config.py's defaults)
+        user = (_read_user(cfg["config_path"]).get("slurm") or {}) if cfg.get("config_path") else slurm
+        mine = user.get(job) if isinstance(user.get(job), dict) else {}
+        opts = {**resources.auto(cfg).get(job, {}), **mine}
     unknown = set(opts) - {"array", *_SBATCH}
     if unknown:
         raise ValueError(f"slurm.{job}: unknown keys {sorted(unknown)}")
     if not isinstance(opts.get("time", ""), str):
         # YAML reads an unquoted 04:00:00 as the integer 14400, which Slurm would take as minutes.
         raise ValueError(f"slurm.{job}.time must be a quoted string such as \"04:00:00\"")
+    return dict(opts)
+
+
+def sbatch_args(cfg, job):
+    """sbatch options (job name aside) for one run_pipeline.sh job from the config's ``slurm`` section."""
+    opts = job_options(cfg, job)
+    slurm = cfg.get("slurm") or {}
     array = job in ARRAY_JOBS
     args = [f"--output={Path(cfg['output_dir']) / 'work' / 'logs' / ('%x-%A_%a.out' if array else '%x-%j.out')}"]
     if array:
