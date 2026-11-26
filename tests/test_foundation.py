@@ -194,3 +194,21 @@ def test_atomic_write_follows_default_acl(tmp_path):
     finally:
         os.umask(old)
     assert (path.stat().st_mode & 0o777) == 0o660
+
+
+def test_default_file_pattern_takes_single_tile_days_and_leaves_out_other_files():
+    """Approach days recorded as one tile are named without a tile (M10_D16_part1.tif) and are part of the
+    volume; joined multi-day copies, EsB files and other files are not matched."""
+    import re
+    from pipeline.config import DEFAULTS
+    pat = re.compile(DEFAULTS["raw"]["file_pattern"])
+    for name, want in [("M10_D06_tile1-1.tif", ("10", "06", "1", "1", None)),
+                       ("M09_D23_tile0-0_part2.tif", ("09", "23", "0", "0", "2")),
+                       ("M10_D16_part1.tif", ("10", "16", None, None, "1")),
+                       ("M10_D17.tif", ("10", "17", None, None, None))]:
+        m = pat.match(name)
+        assert m is not None, name
+        assert (m["month"], m["day"], m["row"], m["col"], m["part"]) == want
+    for name in ["M11_D12D13_tile0-0.tif", "M10_D21_EsB_tile0-0.tif", "M10_D21_ESB_part1.tif",
+                 "overview_tiled_8bit.tif", "M10_D06_tile1-1.tif.part", "notes.txt"]:
+        assert pat.match(name) is None, name

@@ -178,16 +178,33 @@ def test_image_files_that_would_be_left_out_stop_the_run(tmp_path, raw, sbatch, 
     assert "STOPPED (image files that would be left out; EsB files missing or not matching)" in text
 
 
-def test_file_pattern_for_other_names(tmp_path, sbatch, capsys):
-    """Raw files without a tile in their name (a single-tile phase) are part of the volume with the pattern given."""
+def test_single_tile_days_are_part_of_the_volume_by_default(tmp_path, sbatch, capsys):
+    """A day recorded as one tile is named without a tile (M10_D16_part1.tif, often an approach day): the default
+    pattern takes it, with its EsB file, and nothing is left out."""
     import numpy as np
     raw = tmp_path / "raw"
     for name in ("M10_D16_part1.tif", "Backscatter/M10_D16_EsB_part1.tif"):
         (raw / name).parent.mkdir(parents=True, exist_ok=True)
         synth.write_imagej(raw / name, np.zeros((3, 8, 8), np.uint16), ["a", "b", "c"])
     out = tmp_path / "out"
+    assert run(raw, out, "--to", "check") == 0
+    user = yaml.safe_load((out / "config.yaml").read_text())
+    assert "raw" not in user and user["detected"]["slices"] == 3
+    text = capsys.readouterr().out
+    assert "1 of 1 EsB files present" in text and "left out" not in text
+
+
+def test_file_pattern_for_other_names(tmp_path, sbatch, capsys):
+    """Raw files named another way (here the part before the tile, as one microscope exports) are part of the
+    volume with the pattern given; without it the command stops."""
+    import numpy as np
+    raw = tmp_path / "raw"
+    for name in ("M06_D05_1_tile_0-0.tif", "Backscatter/M06_D05_EsB_1_tile_0-0.tif"):
+        (raw / name).parent.mkdir(parents=True, exist_ok=True)
+        synth.write_imagej(raw / name, np.zeros((3, 8, 8), np.uint16), ["a", "b", "c"])
+    out = tmp_path / "out"
     assert run(raw, out, "--dry-run") == 1 and "no file in" in capsys.readouterr().out
-    pattern = r"^M(?P<month>\d{2})_D(?P<day>\d{2})(?:_tile(?P<row>\d+)-(?P<col>\d+))?(?:_part(?P<part>\d+))?\.tif$"
+    pattern = r"^M(?P<month>\d{2})_D(?P<day>\d{2})(?:_(?P<part>\d+))?(?:_tile_(?P<row>\d+)-(?P<col>\d+))?\.tif$"
     assert run(raw, out, "--file-pattern", pattern, "--to", "check") == 0
     user = yaml.safe_load((out / "config.yaml").read_text())
     assert user["raw"] == {"file_pattern": pattern} and user["detected"]["slices"] == 3
