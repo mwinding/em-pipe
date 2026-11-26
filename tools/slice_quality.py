@@ -104,6 +104,7 @@ MAJOR = {"curtain": 0.10}   # reason -> value from which a flag is "major", wher
 NORMAL = {"focus": 1.0, "noise": 1.0, "scanline": 1.0, "align": 1.0}   # the value of an unremarkable slice (else 0)
 TREND_REASONS = {"focus": "sharp_z", "noise": "noise_z", "scanline": "scanline_z", "brightness_jump": "level_z",
                  "unlike_neighbours": "ncc_z", "align": None}
+MAX_MARKS = 1000       # the plot circles a reason's flags up to this many, beyond that only the major ones
 ALIGN_MIN_PX = 2.0     # an alignment residual below this is never flagged
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 
@@ -552,12 +553,15 @@ def plot(path, q, flags, seams):
                 continue
             ax.plot(g["z"], g[col], lw=0.6, color=COLORS[i % 8], ls=["-", "--", ":"][i // 8 % 3],
                     label=tile if col != "align_rms" else None)
+        n_flags = len(fl)
+        if n_flags > MAX_MARKS:      # too many to draw: the major ones only
+            fl = fl[fl["severity"] == "major"]
         if len(fl):
             key = fl.assign(t=fl["worst_tile"].where(fl["tile"] == "all", fl["tile"]))
             pts = key.merge(q[["z", "tile", col]], left_on=["z", "t"], right_on=["z", "tile"], how="left")
             if col == "align_rms":
                 pts = fl.merge(q.drop_duplicates("z")[["z", col]], on="z", how="left")
-            ax.plot(pts["z"], pts[col], "o", ms=4, mfc="none", mec="#1a1a19", mew=0.8, label=f"flagged ({len(fl)})")
+            ax.plot(pts["z"], pts[col], "o", ms=4, mfc="none", mec="#1a1a19", mew=0.8, label=f"flagged ({n_flags})" if len(fl) == n_flags else f"flagged major ({len(fl)} of {n_flags} flags)")
         if logy:
             ax.set_yscale("log")
         ax.set_ylabel(label, fontsize=8)
