@@ -33,6 +33,21 @@ def test_run_copies_verifies_and_writes_manifest(src, tmp_path):
     assert [ln.split("  ")[1] for ln in lines] == ["./a.tif", "./sub/b.tif"]
     assert stat.S_IMODE((dst / "a.tif").stat().st_mode) == 0o660
     assert (src / "notes.txt").exists()                                # source untouched
+    assert not cv.work_dir(dst).exists()                               # bookkeeping removed after a PASS
+
+
+def test_manifest_elsewhere_and_bookkeeping_kept_after_a_fail(src, tmp_path):
+    dst = tmp_path / "raw" / "Backscatter"
+    listed = tmp_path / "raw_backscatter.md5"                          # next to the raw folder, not inside it
+    cv.main(["plan", str(src), str(dst)])
+    cv.main(["copy", str(src), str(dst)])
+    cv.main(["md5", str(src), str(dst), "--index", "0"])
+    assert cv.main(["verify", str(src), str(dst), "--manifest", str(listed)]) == 1
+    assert cv.work_dir(dst).is_dir() and not listed.exists()           # kept to show what went wrong
+    cv.main(["md5", str(src), str(dst), "--index", "1"])
+    assert cv.main(["verify", str(src), str(dst), "--manifest", str(listed)]) == 0
+    assert [ln.split("  ")[1] for ln in listed.read_text().splitlines()] == ["./a.tif", "./sub/b.tif"]
+    assert not cv.manifest_path(dst).exists() and not cv.work_dir(dst).exists()
 
 
 def test_mismatch_is_detected_and_no_manifest(src, tmp_path):

@@ -73,7 +73,7 @@ def test_run_splits_by_day_with_identical_pixels_and_manifest(dataset):
             assert stat.S_IMODE(out.stat().st_mode) == 0o660
     lines = manifest.read_text().splitlines()
     assert len(lines) == 4 and all(md5(bs / ln.split("  ./")[1]) == ln.split()[0] for ln in lines)
-    assert (tmp / "A_backscatter_split.md5.split_stack" / "check").is_dir()      # bookkeeping next to it
+    assert not (tmp / "A_backscatter_split.md5.split_stack").exists()           # bookkeeping removed after a PASS
     assert {p.name: md5(p) for p in list(raw.glob("*.tif")) + list(bs.glob("M11_D12D13*.tif"))} == before
 
 
@@ -214,3 +214,31 @@ def test_submit_dry_run_lists_the_chain(dataset, capsys):
     cmds = [ln for ln in out if ln.startswith("sbatch")]
     assert len(cmds) == 3 and "--array=0-3%6" in cmds[0] and "--group-rw" in cmds[0]
     assert all(f"--manifest {tmp / 'm.md5'}" in c for c in cmds)
+
+
+def test_merge_into_replaces_the_joined_entries_in_one_list(dataset, capsys):
+    """--merge-into: the copy's checksum list gets the splits' entries in place of the joined stacks'; no
+    separate manifest and no bookkeeping folder are left."""
+    raw, bs, tmp = dataset
+    joined = sorted(p.name for p in bs.glob("*.tif"))
+    listed = tmp / "A_backscatter.md5"
+    listed.write_text("".join(f"{'0' * 32}  ./{n}\n" for n in joined) + f"{'1' * 32}  ./zz_other.tif\n")
+    assert ss.main(["run", str(bs), str(raw), "--merge-into", str(listed)]) == 0
+    entries = [ln.split("  ")[1] for ln in listed.read_text().splitlines()]
+    assert not any(f"./{n}" in entries for n in joined)                         # joined entries replaced
+    assert "./zz_other.tif" in entries                                           # other entries kept
+    splits = sorted(p.name for p in bs.glob("*.tif") if p.name not in joined)
+    assert sorted(e[2:] for e in entries if e != "./zz_other.tif") == splits
+    assert entries == sorted(entries)
+    assert not (tmp / "A_backscatter_split.md5").exists()
+    assert not (tmp / "A_backscatter.md5.split_stack").exists()
+    assert "replaced" in capsys.readouterr().out
+
+
+def test_merge_into_needs_an_existing_list_and_excludes_manifest(dataset):
+    raw, bs, tmp = dataset
+    with pytest.raises(SystemExit, match="no such checksum list"):
+        ss.main(["plan", str(bs), str(raw), "--merge-into", str(tmp / "missing.md5")])
+    (tmp / "l.md5").write_text("")
+    with pytest.raises(SystemExit, match="give one"):
+        ss.main(["plan", str(bs), str(raw), "--merge-into", str(tmp / "l.md5"), "--manifest", str(tmp / "m.md5")])

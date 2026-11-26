@@ -4,21 +4,27 @@ checksum manifest next to the copy.
     python tools/copy_verify.py plan   SRC DST [--pattern REGEX]       list the files to copy
     python tools/copy_verify.py copy   SRC DST [--index K] [--group-rw] copy file K (or every file)
     python tools/copy_verify.py md5    SRC DST [--index K]             md5 of file K on both sides
-    python tools/copy_verify.py verify SRC DST                         compare; write DST.md5 if all match
+    python tools/copy_verify.py verify SRC DST [--manifest PATH]       compare; write the manifest if all match
     python tools/copy_verify.py run    SRC DST [--pattern REGEX] [--group-rw]   all four, here, in order
     python tools/copy_verify.py submit SRC DST [--pattern REGEX] [--group-rw] [--parallel N] [--dry-run]
                                                                        the four as a Slurm job chain
 
 SRC and DST are folders; files are matched by REGEX against their path relative to SRC (default: every
-.tif), searched recursively, and keep that relative path under DST. Bookkeeping (the file list and
-per-file checksums) goes to DST.copy_verify/ next to DST; the manifest, written only when every file
-matches, is DST.md5 next to DST, in md5sum format, so a copy can be checked again later with
+.tif), searched recursively, and keep that relative path under DST. The manifest, written only when every
+file matches, is DST.md5 next to DST (or --manifest PATH, e.g. next to the raw folder when DST is a folder
+inside it), in md5sum format, so a copy can be checked again later with
 
-    cd DST && md5sum -c ../<DST name>.md5
+    cd DST && md5sum -c <manifest>
 
-Safety: it never deletes anything (rsync without --delete; a failed copy leaves rsync's partial file
-for the next try); it refuses SRC == DST, DST inside SRC and SRC inside DST; source files are only
-read. --group-rw makes the copies rw for owner and group, nothing for others (0660), like a lab share.
+It covers every file in DST (a file in DST that is not in the list fails verify), so a later run over the
+whole folder replaces it: one list per copied folder. While the chain runs, its bookkeeping (the file list
+and per-file checksums) is in DST.copy_verify/ next to DST; after a PASS that folder is removed (its
+checksums are in the manifest), after a FAIL it is kept to show what went wrong.
+
+Safety: it never deletes data (rsync without --delete; a failed copy leaves rsync's partial file for the
+next try; only its own bookkeeping folder is removed); it refuses SRC == DST, DST inside SRC and SRC inside
+DST; source files are only read. --group-rw makes the copies rw for owner and group, nothing for others
+(0660), like a lab share.
 
 The record of which data were copied where (paths, dates, the manifest's location) belongs in the
 lab's own configuration repository, not here.
@@ -54,7 +60,9 @@ def work_dir(dst):
     return d.parent / f"{d.name}.copy_verify"
 
 
-def manifest_path(dst):
+def manifest_path(dst, manifest=None):
+    if manifest:
+        return Path(manifest).resolve()
     d = Path(dst).resolve()
     return d.parent / f"{d.name}.md5"
 
@@ -126,7 +134,7 @@ def md5_one(src, dst, k, rel):
     print(f"copy_verify: md5 {rel}: {'match' if res['src'] == res['dst'] else 'MISMATCH'}", flush=True)
 
 
-def verify(src, dst):
+def verify(src, dst, manifest=None):
     s, d = check_paths(src, dst)
     files, out = file_list(d), work_dir(d) / "md5"
     problems, lines = [], []
@@ -147,9 +155,13 @@ def verify(src, dst):
     if problems:
         print("copy_verify: FAIL", *problems, "no manifest written", sep="\n  ")
         return 1
-    manifest_path(d).write_text("\n".join(lines) + "\n")
-    print(f"copy_verify: PASS: all {len(files)} files byte-identical (md5). Manifest: {manifest_path(d)}\n"
-          f"  check again later: cd {d} && md5sum -c ../{manifest_path(d).name}")
+    m = manifest_path(d, manifest)
+    tmp = m.with_name(m.name + ".part")
+    tmp.write_text("\n".join(lines) + "\n")
+    tmp.replace(m)
+    shutil.rmtree(work_dir(d))            # its checksums are in the manifest now
+    print(f"copy_verify: PASS: all {len(files)} files byte-identical (md5). Manifest: {m}\n"
+          f"  check again later: cd {d} && md5sum -c {m}")
     return 0
 
 
@@ -158,10 +170,11 @@ def submit(args):
     n, here = len(files), Path(__file__).resolve().parents[1]
     sb = ["sbatch", "--parsable", "--chdir", str(here)]
     common = [str(Path(args.src).resolve()), str(Path(args.dst).resolve())]
+    vopt = ["--manifest", str(Path(args.manifest).resolve())] if args.manifest else []
     cpy = sb + ["--job-name=copy-verify-copy", f"--array=0-{n - 1}%{args.parallel}", "slurm/copy_verify.sbatch", "copy",
                 *common] + (["--group-rw"] if args.group_rw else [])
     md5 = sb + ["--job-name=copy-verify-md5", f"--array=0-{n - 1}%{args.parallel}", "slurm/copy_verify.sbatch", "md5", *common]
-    ver = sb + ["--job-name=copy-verify-check", "slurm/copy_verify.sbatch", "verify", *common]
+    ver = sb + ["--job-name=copy-verify-check", "slurm/copy_verify.sbatch", "verify", *common, *vopt]
     if args.dry_run:
         for c in (cpy, md5, ver):
             print(" ".join(c))
@@ -183,6 +196,7 @@ def main(argv=None):
     ap.add_argument("--group-rw", action="store_true", help="copies rw for owner and group only (0660)")
     ap.add_argument("--parallel", type=int, default=6, help="submit: array tasks running at once (default 6)")
     ap.add_argument("--dry-run", action="store_true", help="submit: print the sbatch commands only")
+    ap.add_argument("--manifest", help="where the checksum list goes (default DST.md5 next to DST)")
     a = ap.parse_args(argv)
     check_paths(a.src, a.dst)
     if a.cmd == "plan":
@@ -196,10 +210,10 @@ def main(argv=None):
             copy_one(a.src, a.dst, rel, a.group_rw)
         for k, rel in enumerate(files):
             md5_one(a.src, a.dst, k, rel)
-        return verify(a.src, a.dst)
+        return verify(a.src, a.dst, a.manifest)
     files = file_list(a.dst)
     if a.cmd == "verify":
-        return verify(a.src, a.dst)
+        return verify(a.src, a.dst, a.manifest)
     for k in indices(a, len(files)):
         if a.cmd == "copy":
             copy_one(a.src, a.dst, files[k], a.group_rw)

@@ -27,7 +27,10 @@ files in REF_DIR, is not a joined stack and is left alone.
 Options for every command: --out-dir DIR (default JOINED_DIR), --label NAME (the detector name in the split
 names; default EsB for multi-day stacks, the joined file's own token, e.g. ESB, for the parts of one day),
 --label-pattern REGEX (the slice labels' pattern, default em-pipe's raw.label_pattern), --manifest PATH
-(default OUT_DIR/../<OUT_DIR name>_split.md5; bookkeeping goes to a folder next to it, <manifest>.split_stack/).
+(default OUT_DIR/../<OUT_DIR name>_split.md5), or --merge-into LIST: an existing checksum list of OUT_DIR
+(e.g. the copy's, from tools/copy_verify.py), in which the joined stacks' entries are replaced by the splits'
+(one list per folder). While the chain runs its bookkeeping is in a folder next to the list
+(<list>.split_stack/); after a PASS that folder is removed, after a FAIL it is kept.
 
 Each split is a new ImageJ stack like the raw files (one header, slices stored back to back, the joined stack's
 byte order, resolution, unit, spacing and slice labels); its pixel bytes are copied unchanged from the joined
@@ -38,7 +41,7 @@ stops it before anything is written. verify checks every split's header against 
 size, type) and the joined stack, its labels again, that its pixels are byte-identical to the joined stack's
 slices (md5, from check), and that the slices are in the right order: at both ends of each split, the split
 slice resembles the InLens slice of the same index more than its neighbours (the two detectors record the same
-scan). Only then is the manifest (md5 of each split file, md5sum format) written:
+scan). Only then is the manifest (md5 of each split file, md5sum format) written, or merged into the list:
 
     cd OUT_DIR && md5sum -c <manifest>
 
@@ -50,6 +53,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -72,8 +76,27 @@ LABEL_PATTERN = DEFAULTS["raw"]["label_pattern"]
 
 def paths(args):
     out = Path(args.out_dir or args.joined_dir).resolve()
-    manifest = Path(args.manifest).resolve() if args.manifest else out.parent / f"{out.name}_split.md5"
+    if getattr(args, "merge_into", None):
+        manifest = Path(args.merge_into).resolve()
+    else:
+        manifest = Path(args.manifest).resolve() if args.manifest else out.parent / f"{out.name}_split.md5"
     return out, manifest, manifest.parent / f"{manifest.name}.split_stack"
+
+
+def merge_lines(old_text, new_lines, joined_rel):
+    """The checksum list ``old_text`` with the entries of the joined stacks (``./<path>`` relative to OUT_DIR)
+    replaced by ``new_lines``, sorted by path. Returns (text, number of entries removed)."""
+    drop = {f"./{r}" for r in joined_rel}
+    kept, removed = [], 0
+    for line in old_text.splitlines():
+        if not line.strip():
+            continue
+        if line.split(None, 1)[1].strip() in drop:
+            removed += 1
+            continue
+        kept.append(line)
+    merged = sorted(kept + list(new_lines), key=lambda s: s.split(None, 1)[1])
+    return "\n".join(merged) + "\n", removed
 
 
 def _inlens_files(names, m, d, rest):
@@ -309,7 +332,7 @@ def day_order(it):
     return rows
 
 
-def verify(items, work, manifest, out_dir, label_pattern=LABEL_PATTERN):
+def verify(items, work, manifest, out_dir, label_pattern=LABEL_PATTERN, merge=False):
     problems, lines, report = [], [], []
     label_re, n_labels = re.compile(label_pattern), 0
     for k, it in enumerate(items):
@@ -352,9 +375,21 @@ def verify(items, work, manifest, out_dir, label_pattern=LABEL_PATTERN):
     if problems:
         print("split_stack: FAIL", *problems, "no manifest written", sep="\n  ")
         return 1
-    manifest.write_text("\n".join(lines) + "\n")
+    if merge:
+        joined_rel = sorted({Path(it["joined"]).resolve().relative_to(out_dir).as_posix() for it in items
+                             if Path(it["joined"]).resolve().is_relative_to(out_dir)})
+        text, removed = merge_lines(manifest.read_text(), lines, joined_rel)
+        note = (f"; {removed} entries of the joined stacks replaced: delete the joined stacks when you are "
+                "satisfied, the list no longer covers them") if removed else ""
+    else:
+        text, note = "\n".join(lines) + "\n", ""
+    tmp = manifest.with_name(manifest.name + ".part")
+    tmp.write_text(text)
+    tmp.replace(manifest)
+    shutil.rmtree(work, ignore_errors=True)     # the pixel checks are in the list now
     print(f"split_stack: PASS: {len(items)} splits match their InLens files and the joined stacks' pixels. "
-          f"Manifest: {manifest}\n  check again later: cd {out_dir} && md5sum -c {manifest}")
+          f"{'Merged into' if merge else 'Manifest:'} {manifest}{note}\n"
+          f"  check again later: cd {out_dir} && md5sum -c {manifest}")
     return 0
 
 
@@ -369,10 +404,10 @@ def indices(args, n):
 def submit(args, n):
     here = Path(__file__).resolve().parents[1]
     common = [str(Path(args.joined_dir).resolve()), str(Path(args.ref_dir).resolve())]
-    for opt in ("out_dir", "label", "label_pattern", "manifest"):
+    for opt in ("out_dir", "label", "label_pattern", "manifest", "merge_into"):
         v = getattr(args, opt)
         if v:
-            common += [f"--{opt.replace('_', '-')}", str(Path(v).resolve()) if opt in ("out_dir", "manifest") else v]
+            common += [f"--{opt.replace('_', '-')}", str(Path(v).resolve()) if opt in ("out_dir", "manifest", "merge_into") else v]
     sb = ["sbatch", "--parsable", "--chdir", str(here)]
     arr = f"--array=0-{n - 1}%{args.parallel}"
     spl = sb + ["--job-name=split-stack-split", arr, "slurm/split_stack.sbatch", "split", *common] + \
@@ -403,11 +438,17 @@ def main(argv=None):
     ap.add_argument("--label-pattern", help="regex of the slice labels (default: em-pipe's raw.label_pattern); "
                                             "every named group but detector must agree with InLens")
     ap.add_argument("--manifest", help="manifest path (default OUT_DIR/../<OUT_DIR name>_split.md5)")
+    ap.add_argument("--merge-into", help="an existing checksum list of OUT_DIR: the joined stacks' entries are "
+                                         "replaced by the splits' (instead of a separate manifest)")
     ap.add_argument("--index", type=int, help="one split (default: the Slurm array task, else all)")
     ap.add_argument("--group-rw", action="store_true", help="splits rw for owner and group only (0660)")
     ap.add_argument("--parallel", type=int, default=6, help="submit: array tasks running at once (default 6)")
     ap.add_argument("--dry-run", action="store_true", help="submit: print the sbatch commands only")
     a = ap.parse_args(argv)
+    if a.merge_into and a.manifest:
+        sys.exit("split_stack: --manifest and --merge-into: give one")
+    if a.merge_into and not Path(a.merge_into).is_file():
+        sys.exit(f"split_stack: --merge-into {a.merge_into}: no such checksum list")
     out, manifest, work = paths(a)
     for d in (Path(a.joined_dir).resolve(), Path(a.ref_dir).resolve()):
         if not d.is_dir():
@@ -427,7 +468,7 @@ def main(argv=None):
         for k in (range(len(items)) if a.cmd == "run" else indices(a, len(items))):
             check_one(k, items[k], work)
     if a.cmd in ("verify", "run"):
-        return verify(items, work, manifest, out, lp)
+        return verify(items, work, manifest, out, lp, merge=bool(a.merge_into))
     return 0
 
 
