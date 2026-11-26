@@ -298,8 +298,8 @@ timeline changed.
 | `tile_jumps.py` | Tile jumps and alignment problems over a whole run (plot + summary): candidates for `align.local_windows`. |
 | `levels_compare.py` | Two level tables of the same dataset (`work/intensity/.../levels.csv`) compared per slice and tile in greys: lo, hi, the brightness difference split into what a slice's tiles share and each tile's own, and the window width; e.g. an automatic run against a hand-made config. |
 | `zflicker.py` (+ `slurm/zflicker.sbatch`) | Slice-to-slice brightness flicker of rendered volumes (the stripes in x-z and y-z views), split into the part shared by the whole plane and each region's own; with `--config`, the same for the raw tiles and the display windows, to show which one it comes from. |
-| `reference_from_volume.py`, `reference_preview.py`, `standard_compare.py`, `refstats_compare.py`, `segment_overview.py`, `refmask_check.py`, `refmask_train.py` | The reference contrast (below): a volume's neuropil numbers under its levels, before/after crops of new levels, volumes side by side at candidate standards, two refstats runs compared, one slice per segment with its tile outlines, the neuropil mask drawn over a volume, the mask model rebuilt from labelled boxes. |
-| `seam_steps.py`, `shading_measure.py`, `shading_before_after.py`, `clipping_check.py`, `map_point.py`, `triptych.py` | Seam brightness steps, flat-field measurements and before/after stacks, clipping, mapping a point between volume and raw tiles, side-by-side figures. |
+| `reference_preview.py`, `segment_overview.py`, `refmask_check.py`, `refmask_train.py` | The reference contrast (below): before/after crops of new levels, one slice per segment with its tile outlines, the neuropil mask drawn over a volume, the mask model rebuilt from labelled boxes. |
+| `seam_steps.py`, `shading_before_after.py`, `clipping_check.py`, `map_point.py` | Seam brightness steps, before/after stacks of chosen slices (the input of `seam_steps.py`), clipping, mapping a point from one render of a dataset to another. |
 | `volume_compare.py` | Two or more rendered volumes at the same places, side by side with grey histograms: whole slices and full-resolution crops. Reads local OME-Zarr and precomputed volumes, including a delivered copy in a Google Cloud Storage bucket (credentials from the environment), e.g. a re-render against what was delivered. |
 | `ortho_views.py` | x-y, x-z and y-z views through the same points of two or more volumes, stacked, at full resolution and with the volumes' own greys: slice-to-slice flicker shows as stripes in x-z and y-z. |
 | `check_private.sh` | Run before every push: fails if the files or commits about to be pushed contain site-specific details (paths, hosts, names, dataset IDs). Generic patterns are in `tools/private_patterns.txt`; put your own (cluster, share, people) in the git-ignored `tools/private_patterns.local.txt`. |
@@ -327,7 +327,9 @@ repository, not here.
 
 `dev/` holds development analyses: the checks and experiments behind the pipeline's design and the
 datasets' settings, kept so the reasoning can be traced. They are not pipeline code and not tested;
-see [dev/README.md](dev/README.md). `qc/` in a clone is git-ignored: a place to copy a run's `qc/`
+see [dev/README.md](dev/README.md). Tools that served one decision are archived there too: those that set
+the contrast standard in `dev/2026-11_reference_standard/`, the flat-field measurements in
+`dev/2026-10_flat_field/`. `qc/` in a clone is git-ignored: a place to copy a run's `qc/`
 plots and comparison stacks for looking at locally.
 
 ## Consistent contrast across volumes (`intensity.window: reference`)
@@ -337,11 +339,10 @@ because those windows follow all the tissue in a slice, whatever its mix. The re
 puts one tissue, neuropil, at a fixed standard in every volume: its median at grey `reference.median`
 and the width of its histogram between the 5th and 95th percentile at `reference.contrast` greys (e.g.
 150 and 130). Which percentiles the window clips at is not chosen; it follows from matching the
-neuropil, and the QC reports it. The standard starts from a reference volume
-(`tools/reference_from_volume.py`: its neuropil numbers under the levels it was rendered with), is
-settled once (`tools/standard_compare.py` shows volumes side by side at candidate widths, with the
-tissue each clips and the pixel noise against the rounding to whole greys, before and after CLAHE) and
-then kept fixed.
+neuropil, and the QC reports it. The standard started from a reference volume (35h: its neuropil
+numbers under the levels it was rendered with), was settled once (volumes side by side at candidate
+widths, with the tissue each clips and the pixel noise against the rounding to whole greys, before and
+after CLAHE) and is kept fixed; the tools that did this are in `dev/2026-11_reference_standard/`.
 
 Three steps:
 
@@ -351,7 +352,7 @@ Three steps:
    of each segment, on the common scale the tiles are balanced to, with every correction render
    applies (decurtaining too, when `destreak.enabled`), before any window. `refstats.region` limits it
    to part of the volume; `refstats.output` keeps a variant's statistics apart (e.g. with and without
-   decurtaining; `tools/refstats_compare.py` compares two).
+   decurtaining; `dev/2026-11_reference_standard/tools/refstats_compare.py` compares two).
 3. **intensity** sets each slice's window:
    - its **width** is 255 × the neuropil's p5–p95 width / `reference.contrast`;
    - its **position** follows every slice's tissue, as the median window places it, so fast changes

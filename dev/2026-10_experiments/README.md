@@ -27,7 +27,7 @@ two parts of the pipeline were arrived at. They are not maintained and not teste
 | `janelia_flicker.py` | Slice-to-slice brightness change of tile interiors in before/after stacks of consecutive slices. |
 | `clahe_variants.py` | CLAHE applied to the pipeline's 32 nm test slices, for a set of clip limits and tile sizes. |
 | `clahe_8nm.py` | CLAHE computed as the real volume gets it: on the full 8 nm plane, then downsampled to 32 nm like the pyramid. |
-| `clahe_stack.py` | 2-frame stacks for `tools/triptych.py` from single 32 nm planes. |
+| `clahe_stack.py` | 2-frame stacks for `triptych.py` (`dev/2026-10_flat_field/tools/`, in `tools/` until 26 Nov 2026) from single 32 nm planes. |
 | `clahe_ownership.py` | Which tile owns each 32 nm pixel, and where each pair of tiles meets. |
 | `clahe_seam_steps.py` | The seam steps of `tools/seam_steps.py`, with the local contrast next to each seam and measures of CLAHE artefacts (resin noise, resin spread, halo). |
 | `clahe_summary.py` | Summary tables of `clahe_seam_steps.py`'s output. |

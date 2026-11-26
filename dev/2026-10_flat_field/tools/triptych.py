@@ -1,7 +1,7 @@
 """Side-by-side PNGs from two before/after stacks of the same slices (tools/shading_before_after.py):
 before | A | B, labelled.
 
-    python tools/triptych.py DIR_A DIR_B LABEL_A LABEL_B OUT_DIR [--z Z,Z,...] [--crop X0,Y0,X1,Y1] [--scale S]
+    python dev/2026-10_flat_field/tools/triptych.py DIR_A DIR_B LABEL_A LABEL_B OUT_DIR [--z Z,Z,...] [--crop X0,Y0,X1,Y1] [--scale S]
 
 --z: only these slices; --crop: a region of the stacks (their pixels); --scale: downscaling of the
 panels (default 3 for whole slices, 1 with --crop).

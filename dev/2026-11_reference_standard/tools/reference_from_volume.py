@@ -12,7 +12,7 @@ in greys:
 For the reference volume itself this is also its consistency check: the numbers describe exactly the
 grey values render wrote, because they use the same corrections and the same window.
 
-  python tools/reference_from_volume.py --config CONFIG [--levels LEVELS.csv] [--out OUT.json]
+  python dev/2026-11_reference_standard/tools/reference_from_volume.py --config CONFIG [--levels LEVELS.csv] [--out OUT.json]
 """
 
 import argparse
@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 from pipeline import intensity, patchgrid, refstats, shading  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
 

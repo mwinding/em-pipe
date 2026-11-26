@@ -24,7 +24,7 @@ Spec (JSON): {"widths": [130, 135, 140], "crop_um": 10, "seed": 0, "crop_kinds":
               "items": [{"name": "35h", "config": "...yaml", "volume": "..._8nm.ome.zarr", "z": 8848,
                          "region": [x0, y0, x1, y1] or null}, ...]}
 
-  python tools/standard_compare.py SPEC.json OUT.png [--json OUT.json]
+  python dev/2026-11_reference_standard/tools/standard_compare.py SPEC.json OUT.png [--json OUT.json]
 """
 
 import argparse
@@ -34,8 +34,8 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))   # tools/reference_preview.py
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 from reference_preview import F, Dataset, LevelsMap, pick_crops, region_mask  # noqa: E402
 from pipeline import intensity, omezarr, patchgrid, preview, refmask, refstats, render, shading  # noqa: E402
 from pipeline.config import deep_merge, load_config, qc_path  # noqa: E402

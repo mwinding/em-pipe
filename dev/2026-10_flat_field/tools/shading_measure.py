@@ -1,7 +1,7 @@
 """Shading within tiles: mean relative brightness by position in the tile, per tile layout segment,
 for tissue AND plain resin (the pipeline's own qc/shading.png shows tissue only, which the fit uses).
 
-    python tools/shading_measure.py CONFIG OUT_DIR
+    python dev/2026-10_flat_field/tools/shading_measure.py CONFIG OUT_DIR
 
 For every 20th slice and every tile: the preview thumbnail (1/16 scale) in raw units, divided by its
 own tissue median (tissue = not background.mask) or its own bright-resin median (resin = background
@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 from pipeline import background  # noqa: E402
 from pipeline.config import load_config  # noqa: E402
 from pipeline.preview import thumb_values  # noqa: E402

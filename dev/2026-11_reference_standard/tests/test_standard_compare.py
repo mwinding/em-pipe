@@ -1,4 +1,4 @@
-"""tools/standard_compare.py: other widths as a stretch around the median grey, and whole-volume clipping
+"""standard_compare.py (../tools/): other widths as a stretch around the median grey, and whole-volume clipping
 from the tissue quantiles."""
 import importlib.util
 from pathlib import Path
@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
-ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("standard_compare", ROOT / "tools" / "standard_compare.py")
+HERE = Path(__file__).resolve().parents[1]   # dev/2026-11_reference_standard
+spec = importlib.util.spec_from_file_location("standard_compare", HERE / "tools" / "standard_compare.py")
 standard_compare = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(standard_compare)
 

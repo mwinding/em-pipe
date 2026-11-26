@@ -1,4 +1,4 @@
-"""2-frame stacks for tools/triptych.py from single 32 nm planes (experiment, Oct 2026).
+"""2-frame stacks for dev/2026-10_flat_field/tools/triptych.py from single 32 nm planes (experiment, Oct 2026).
 
     python dev/2026-10_experiments/tools/clahe_stack.py SRC_DIR PLANE_DIR OUT_DIR Z[,Z...] LABEL
 

@@ -11,7 +11,7 @@ This tool lines the two up by z and reports, per segment and overall:
 The width ratio is what intensity.window: reference would change: the window width is proportional
 to the neuropil width, so B / A = 0.97 means B's window is 3 % narrower (3 % more contrast).
 
-  python tools/refstats_compare.py STATS_A.csv STATS_B.csv [--labels plain decurtained]
+  python dev/2026-11_reference_standard/tools/refstats_compare.py STATS_A.csv STATS_B.csv [--labels plain decurtained]
          [--out compare.png] [--json compare.json]
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 
 COLS = ("median", "width", "lc32")
 
