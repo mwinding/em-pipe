@@ -1,4 +1,4 @@
-"""Synthetic test of the Janelia-style patch solve (tools/experiments/janelia_solve.py).
+"""Synthetic test of the Janelia-style patch solve (../tools/janelia_solve.py).
 
 Four tiles (2 x 2, 1000 px, 100 px overlaps) whose raw values relate to the scene through per-tile
 gains plus within-tile gradients the flat-field missed. One level per tile cannot match all four
@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "experiments"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import janelia_solve as js  # noqa: E402
 
 R = js.R

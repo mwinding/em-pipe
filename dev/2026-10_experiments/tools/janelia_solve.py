@@ -1,7 +1,7 @@
 """Janelia-style intensity matching, step 2: solve a smooth linear intensity map per tile from the
-patch-pair relations of tools/experiments/janelia_bins.py, and the common display window per slice.
+patch-pair relations of dev/2026-10_experiments/tools/janelia_bins.py, and the common display window per slice.
 
-    python tools/experiments/janelia_solve.py BINS_DIR TILE_WINDOWS ZS OUT_PREFIX --variant A|B
+    python dev/2026-10_experiments/tools/janelia_solve.py BINS_DIR TILE_WINDOWS ZS OUT_PREFIX --variant A|B
         [--shape-zs ZS] [--grid 8] [--smooth 0.3] [--prior 0.02] [--gain-power 2] [--jump]
 
 Model (as saalfeldlab/render's intensity-adjust, adapted): every tile is split into grid x grid

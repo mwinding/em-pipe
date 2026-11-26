@@ -1,6 +1,6 @@
 """Slice-to-slice brightness change of tile interiors in before/after stacks of consecutive slices.
 
-    python tools/experiments/janelia_flicker.py OUT_CSV CONFIG OLD_VOLUME Z[,Z...]|@ZFILE NAME=DIR [NAME=DIR ...]
+    python dev/2026-10_experiments/tools/janelia_flicker.py OUT_CSV CONFIG OLD_VOLUME Z[,Z...]|@ZFILE NAME=DIR [NAME=DIR ...]
 
 Per slice and tile: the mean grey of the tile's interior (the middle half of the tile in x and y,
 mapped into the 32 nm plane with the render plan's transforms; no-data pixels left out) in frame 1
@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import tifffile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 from pipeline import render, shading, transforms  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
 

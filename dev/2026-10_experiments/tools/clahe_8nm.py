@@ -1,7 +1,7 @@
 """CLAHE computed the way the real display copy would be: on the full 8 nm plane, then downsampled
 to 32 nm like the pyramid (experiment, Oct 2026).
 
-    python tools/experiments/clahe_8nm.py CONFIG OLD_VOLUME SRC_DIR QC_DIR WORK_DIR Z[,Z...]
+    python dev/2026-10_experiments/tools/clahe_8nm.py CONFIG OLD_VOLUME SRC_DIR QC_DIR WORK_DIR Z[,Z...]
 
 For each slice z: renders the whole 8 nm plane from the raw tiles with the current levels and
 corrections (flat-field, patchgrid shapes when enabled; render.plane_meta on the canvas of
@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 import tifffile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 from pipeline import patchgrid, render, shading, transforms  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
 

@@ -9,6 +9,7 @@ adapting before they run again. General-purpose checks live in `tools/` instead.
 | Folder | When | What |
 |---|---|---|
 | [2026-10_qc_stitch_align/](2026-10_qc_stitch_align/) | Oct 2026 | stitching and alignment checks (solvers, layout changes, tile-level windows, seams), display-window and normalisation options, background mask, flat-field tests, CLAHE variants, spot-check stacks, a real-size synthetic dataset |
+| [2026-10_experiments/](2026-10_experiments/) | Oct 2026 | experiment scripts that were in `tools/experiments/` and `tests/experiments/` until 26 Nov 2026 (here as `tools/` and `tests/`): Janelia-style patch intensity matching, which became the `patchgrid` step, and CLAHE variants with their effect on seam steps, behind the CLAHE settings |
 | [2026-11_37i_processing/](2026-11_37i_processing/) | 12-14 Nov 2026 | checks made while processing the 37i volume: duplicate/label checks of re-exported files, a segment whose tile columns could not be matched, the junction after a long pause, slice-thickness (z-step) profiles |
 | [2026-11_contrast_matching/](2026-11_contrast_matching/) | 13 Nov 2026 | matching 37i's plain and CLAHE contrast to 35h's on neuropil (the basis of 37i's `intensity.window: median` settings) |
 | [2026-11_a1001_flicker/](2026-11_a1001_flicker/) | 24 Nov 2026 | where A1001's slice-to-slice flicker comes from: raw tile jumps, and what the display windows leave of them |
@@ -22,7 +23,9 @@ Curtain and EsB work (destreak tests, the curtain "arches") is in a separate rep
 
 Each folder has `scripts/` (files that existed as scripts) and `inline/` (code that was only ever run
 inline, as a heredoc in a shell command, saved here as files with a header giving the time, the note
-written just before it, and whether it ran locally or on the cluster).
+written just before it, and whether it ran locally or on the cluster). Two folders hold code that was
+moved out of the pipeline's own folders and keep its layout: `2026-10_experiments/` (`tools/`, `tests/`)
+and `2026-11_zstep_correction/zcorrect_step/`.
 
 Site-specific paths are placeholders, resolved from the environment: copy
 [paths.example.sh](paths.example.sh) to `paths.local.sh` (git-ignored), fill it in and `source` it.

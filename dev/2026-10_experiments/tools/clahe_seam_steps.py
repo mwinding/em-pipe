@@ -1,7 +1,7 @@
 """tools/seam_steps.py with its own output path, local contrast and CLAHE artefact measures
 (experiment, Oct 2026).
 
-    python tools/experiments/clahe_seam_steps.py CONFIG OLD_VOLUME Z[,Z...] OUT_PREFIX NAME=DIR [NAME=DIR ...]
+    python dev/2026-10_experiments/tools/clahe_seam_steps.py CONFIG OLD_VOLUME Z[,Z...] OUT_PREFIX NAME=DIR [NAME=DIR ...]
 
 The seam steps are exactly those of tools/seam_steps.py (same ownership render, masks, bands,
 stretches and medians; the loops only work on the bounding box of each seam's bands, which does not
@@ -33,8 +33,8 @@ import pandas as pd
 import tifffile
 from scipy import ndimage
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))   # tools/seam_steps.py
 from pipeline import render, shading  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
 from seam_steps import NEAR, FAR, STRETCH, MIN_PX, classes, ownership  # noqa: E402

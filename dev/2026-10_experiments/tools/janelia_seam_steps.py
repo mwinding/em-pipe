@@ -2,7 +2,7 @@
 (Copy of tools/seam_steps.py for the janelia experiment: the first argument is the output CSV,
 Z may be @ZFILE, and Slurm array tasks take every n-th slice, writing OUT_CSV with .partK.csv.)
 
-    python tools/experiments/janelia_seam_steps.py [--nearest-ownership] OUT_CSV CONFIG OLD_VOLUME Z[,Z...]|@ZFILE NAME=DIR ...
+    python dev/2026-10_experiments/tools/janelia_seam_steps.py [--nearest-ownership] OUT_CSV CONFIG OLD_VOLUME Z[,Z...]|@ZFILE NAME=DIR ...
 
 --nearest-ownership: the ownership plane's elastic remap (render._Renderer._warp, used for slices
 with an elastic field, e.g. all 3x3 slices of 35h) samples nearest instead of bilinear. Bilinear
@@ -34,7 +34,7 @@ import pandas as pd
 import tifffile
 from scipy import ndimage
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 from pipeline import background, render, shading  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
 

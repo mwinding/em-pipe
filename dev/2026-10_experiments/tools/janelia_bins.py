@@ -1,6 +1,6 @@
 """Janelia-style intensity matching, step 1: brightness relations per patch pair of every tile overlap.
 
-    python tools/experiments/janelia_bins.py CONFIG OUT_DIR Z[,Z...]|@ZFILE [--grid 8] [--min-pairs 2000]
+    python dev/2026-10_experiments/tools/janelia_bins.py CONFIG OUT_DIR Z[,Z...]|@ZFILE [--grid 8] [--min-pairs 2000]
 
 As saalfeldlab/render's intensity-adjust client (AdjustBlock / IntensityMatcher), each tile is split
 into a grid x grid array of patches and every pixel pair of an overlap is a match between the
@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 from pipeline import overlaps, shading, transforms  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
 from pipeline.slices import StackCache, load_slices  # noqa: E402

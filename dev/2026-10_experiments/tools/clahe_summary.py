@@ -1,6 +1,6 @@
 """Summary of clahe_seam_steps.py output (experiment, Oct 2026).
 
-    python tools/experiments/clahe_summary.py SEAMS_CSV [ARTEFACTS_CSV] [--ref v5]
+    python dev/2026-10_experiments/tools/clahe_summary.py SEAMS_CSV [ARTEFACTS_CSV] [--ref v5]
 
 Seams with >= 4 stretches, corner contacts (tiles differing in both row and column) left out. Per
 class and column: median |step|, seams with |step| > 10 and > 30 greys, number of seams; per segment

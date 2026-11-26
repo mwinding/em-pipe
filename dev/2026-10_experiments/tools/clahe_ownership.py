@@ -1,6 +1,6 @@
 """Which tile owns each 32 nm pixel, and where each pair of tiles meets (experiment, Oct 2026).
 
-    python tools/experiments/clahe_ownership.py CONFIG OLD_VOLUME Z[,Z...] OUT_DIR
+    python dev/2026-10_experiments/tools/clahe_ownership.py CONFIG OLD_VOLUME Z[,Z...] OUT_DIR
 
 Uses tools/seam_steps.ownership (the real render with every tile a constant). Writes OUT_DIR/z<z>.tif
 (uint8 labels, 0 = no data) and OUT_DIR/z<z>.json: the tile of every label, and per pair of tiles
@@ -14,8 +14,8 @@ import numpy as np
 import tifffile
 from scipy import ndimage
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))   # tools/seam_steps.py
 from pipeline import render, shading  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
 from seam_steps import ownership  # noqa: E402

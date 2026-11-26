@@ -1,6 +1,6 @@
 """Parameter sweep of the Janelia-style solve on the predicted seam steps (no rendering).
 
-    python tools/experiments/janelia_tune.py BINS_DIR TILE_WINDOWS LEVELS SLICES ZS [--shape-zs ZS]
+    python dev/2026-10_experiments/tools/janelia_tune.py BINS_DIR TILE_WINDOWS LEVELS SLICES ZS [--shape-zs ZS]
 
 For each setting: the predicted step at every bin relation's centre after the maps (display greys,
 a minus b), summarised like the seam metric (per seam the median over its bins, then the median |.|

@@ -1,7 +1,7 @@
 """Render test slices at 32 nm with Janelia-style patch intensity maps (janelia_solve.py), as
 tools/shading_before_after.py does: ImageJ stacks [frame 0: OLD_VOLUME's 32 nm plane, frame 1: new].
 
-    python tools/experiments/janelia_render.py CONFIG OLD_VOLUME Z[,Z...]|@ZFILE NAME=PREFIX [NAME=PREFIX ...]
+    python dev/2026-10_experiments/tools/janelia_render.py CONFIG OLD_VOLUME Z[,Z...]|@ZFILE NAME=PREFIX [NAME=PREFIX ...]
 
 PREFIX_maps.csv (z, tile, p, g, c) and PREFIX_windows.csv (z, lo, hi) from janelia_solve.py. Each
 tile slice is read, divided by its flat-field, mapped by g(x, y) (v - R) + R + c(x, y) (bilinear
@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import tifffile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pipeline import omezarr, render, shading, transforms  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402

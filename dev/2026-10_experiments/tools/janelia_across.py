@@ -1,6 +1,6 @@
 """Does the tile brightness relation change across the width of an overlap (tile-edge effects)?
 
-    python tools/experiments/janelia_across.py CONFIG LEVELS_CSV Z[,Z...] [--band 64]
+    python dev/2026-10_experiments/tools/janelia_across.py CONFIG LEVELS_CSV Z[,Z...] [--band 64]
 
 For each pair of side-by-side tiles of a slice: the overlap's pixel pairs (as janelia_bins.py), split
 into bands by distance from the seam line (the middle of the overlap, where the cut render switches
@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pipeline import overlaps, shading, transforms  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402

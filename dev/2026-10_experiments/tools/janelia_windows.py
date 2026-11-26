@@ -1,6 +1,6 @@
 """Per-(z, tile) display windows without tile balance, for the Janelia-style experiment.
 
-    python tools/experiments/janelia_windows.py CONFIG OUT_CSV
+    python dev/2026-10_experiments/tools/janelia_windows.py CONFIG OUT_CSV
 
 intensity.compute_levels with cfg["intensity"] overridden in memory: balance_tiles false and
 per_slice false (columns lo, hi), and the same with per_slice "slice" (lo_s, hi_s: each slice's
@@ -9,7 +9,7 @@ median brightness jump followed, as the current pipeline does). Does not touch w
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 from pipeline import intensity, shading  # noqa: E402
 from pipeline.config import deep_merge, load_config  # noqa: E402
 

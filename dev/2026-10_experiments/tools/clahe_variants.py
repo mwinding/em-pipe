@@ -1,6 +1,6 @@
 """CLAHE on top of the current pipeline's 32 nm test slices (experiment, Oct 2026).
 
-    python tools/experiments/clahe_variants.py SRC_DIR QC_DIR Z[,Z...]
+    python dev/2026-10_experiments/tools/clahe_variants.py SRC_DIR QC_DIR Z[,Z...]
 
 SRC_DIR holds z<z>.tif stacks from tools/shading_before_after.py (frame 0: the original volume,
 frame 1: the current pipeline; 32 nm, 0 = no data). For every clip limit in CLIPS and CLAHE tile
@@ -19,7 +19,7 @@ import numpy as np
 import tifffile
 from scipy import ndimage
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root
 from pipeline import render  # noqa: E402
 
 CLIPS = (1.5, 2.0, 3.0)
