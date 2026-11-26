@@ -172,6 +172,11 @@ def test_config_cli(tmp_path, capsys):
                       "--partition=ga100", "--gres=gpu:1", "--mail-user=someone@example.org"]]
     assert config._main(["--config", str(cfg), "--sbatch-args"]) == 0
     assert [line.split("\t")[0] for line in capsys.readouterr().out.splitlines()] == list(config.JOBS)
+    assert config._main(["--config", str(cfg), "--dump"]) == 0
+    import json
+    dump = json.loads(capsys.readouterr().out)
+    assert dump["render"]["num_scales"] == 3 and dump["render"]["blend_px"] == 256 and dump["intensity"]["window"]
+    assert "config_path" not in dump and dump["slurm"]["preview"]["mem"] == "8G" and "tissue_movie" in dump
     with pytest.raises(ValueError, match="quoted string"):
         config.sbatch_args({"output_dir": "/o", "slurm": {"align": {"time": 14400}}}, "align")
     with pytest.raises(ValueError, match="unknown keys"):

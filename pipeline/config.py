@@ -205,6 +205,16 @@ def sbatch_args(cfg, job):
     return args
 
 
+def merged(path):
+    """The config at ``path`` over every default of every section (steps and the movie tools), without the
+    file's own location: what the steps read."""
+    from . import preflight
+    tree = preflight.known_tree()
+    cfg = load_config(path, step_defaults={k: v for k, v in tree.items() if k not in DEFAULTS})
+    cfg.pop("config_path", None)
+    return cfg
+
+
 def _main(argv=None):
     """Config values and sbatch options for run_pipeline.sh (two calls cover a whole submission).
 
@@ -212,6 +222,8 @@ def _main(argv=None):
         one value per line, step defaults included; JSON for non-strings (e.g. true, 7)
     python -m pipeline.config --config C --sbatch-args [JOB ...]
         one line per job (default: every job): the job, then its sbatch options, tab-separated
+    python -m pipeline.config --config C --dump
+        the merged config (file over every default) as JSON with sorted keys
     python -m pipeline.config --config C --validate
         the checks run before anything is submitted (pipeline/preflight.py); exit code 1 on errors
     """
@@ -223,11 +235,17 @@ def _main(argv=None):
                            "not work together, raw_dir, EsB files; exit code 1 on errors")
     what.add_argument("--get", nargs="+", metavar="KEY", help="dotted keys, e.g. zcorrect.enabled")
     what.add_argument("--sbatch-args", nargs="*", metavar="JOB", choices=JOBS, help=f"jobs: {', '.join(JOBS)}")
+    what.add_argument("--dump", action="store_true",
+                      help="the config as every step sees it: the file (after its base chain) over every default, as "
+                           "JSON with sorted keys; for comparing what a config resolves to before and after a change")
     p.add_argument("--default", default="", help="--get: printed for keys that are not set")
     a = p.parse_args(argv)
     if a.validate:
         from . import preflight
         return preflight.main([a.config])
+    if a.dump:
+        print(json.dumps(merged(a.config), indent=1, sort_keys=True, default=str))
+        return 0
     if a.sbatch_args is not None:
         cfg = load_config(a.config)
         for job in a.sbatch_args or JOBS:
