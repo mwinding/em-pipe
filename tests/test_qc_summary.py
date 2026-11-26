@@ -66,7 +66,8 @@ def test_page_with_parts_missing(run):
     page = (tmp / "out" / "qc" / "summary_synthetic.html").read_text()
     check_page(page, tmp)
     assert "16 (z 0-15)" in page and "2 x 2" in page                      # dataset facts
-    assert page.count('class="mark not-run"') >= 4                        # flicker, thickness, slice quality, seams
+    assert page.count('class="mark not-run"') >= 3                        # flicker, slice quality, seams
+    assert "Slice thickness" not in page and "zcorrect" not in page       # the removed step: no row, no command
     assert "slurm/slice_quality.sbatch CONFIG" in page and "slurm/zflicker.sbatch" in page
     assert 'class="mark pass"' in page and "data:image/png;base64," in page
     assert "rendered slabs 2 of 2" in page
@@ -103,6 +104,38 @@ def test_flicker_is_marked_only_for_named_series(run):
     row = row[row.index("<td>Flicker along z</td>"):]
     assert 'class="mark attention"' in row[:row.index("</span>") + 10]
     check_page(out.read_text(), tmp)
+
+
+def test_slice_thickness_only_from_an_earlier_run(run):
+    """The slice-thickness step (zcorrect) is no longer part of the pipeline: its numbers are shown, as
+    information, only where an earlier run left them, and the settings row only for a volume whose render.json
+    says the correction was applied."""
+    tmp, cfg = run
+    out = tmp / "thickness.html"
+    c = qs.load_config(str(cfg), None, None, qs.step_defaults())
+    R = {"qc": tmp / "out" / "qc", "render": {"zcorrected": False}}
+    assert not [r for r in qs.checks(c, R, {}) if r[0].startswith("Slice thickness")]
+    pos = tmp / "out" / "work" / "zcorrect" / "positions.csv"
+    pos.parent.mkdir(parents=True)
+    # 8 nm steps and one of 12 nm
+    pos.write_text("z,timestamp,position_nm\n" + "".join(f"{z},t,{8.0 * z + 4 * (z >= 8)}\n" for z in range(16)))
+    try:
+        (row,) = [r for r in qs.checks(c, R, {}) if r[0].startswith("Slice thickness")]
+        assert row[3] == qs.INFO and "median 8 nm" in row[1] and "not applied in this volume" in row[1]
+        assert "no longer part of the pipeline" in row[4] and "dev/2026-11_zstep_correction/zcorrect_step" in row[4]
+        assert qs.main([str(cfg), "--out", str(out)]) == 0
+        page = out.read_text()
+        check_page(page, tmp)
+        assert "Slice thickness (from an earlier run)" in page and "no longer part of the pipeline" in page
+        assert "--steps zcorrect" not in page and "Slice-thickness correction (zcorrect)" not in page
+    finally:   # the other tests of this module share the run
+        pos.unlink()
+        pos.parent.rmdir()
+    # the settings table names the correction only for a volume it was applied to
+    R = {"commit": "abc", "own_config": True, "render": {"zcorrected": True}}
+    assert "Slice-thickness correction (zcorrect)</td><td>applied when this volume was rendered" in qs.settings_section(c, R)
+    assert "zcorrect" not in qs.settings_section(c, {**R, "render": {"zcorrected": False}})
+    assert "zcorrect" not in qs.settings_section(c, {**R, "render": None})
 
 
 def test_page_before_anything_has_run(tmp_path):

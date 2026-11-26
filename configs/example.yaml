@@ -296,19 +296,6 @@ destreak:
                              # a few hundred px); wider differences, e.g. a cluster of cell bodies the
                              # detectors show differently, are left; e.g. 768
 
-zcorrect:
-  enabled: false             # run zcorrect and let render use positions.csv
-  chunk_slices: 200          # selected slices per array chunk in `run`
-  max_distance: 8            # compare each slice with its next N selected slices
-  crop_px: 1024              # square crop per tile (full-resolution px), centred on the tile
-  factor: 1                  # downsample crops before NCC
-  iterations: 3              # solve: re-estimate f(d) from positions and re-solve
-  regularization: 0.1        # pull of each spacing toward nominal, relative to one adjacent-pair NCC
-  min_spacing_fraction: 0.25 # minimum spacing as a fraction of nominal
-  # Hold the rolling mean spacing over this many slices at nominal, so slow changes in image texture
-  # are not read as thickness drift (0: only per block between seams)
-  nominal_window: 200
-
 # render writes scale 0; pyramid builds scales 1..num_scales-1 from it.
 render:
   name: null                 # volume folder in output_dir; null: <name>.ome.zarr
@@ -416,8 +403,8 @@ movie:                       # fly-through MP4 (python -m pipeline.movie; sbatch
 # string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch (partition: SBATCH_PARTITION
 # from slurm/site.sh, else the cluster's default).
 # Jobs: check, preview, preview_merge, refmask, refmask_merge, stitch, stitch_merge, align, align_solve, shading,
-# overlaps, overlaps_merge, patchgrid, zrelations, zrelations_merge, refstats, refstats_merge, intensity, zcorrect,
-# zcorrect_solve, render_init, render, pyramid (one job per scale, each with this array size), export, slice_quality,
+# overlaps, overlaps_merge, patchgrid, zrelations, zrelations_merge, refstats, refstats_merge, intensity,
+# render_init, render, pyramid (one job per scale, each with this array size), export, slice_quality,
 # slice_quality_merge, qc_summary, precomputed_init, precomputed, precomputed_verify, upload, upload_finish.
 slurm:
   mail_user: null            # sbatch --mail-user (failure mails); null: Slurm's default
@@ -430,7 +417,6 @@ slurm:
   align: {array: 20}
   overlaps: {array: 20}
   zrelations: {array: 10}
-  zcorrect: {array: 10}
   render_init: {mem: 16G}    # render.sbatch's 160G is sized for render run
   render: {array: 20}
   pyramid: {array: 10}

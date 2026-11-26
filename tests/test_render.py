@@ -48,7 +48,7 @@ def _setup(path, truth, *, exclude=(), levels=True, shift=None, align=None, voxe
     voxel: (x, y, z) nm to record in check/files.csv (no files.csv if None).
     """
     out = path / "out"
-    for d in ("check", "stitch", "align", "intensity", "zcorrect"):
+    for d in ("check", "stitch", "align", "intensity"):
         (out / "work" / d).mkdir(parents=True, exist_ok=True)
     align = align or transforms.translation
     parts = truth if isinstance(truth, list) else [(truth, (0, 0))]
@@ -281,43 +281,46 @@ def test_feathering_ramps_across_overlap(truth, tmp_path):
 
 def test_plane_sources():
     assert render.plane_sources([0, 1, 3, 4, 7], 2) == [[(0, .5), (1, .5)], [(3, .5), (4, .5)], [(7, 1.0)]]
-    planes = render.plane_sources([10, 11, 12], 1, np.array([0.0, 12.0, 16.0]), 8.0)
-    assert planes[0] == [(10, 1.0)] and planes[2] == [(12, 1.0)]
-    assert planes[1] == [(10, pytest.approx(1 / 3)), (11, pytest.approx(2 / 3))]
-    # Positions out of z order: planes follow position, not z.
-    assert render.plane_sources([10, 11, 12], 1, np.array([0.0, 16.0, 8.0]), 8.0) == [
-        [(10, 1.0)], [(12, 1.0)], [(11, 1.0)]]
+    assert render.plane_sources([0, 1, 3], 1) == [[(0, 1.0)], [(1, 1.0)], [(3, 1.0)]]   # a plane is a slice
 
 
-def test_zcorrect_plane_mapping(truth, tmp_path, monkeypatch):
-    calls = []
-    tile = render._Renderer._tile
-    monkeypatch.setattr(render._Renderer, "_tile", lambda self, t: calls.append(t["z"]) or tile(self, t))
-    zs = list(range(12))
-    cfg, out = _setup(tmp_path, truth, zcorrect={"enabled": True}, selection={"z_end": zs[-1]})
-    # Enabled but zcorrect not run yet: one plane per slice.
-    assert render.main(["init", "--config", str(cfg)]) == 0
-    assert len(_meta(out)["planes"]) == len(zs) and not _meta(out)["zcorrected"]
-    rng = np.random.default_rng(4)
-    pos = 8 * np.concatenate([[3.0], 3 + np.cumsum(rng.uniform(0.4, 1.7, N - 1))])
-    pd.DataFrame({"z": range(N), "position_nm": pos}).to_csv(out / "work" / "zcorrect" / "positions.csv", index=False)
-    assert render.main(["init", "--config", str(cfg)]) == 1      # inputs changed: needs --overwrite
-    _render(cfg, "--overwrite")
+def test_removed_slice_thickness_step_is_refused_not_ignored(truth, tmp_path, caplog):
+    """The zcorrect step is no longer part of the pipeline (dev/2026-11_zstep_correction/zcorrect_step). A
+    config that switches it on is refused by init, even with positions from an earlier run on disk; switched
+    off it changes nothing; and render.append refuses a volume whose render.json says it was z-corrected."""
+    cfg, out = _append(tmp_path, truth, 11, zcorrect={"enabled": True})
+    (out / "work" / "zcorrect").mkdir(parents=True)
+    pd.DataFrame({"z": range(N), "position_nm": 8.0 * np.arange(N)}).to_csv(
+        out / "work" / "zcorrect" / "positions.csv", index=False)
+    with pytest.raises(ValueError, match="zcorrect step was removed from the pipeline"):
+        render.main(["init", "--config", str(cfg)])
+    assert not (out / "synthetic.ome.zarr").exists()
+    cfg, out = _append(tmp_path, truth, 11, zcorrect={"enabled": False})     # as existing dataset configs say
+    _render(cfg)
     meta, vol = _meta(out), _read(out)
-    p = pos[zs]
-    assert meta["zcorrected"] and len(meta["planes"]) == int((p[-1] - p[0]) // 8) + 1 == len(vol)
-    img, cov = _aligned(truth, zs)
-    for k, src in enumerate(meta["planes"]):
-        z, w = np.array([s[0] for s in src]), np.array([s[1] for s in src])
-        assert w.sum() == pytest.approx(1) and np.dot(w, p[z]) == pytest.approx(p[0] + 8 * k)
-        assert len(z) == 1 or z[1] == z[0] + 1   # bracketing slices are neighbours in position
-        exp = 255 * np.tensordot(w, img[z], 1)
-        ok = cov[z].all(axis=0)
-        assert _corr(vol[k][ok], exp[ok]) > 0.99 and np.abs(vol[k][ok] - exp[ok]).mean() < 3
-    # Consecutive planes share slices: each is rendered once per slab, not once per plane.
-    slab = SMALL["slab"]
-    per_slab = [{z for src in meta["planes"][k:k + slab] for z, _ in src} for k in range(0, len(vol), slab)]
-    assert sorted(calls) == sorted(z for zz in per_slab for z in zz for _ in range(4))
+    assert meta["zcorrected"] is False and meta["planes"] == [[[z, 1.0]] for z in range(12)]
+    cfg, _ = _append(tmp_path, truth, 11)                                    # the section deleted: the same plan
+    assert render.main(["init", "--config", str(cfg)]) == 0 and _meta(out) == meta
+    # a volume made while the step existed: its planes interpolate between slices, so nothing is appended
+    path = out / "work" / "render" / "synthetic" / "render.json"
+    path.write_text(json.dumps({**meta, "zcorrected": True}))
+    cfg, _ = _append(tmp_path, truth, N - 1)
+    with caplog.at_level(logging.ERROR):
+        assert render.main(["init", "--config", str(cfg)]) == 1
+    assert "slice-thickness correction" in caplog.text
+    assert _meta(out)["shape"] == meta["shape"]
+    np.testing.assert_array_equal(_read(out), vol)
+
+
+def test_plan_digest_is_the_one_from_before_zcorrect_was_removed(full):
+    """render.json keeps ``"zcorrected": false`` although render no longer applies a slice-thickness correction
+    (the step was removed on 26 Nov 2026): the key is part of the plan's digest, and init compares that digest
+    with the one in an existing volume's render.json. The value below is the digest the code gave for this
+    synthetic plan before the removal, so a volume made then still counts as unchanged. It changes only when
+    the synthetic data or ``_setup`` change: then take the new value, after checking that nothing else did."""
+    meta = _meta(full[0])
+    assert meta["zcorrected"] is False
+    assert meta["digest"] == "64415a8595dccd699a843bbef5aa7473134a2a7e72beee9e1dc06edc12935bd8"
 
 
 def test_tasks_markers_and_reinit(truth, full, tmp_path):

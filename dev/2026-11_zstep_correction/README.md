@@ -7,6 +7,10 @@ even spacing. It is off in every dataset config. This folder measures what it es
 (487 slices, 3x3 tiles) and 37i (17,927 slices, 2x2 tiles), checks how far the estimate can be
 trusted, and compares test slabs rendered with and without it.
 
+After these tests the step was removed from the pipeline (26 Nov 2026). It is kept, with its tests,
+in [zcorrect_step/](zcorrect_step/), which also lists what it would need to be put back. The text
+below describes the pipeline as it was when the tests were made.
+
 **Result: on these two datasets the per-slice estimate is mostly not slice thickness, and applying it
 changes shapes very little while blending almost every plane from two slices. The real thickness
 errors found earlier (the first cuts after long pauses) are at breaks, where the step keeps the
@@ -22,6 +26,7 @@ nominal spacing by design.**
 | `scripts/pick_box.py` | A square of tissue in a rendered volume, as a `render.bbox` for a test slab. |
 | `scripts/shape_measure.py` | Per plane, the correlation length of fine structure along z against x and y (anisotropy), for slabs with and without the correction; in-plane detail by how much a plane is a blend. |
 | `scripts/shape_sim.py` | Checks that the anisotropy reads a known stretch on a synthetic volume (slices 0.8x as thick: 1.22, expected 1.25; 1.25x: 0.84, expected 0.80). |
+| `zcorrect_step/` | The step itself, as removed from the pipeline: module, Slurm script, tests, and the render code that used its positions. `tile_ncc.py`, `step_stats.py` and `quality_sim.py` import the module from there. |
 
 Outputs are under each dataset's `qc/zstep_correction/` (statistics, per-tile NCC, and one folder
 per test slab with the x-y, x-z and y-z figures, a neuroglancer link and `shape.json`). The step
@@ -175,6 +180,9 @@ Keep `zcorrect.enabled: false` for deliveries of these datasets.
 
 **Decision (26 Nov 2026): not used.** Slice-thickness correction stays off for these volumes: the corrected
 slabs look worse for a segmentation model (blended planes, smears at the pause) and no more even.
+The step was removed from the pipeline the same day and moved to [zcorrect_step/](zcorrect_step/);
+dataset configs that still say `zcorrect: {enabled: false}` are accepted, with a note that the
+entry has no effect.
 
 - Measured: the per-slice estimate is not reproducible between areas of the same slices, is mostly
   explained by per-slice image differences, and its largest steps are known bad slices; applying it

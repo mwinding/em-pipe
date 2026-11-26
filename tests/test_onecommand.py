@@ -58,7 +58,8 @@ def test_dry_run_shows_everything_and_changes_nothing(tmp_path, raw, sbatch, cap
     names = [c["job-name"] for c in calls(lines)]
     assert names[0] == "em-check" and "em-refstats-run" in names and "em-zrelations-run" in names
     plain = names[:names.index("em-qc-summary") + 1]
-    assert plain[-3:] == ["em-quality-run", "em-quality-merge", "em-qc-summary"] and "em-zcorrect-run" not in names
+    assert plain[-3:] == ["em-quality-run", "em-quality-merge", "em-qc-summary"]
+    assert plain[plain.index("em-intensity") + 1] == "em-render-init"   # no step between intensity and render
     clahe = calls(lines)[len(plain):]
     assert [c["job-name"] for c in clahe][:2] == ["em-render-init", "em-render-run"]
     assert clahe[0]["dependency"] == "afterok:<em-intensity>" and clahe[0]["args"][0] == str(out / "config_clahe.yaml")
@@ -83,7 +84,7 @@ def test_run_writes_the_config_and_submits_both_chains(tmp_path, raw, sbatch, ca
     assert cfg["intensity"]["window"] == "reference" and cfg["intensity"]["balance_z_distance"] == 1
     assert cfg["intensity"]["reference"]["median"] == 150 and cfg["intensity"]["reference"]["contrast"] == 130
     assert cfg["destreak"]["enabled"] and cfg["destreak"]["mode"] == "reference" and cfg["destreak"]["levels"] == 8
-    assert not cfg["zcorrect"]["enabled"] and not cfg["render"]["clahe"]["enabled"] and cfg["render"]["blend"] == "cut"
+    assert "zcorrect" not in cfg and not cfg["render"]["clahe"]["enabled"] and cfg["render"]["blend"] == "cut"
     clahe = config.load_config(out / "config_clahe.yaml", step_defaults=config.step_defaults())
     assert clahe["render"]["clahe"] == {"enabled": True, "clip_limit": 1.5, "tile_px": 256}
     assert clahe["render"]["name"] == "vol_clahe.ome.zarr"
@@ -153,5 +154,5 @@ def test_the_preset_is_valid_and_lab_neutral():
     user = yaml.safe_load(preset.read_text())
     assert preflight.unknown_keys(user) == []
     assert not {"raw_dir", "output_dir", "name"} & set(user)          # settings only: no paths, no names
-    assert user["zcorrect"] == {"enabled": False} and user["slurm"] == {"auto": True}
+    assert "zcorrect" not in user and user["slurm"] == {"auto": True}   # the removed step is not named any more
     assert (ROOT / "em-pipe").stat().st_mode & 0o111                    # the entry script is executable

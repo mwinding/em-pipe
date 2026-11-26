@@ -23,14 +23,15 @@ from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from pipeline import zcorrect  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "zcorrect_step"))   # the step, since it left pipeline/
+import zcorrect  # noqa: E402
 from pipeline.cli import base_parser, setup  # noqa: E402
 from pipeline.config import qc_path, step_path  # noqa: E402
 from pipeline.slices import load_slices, voxel_size_nm, z_values  # noqa: E402
 
 
 def solve_pairs(zs, brk, ia, ib, ncc, zc, full=False):
-    """Spacing / nominal per step, as pipeline.zcorrect.solve computes it (same functions, same loop)."""
+    """Spacing / nominal per step, as zcorrect.solve computes it (same functions, same loop)."""
     nominal = np.diff(zs).astype(float)
     block = np.concatenate([[0], np.cumsum(brk)])
     keep = (block[ia] == block[ib]) & np.isfinite(ncc)

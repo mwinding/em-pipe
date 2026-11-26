@@ -53,7 +53,7 @@ import pandas as pd
 
 from . import elastic, omezarr, patchgrid, shading, tilesolve, transforms
 from .cli import atomic_write, base_parser, my_chunks, setup, task_info
-from .config import deep_merge, get, step_path
+from .config import deep_merge, get, removed_note, step_path
 from .slices import StackCache, load_slices, voxel_size_nm, z_values
 
 log = logging.getLogger(__name__)
@@ -268,44 +268,19 @@ def to_volume(frame, T):
     return M
 
 
-def _positions(cfg, zs):
-    """zcorrect positions (nm) of the selected z, or None when z-correction is off or not run."""
-    if not get(cfg, "zcorrect.enabled", False):
-        return None
-    path = step_path(cfg, "zcorrect", "positions.csv")
-    if not path.exists():
-        log.warning("zcorrect.enabled but %s not found: rendering without z-correction", path)
-        return None
-    pos = pd.read_csv(path).set_index("z")["position_nm"].dropna()
-    missing = [z for z in zs if z not in pos.index]
-    if missing:
-        raise ValueError(f"{path} has no position for {len(missing)} selected slices "
-                         f"(e.g. z={missing[:3]}): re-run zcorrect")
-    return pos.loc[zs].to_numpy(float)
+def plane_sources(zs, f):
+    """Source slices [(z, weight), ...] of every output plane: plane k is the mean of the k-th group of f
+    consecutive selected slices (neighbours by position in ``zs``, which may skip z), so at f = 1 a plane
+    is a slice."""
+    return [[(z, 1.0 / len(g)) for z in g] for g in (zs[i:i + f] for i in range(0, len(zs), f))]
 
 
-def plane_sources(zs, f, positions=None, step_nm=None):
-    """Source slices [(z, weight), ...] of every output plane.
-
-    Without positions, plane k is the mean of the k-th group of f consecutive selected slices
-    (neighbours by position in ``zs``, which may skip z). With positions (nm, one per z), planes
-    are ``step_nm`` apart over the position range and interpolate linearly between the two
-    slices that bracket them.
-    """
-    if positions is None:
-        return [[(z, 1.0 / len(g)) for z in g] for g in (zs[i:i + f] for i in range(0, len(zs), f))]
-    order = np.argsort(positions, kind="stable")
-    p, zz = np.asarray(positions, float)[order], np.asarray(zs)[order]
-    planes = []
-    for k in range(int(np.floor((p[-1] - p[0]) / step_nm + 1e-6)) + 1):
-        q = p[0] + k * step_nm
-        i = int(np.searchsorted(p, q, side="right")) - 1   # p[i] <= q < p[i + 1]
-        if i >= len(p) - 1:
-            planes.append([(int(zz[-1]), 1.0)])
-            continue
-        t = (q - p[i]) / (p[i + 1] - p[i])
-        planes.append([(int(z), float(w)) for z, w in ((zz[i], 1 - t), (zz[i + 1], t)) if w > 1e-6])
-    return planes
+def _refuse_zcorrect(cfg):
+    """The slice-thickness step (zcorrect) is no longer part of the pipeline: a config that switches it on
+    asks for planes render does not make any more. (pipeline/preflight.py says the same before a run.)"""
+    if get(cfg, "zcorrect.enabled", False):
+        raise ValueError(f"zcorrect.enabled: true, but {removed_note('zcorrect')}: render no longer applies a "
+                         "slice-thickness correction. Delete the zcorrect section from the config")
 
 
 def _destreak_settings(cfg):
@@ -354,13 +329,13 @@ def _check_references(cfg, plan, settings):
 def init(cfg, overwrite=False):
     """Freeze the render plan and create the empty volume. Returns an exit code."""
     s = _settings(cfg)
+    _refuse_zcorrect(cfg)
     f = s["downsample"]
     plan = _tile_plan(cfg)
     zs = z_values(plan)
     x0, y0, w, h = _canvas(plan, s["bbox"], s.get("append_margin_px", 0))
     vz, vy, vx = voxel_size_nm(cfg, plan["file"].unique())
-    positions = _positions(cfg, zs)
-    planes = plane_sources(zs, f, positions, vz * f)
+    planes = plane_sources(zs, f)
     meta = {
         "volume": s["name"],
         "origin_xy": [x0, y0],
@@ -368,7 +343,9 @@ def init(cfg, overwrite=False):
         "shape": [len(planes), math.ceil(h / f), math.ceil(w / f)],
         "voxel_nm": [vz * f, vy * f, vx * f],
         "downsample": f,
-        "zcorrected": positions is not None,
+        # Always false since the slice-thickness step was removed (26 Nov 2026). The key stays because it is
+        # part of the digest below: without it every existing volume would count as changed.
+        "zcorrected": False,
         "shard": [s["slab"], s["shard_xy"], s["shard_xy"]],
         "settings": s,
         "destreak": _destreak_settings(cfg),
@@ -478,8 +455,10 @@ def _elastic_for(fields, kept_last, zs):
 def _append(cfg, s, plan, old, root, wdir):
     """render.append: add the current plan's new slices to the volume of ``old`` (its render.json),
     keeping the planes up to its last full slab. Returns an exit code."""
-    if old.get("zcorrected") or get(cfg, "zcorrect.enabled", False):
-        log.error("render.append needs z-correction off: z-corrected planes interpolate between slices")
+    if old.get("zcorrected"):   # a volume made with the former slice-thickness step (zcorrect)
+        log.error("render.append: %s was made with the slice-thickness correction (zcorrect, since removed from "
+                  "the pipeline), so its planes interpolate between slices and none can be added: re-create it "
+                  "(init --overwrite)", root.name)
         return 1
     differ = sorted(k for k in (set(s) | set(old["settings"])) - {"append_margin_px"}
                     if s.get(k) != old["settings"].get(k))
@@ -684,8 +663,9 @@ class _Renderer:
     def plane(self, sources, keep=()):
         """uint8 plane = weighted mean of its source slices (0 = no data), then CLAHE.
 
-        Source slices whose z is in ``keep`` (the next plane's sources) are kept for reuse:
-        consecutive z-corrected planes interpolate between mostly the same two slices.
+        Source slices whose z is in ``keep`` (the next plane's sources) are kept for reuse. init's plans
+        never share a slice between planes; the plan of a volume made with the former slice-thickness
+        step does (consecutive planes interpolate between mostly the same two slices).
         """
         kept, self.kept = self.kept, {}
         # Submit every tile up front so the source slices render concurrently.

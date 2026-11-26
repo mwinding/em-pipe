@@ -1,4 +1,11 @@
-"""zcorrect: recover non-uniform slice spacing from NCC between nearby slices."""
+"""zcorrect: recover non-uniform slice spacing from NCC between nearby slices.
+
+Was tests/test_zcorrect.py until the step was removed from the pipeline (26 Nov 2026); the tests are unchanged
+but for the import of the moved module. Not part of the pipeline's suite (``pytest tests``); they run from here
+with the conftest.py next to this file:
+
+    python -m pytest dev/2026-11_zstep_correction/zcorrect_step/test_zcorrect.py
+"""
 
 import re
 from datetime import datetime
@@ -9,7 +16,8 @@ import pandas as pd
 import pytest
 
 import synth
-from pipeline import transforms, zcorrect
+import zcorrect
+from pipeline import transforms
 from pipeline.cli import chunks
 from pipeline.config import load_config
 from pipeline.slices import StackCache, load_slices, voxel_size_nm

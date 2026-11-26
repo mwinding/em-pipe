@@ -12,7 +12,7 @@ adapting before they run again. General-purpose checks live in `tools/` instead.
 | [2026-11_37i_processing/](2026-11_37i_processing/) | 12-14 Nov 2026 | checks made while processing the 37i volume: duplicate/label checks of re-exported files, a segment whose tile columns could not be matched, the junction after a long pause, slice-thickness (z-step) profiles |
 | [2026-11_contrast_matching/](2026-11_contrast_matching/) | 13 Nov 2026 | matching 37i's plain and CLAHE contrast to 35h's on neuropil (the basis of 37i's `intensity.window: median` settings) |
 | [2026-11_a1001_flicker/](2026-11_a1001_flicker/) | 24 Nov 2026 | where A1001's slice-to-slice flicker comes from: raw tile jumps, and what the display windows leave of them |
-| [2026-11_zstep_correction/](2026-11_zstep_correction/) | 25-26 Nov 2026 | whether slice-thickness (z-step) correction matters: the zcorrect step's estimate on A1001 and 37i, its agreement between tiles, test slabs with and without it |
+| [2026-11_zstep_correction/](2026-11_zstep_correction/) | 25-26 Nov 2026 | whether slice-thickness (z-step) correction matters: the zcorrect step's estimate on A1001 and 37i, its agreement between tiles, test slabs with and without it; and the step itself, removed from the pipeline on 26 Nov 2026 (`zcorrect_step/`: module, Slurm script, tests) |
 | [_assembly/](_assembly/) | 19 Nov 2026 | the scripts used to put this folder together (see below) |
 
 Curtain and EsB work (destreak tests, the curtain "arches") is in a separate repository,

@@ -6,6 +6,14 @@ on a few fixed crops of the aligned volume. ``solve`` estimates the similarity-v
 curve f(d), inverts it to turn each NCC into a distance, and solves for slice positions
 by weighted least squares; it re-estimates f from the positions and repeats. Seams are
 breaks: NCC across them is not used and the spacing there is nominal.
+
+Removed from the pipeline on 26 Nov 2026 (README.md in this folder); it was ``pipeline/zcorrect.py``. Runs
+from here on a config with a ``zcorrect`` section:
+
+    python dev/2026-11_zstep_correction/zcorrect_step/zcorrect.py run --config CONFIG [--task-id I --num-tasks N]
+    python dev/2026-11_zstep_correction/zcorrect_step/zcorrect.py solve --config CONFIG
+
+render no longer reads the positions it writes (``work/zcorrect/positions.csv``).
 """
 
 import logging
@@ -19,17 +27,18 @@ import pandas as pd
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
-from . import transforms
-from .cli import atomic_write, base_parser, chunks, my_chunks, setup, task_info
-from .config import qc_path, step_dir, step_path
-from .features import downsample
-from .slices import StackCache, load_slices, voxel_size_nm, z_values
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # the repository root, for running from dev/
+from pipeline import transforms  # noqa: E402
+from pipeline.cli import atomic_write, base_parser, chunks, my_chunks, setup, task_info  # noqa: E402
+from pipeline.config import qc_path, step_dir, step_path  # noqa: E402
+from pipeline.features import downsample  # noqa: E402
+from pipeline.slices import StackCache, load_slices, voxel_size_nm, z_values  # noqa: E402
 
 log = logging.getLogger(__name__)
 
 DEFAULTS = {
     "zcorrect": {
-        "enabled": False,           # render uses positions.csv only when true
+        "enabled": False,           # render used positions.csv only when true (render no longer reads it)
         "chunk_slices": 200,        # selected slices per array chunk in `run`
         "max_distance": 8,          # compare each slice with its next N selected slices
         "crop_px": 1024,            # square crop per tile (full-resolution px), centred on the tile
@@ -332,8 +341,6 @@ def main(argv=None):
     p.add_argument("command", choices=["run", "solve"])
     args = p.parse_args(argv)
     cfg = setup(args, DEFAULTS)
-    if not cfg["zcorrect"]["enabled"]:
-        log.info("zcorrect.enabled is false: render will not use these results")
     {"run": run, "solve": solve}[args.command](cfg, args)
     return 0
 

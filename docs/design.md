@@ -18,15 +18,15 @@ Raw data is never written to.
 | refstats | `pipeline.refstats` | array over chunks of sampled slices, then `merge` | raw pixels (sampled slices), `refmask/`, the shading, patchgrid and balance inputs | `refstats/` |
 | intensity | `pipeline.intensity` | no | `preview/`, `stitch/` (`overlaps/`, `patchgrid/` with balance_source: overlaps; `zrelations/` with balance_z_distance > 0; `refstats/` with window: reference) | `intensity/` |
 | destreak | `pipeline.destreak` | no (`test` only; applied inside render) | raw pixels | `destreak/` |
-| zcorrect | `pipeline.zcorrect` | array over z-chunks (`run`), then `solve` | raw pixels, `stitch/`, `align/` | `zcorrect/` |
 | render | `pipeline.render` | `init`, then array over z-slabs (`run`) | everything above | `render/volume.ome.zarr` (scale 0) |
 | pyramid | `pipeline.pyramid` | array over shards, one job per scale | `render/` | `render/volume.ome.zarr` (scales 1..N) |
 | serve | `pipeline.serve` | interactive | `render/` | – |
 
 Order: check → preview → refmask (optional) → stitch → align → shading, overlaps, patchgrid (optional)
-→ zrelations (optional) → refstats (optional) → intensity → zcorrect (optional) → render → pyramid.
+→ zrelations (optional) → refstats (optional) → intensity → render → pyramid.
 destreak has no batch stage: it is a function applied per tile inside render when
 `destreak.enabled: true`; its CLI only writes before/after test images for tuning.
+The slice-thickness step (zcorrect, between intensity and render) was removed from the pipeline on 26 Nov 2026; it is kept in `dev/2026-11_zstep_correction/zcorrect_step`.
 
 ## Conventions
 
@@ -58,7 +58,7 @@ destreak has no batch stage: it is a function applied per tile inside render whe
   check. Use `pipeline.slices.load_slices(cfg)`, which applies it and drops excluded rows.
   Selected z may have holes (exclusions): neighbours are by position in the sorted selected z.
 - **Voxel size**: `pipeline.slices.voxel_size_nm(cfg, files)` — per axis the median over the used
-  files in `check/files.csv`, else 8 nm. render and zcorrect both use it.
+  files in `check/files.csv`, else 8 nm. render uses it.
 - **Parallel tasks**: steps take `--task-id/--num-tasks` (default from
   `SLURM_ARRAY_TASK_ID - SLURM_ARRAY_TASK_MIN` and `SLURM_ARRAY_TASK_COUNT`; outside Slurm a
   single task does everything). Work is split into chunks and task *i* takes chunks
@@ -77,8 +77,8 @@ destreak has no batch stage: it is a function applied per tile inside render whe
 
 `output_dir` itself holds only what people look at: the volume `<name>.ome.zarr`
 (render.name, default from the config name), the quick-look TIFF `<stem>_<voxel>nm.tif` (export) and
-`qc/` (check_report.md, stitch.png, align_drift.png, intensity.png, preview_stats.png, sheet_<day>.png,
-zcorrect.png). Everything below lives in `output_dir/work/` (`pipeline.config.step_dir/step_path`),
+`qc/` (check_report.md, stitch.png, align_drift.png, intensity.png, preview_stats.png, sheet_<day>.png).
+Everything below lives in `output_dir/work/` (`pipeline.config.step_dir/step_path`),
 as do the Slurm logs (`work/logs/`).
 
 ### work/check/
@@ -181,15 +181,6 @@ as do the Slurm logs (`work/logs/`).
 - `levels.csv` — per (z, tile): `z, tile, lo, hi` — uint16 values that render maps to 0 and 255
   (before CLAHE). Smooth over z.
 
-### work/zcorrect/
-- `ncc/chunk_{z0:06d}-{z1:06d}.npz` — arrays `z_a, z_b, ncc`, plus `zs` (the z measured over),
-  `crop_px, factor`; chunks are runs of `zcorrect.chunk_slices` selected z (z1 = last + 1).
-- `positions.csv` — `z, timestamp, position_nm` with position_nm = voxel_z × (first selected z +
-  cumulative estimated spacing in slices): uncorrected slices sit at z × voxel_z. The spacing at a
-  seam or segment change is nominal, a hole in the selection counts as several nominal slices, and the
-  mean spacing is held at nominal per seam-free block and over a rolling `zcorrect.nominal_window`.
-- `zcorrect.png`.
-
 ### work/destreak/
 - `z{Z}_tile{r-c}_{before,after}.png` (whole slice, ≤ 2000 px), `_{before,after}_crop.png` (full
   resolution), `_{before,after}_fft.png` (log spectrum of the crop); before and after share contrast.
@@ -204,7 +195,8 @@ as do the Slurm logs (`work/logs/`).
   height, width, a, b, tx, c, d, ty` (tile pixel → aligned = align ∘ stitch, rounded when
   `integer_shifts`), `lo, hi` (NaN where intensity has no levels: the tile's own p0.5/p99.5 is used).
 - `<stem>/render.json` — `volume, origin_xy` (aligned px of output pixel (0, 0)), `canvas_size_xy, shape
-  [z, y, x], voxel_nm [z, y, x]` (× downsample), `downsample, zcorrected, shard, settings` (render
+  [z, y, x], voxel_nm [z, y, x]` (× downsample), `downsample, zcorrected` (always false since the
+  slice-thickness step was removed; kept because it is part of the digest), `shard, settings` (render
   section minus threads), `destreak` (section or null), `planes` (`[[z, weight], ...]` per plane),
   `digest` (of all the above and tiles.csv). `run` reads only these and the raw tiles.
 - `<stem>/done/slab_{k:06d}` — render's marker per finished slab, holding the digest (counts only for the
@@ -228,7 +220,6 @@ Each step module defines `DEFAULTS = {"<section>": {...}}` and `main(argv=None)`
 | `pipeline.align run` / `solve` | array / single | |
 | `pipeline.zrelations run` / `merge` | array / single | only when `intensity.balance_z_distance` > 0 |
 | `pipeline.intensity` | single | |
-| `pipeline.zcorrect run` / `solve` | array / single | only when `zcorrect.enabled` |
 | `pipeline.destreak test --z Z --tile r-c` | interactive | writes before/after PNGs |
 | `pipeline.render init` / `run` | single / array | |
 | `pipeline.pyramid run --scale s` | array, one job per scale (s = 1..num_scales-1) | |
@@ -247,10 +238,10 @@ path to `output_dir/logs/`. Array sizes never depend on the data (strided chunk 
 `./run_pipeline.sh CONFIG [--steps a,b,...] [--from STEP] [--dry-run]` submits one chain, each job
 `--dependency=afterok` on the previous one (`--kill-on-invalid-dep=yes`, so a failed job, or check
 exiting 1 on new errors, cancels the rest): check; preview run → merge; stitch run → merge; align
-run → solve; intensity; zcorrect run → solve (only if `zcorrect.enabled`); render init → run;
+run → solve; intensity; render init → run;
 pyramid run --scale s for s = 1..num_scales-1. Job names are `em-<step>[-<sub>]` (e.g.
 `em-preview-run`, `em-pyramid-s2`), logs `output_dir/logs/%x-%A_%a.out` (arrays) or `%x-%j.out`.
 `slurm:` keys per job: `check, preview, preview_merge, stitch, stitch_merge, align, align_solve,
-intensity, zcorrect, zcorrect_solve, render_init, render, pyramid` (array sizes apply to the array
-jobs `preview, stitch, align, zcorrect, render, pyramid`), plus `slurm.mail_user`. `time` must be a
+intensity, render_init, render, pyramid` (array sizes apply to the array
+jobs `preview, stitch, align, render, pyramid`), plus `slurm.mail_user`. `time` must be a
 quoted string. `EM_PIPE_SKIP_ENV=1` skips sourcing `slurm/env.sh` in the script itself.

@@ -3,14 +3,14 @@
 #
 # Usage: ./run_pipeline.sh CONFIG [--steps a,b,...] [--from STEP] [--to STEP] [--after JOBID] [--dry-run]
 #   steps (in order): check preview refmask stitch align shading overlaps patchgrid zrelations refstats intensity
-#                     zcorrect render pyramid export quality summary precomputed upload
+#                     render pyramid export quality summary precomputed upload
 #   --steps a,b  only these steps (the first one waits for nothing)
 #   --from STEP  STEP and every later step
 #   --to STEP    every step up to and including STEP (with --from: the steps between the two)
 #   --after ID   the first job waits for Slurm job ID to finish successfully
 #   --summary-after ID[:ID...]  the summary job also waits for these jobs (e.g. another chain's last job)
 #   --dry-run    print the sbatch commands instead of submitting them
-# refmask, shading, overlaps, patchgrid, refstats, zcorrect, precomputed and upload run only when their enabled
+# refmask, shading, overlaps, patchgrid, refstats, precomputed and upload run only when their enabled
 # setting is true; zrelations only when intensity.balance_z_distance > 0.
 # quality: the per-slice quality flags (tools/slice_quality.py). summary: the QC page of the volume
 # (tools/qc_summary.py), the last job: it waits for every job submitted before it, whether they succeed or
@@ -25,7 +25,7 @@
 # the old volume), then  ./run_pipeline.sh CONFIG --from render.
 set -eo pipefail
 
-STEPS="check preview refmask stitch align shading overlaps patchgrid zrelations refstats intensity zcorrect render pyramid export quality summary precomputed upload"
+STEPS="check preview refmask stitch align shading overlaps patchgrid zrelations refstats intensity render pyramid export quality summary precomputed upload"
 usage() { sed -n '4,25p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "$1"; }
 
 CONFIG= SELECT= FROM= TO= AFTER= SUMMARY_AFTER= DRY=0
@@ -80,10 +80,10 @@ wanted() {  # wanted STEP: is STEP selected?
 }
 
 # Everything needed from the config in two calls (python start-up can be slow on shared filesystems).
-VALUES=$(cfg --get output_dir zcorrect.enabled render.num_scales precomputed.enabled upload.enabled shading.enabled \
+VALUES=$(cfg --get output_dir render.num_scales precomputed.enabled upload.enabled shading.enabled \
          overlaps.enabled patchgrid.enabled refmask.enabled refstats.enabled intensity.balance_z_distance)
 SBATCH=$(cfg --sbatch-args)   # one line per job: the job, then its sbatch options, tab-separated
-{ read -r OUT; read -r ZCORRECT; read -r NUM_SCALES; read -r PRECOMPUTED; read -r UPLOAD; read -r SHADING
+{ read -r OUT; read -r NUM_SCALES; read -r PRECOMPUTED; read -r UPLOAD; read -r SHADING
   read -r OVERLAPS; read -r PATCHGRID; read -r REFMASK; read -r REFSTATS; read -r ZDIST; } <<< "$VALUES"
 
 PREV=$AFTER
@@ -183,14 +183,6 @@ if wanted refstats; then
   fi
 fi
 if wanted intensity; then submit intensity em-intensity intensity; fi
-if wanted zcorrect; then
-  if [ "$ZCORRECT" = true ]; then
-    submit zcorrect em-zcorrect-run zcorrect run
-    submit zcorrect_solve em-zcorrect-solve zcorrect solve
-  else
-    echo "zcorrect.enabled is false: zcorrect skipped" >&2
-  fi
-fi
 if wanted render; then
   submit render_init em-render-init render init
   submit render em-render-run render run

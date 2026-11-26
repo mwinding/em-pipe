@@ -50,7 +50,7 @@ def run_step(cfg, step, *args, tasks=0):
         assert p.returncode == 0, f"{' '.join(c[2:])} exited with {p.returncode}:\n{out[-5000:]}"
 
 
-def run_pipeline(cfg, zcorrect=False):
+def run_pipeline(cfg):
     run_step(cfg, "check")
     run_step(cfg, "preview", "run", tasks=2)
     run_step(cfg, "preview", "merge")
@@ -59,9 +59,6 @@ def run_pipeline(cfg, zcorrect=False):
     run_step(cfg, "align", "run", tasks=2)
     run_step(cfg, "align", "solve")
     run_step(cfg, "intensity")
-    if zcorrect:
-        run_step(cfg, "zcorrect", "run", tasks=2)
-        run_step(cfg, "zcorrect", "solve")
     run_step(cfg, "render", "init")
     run_step(cfg, "render", "run", tasks=2)
     for s in range(1, SMALL["render"]["num_scales"]):
@@ -233,7 +230,7 @@ def test_pyramid_scales_are_means_of_s0(main_run):
         assert len(list((out / "work" / "render" / "synthetic" / "done").glob(f"s{s}_*"))) == n_shards
 
 
-# ----- second run: destreak and zcorrect inside render -----------------------------------------
+# ----- second run: destreak inside render ------------------------------------------------------
 
 @pytest.fixture(scope="module")
 def corrected_run(tmp_path_factory):
@@ -244,28 +241,9 @@ def corrected_run(tmp_path_factory):
                                start=datetime(2026, 9, 24, 12), streaks=0.03, tile_gain={"0-1": 1.15},
                                z_positions=np.arange(n) * 0.25, seed=5)
     cfg = synth.write_config(root / "config.yaml", truth.raw_dir, root / "out", **SMALL,
-                             destreak={"enabled": True},
-                             zcorrect={"enabled": True, "chunk_slices": 8, "max_distance": 4, "crop_px": 128})
-    run_pipeline(cfg, zcorrect=True)
+                             destreak={"enabled": True})
+    run_pipeline(cfg)
     return truth, root / "out"
-
-
-def test_zcorrect_positions_drive_the_planes(corrected_run):
-    truth, out = corrected_run
-    n = len(truth.timestamps)
-    pos = pd.read_csv(out / "work" / "zcorrect" / "positions.csv")
-    assert list(pos["z"]) == list(range(n))
-    p = pos["position_nm"].to_numpy()
-    assert p[0] == 0 and (np.diff(p) > 0).all()
-    assert p[-1] == pytest.approx(8.0 * (n - 1), rel=0.02)   # mean spacing is held at nominal
-    meta = json.loads((out / "work" / "render" / "synthetic" / "render.json").read_text())
-    assert meta["zcorrected"] and meta["voxel_nm"] == [8.0, 8.0, 8.0]
-    assert len(meta["planes"]) == int(np.floor((p[-1] - p[0]) / 8.0 + 1e-6)) + 1
-    for k, plane in enumerate(meta["planes"]):
-        q = p[0] + 8.0 * k   # plane k sits at q and interpolates the slices that bracket it
-        zs = [z for z, _ in plane]
-        assert p[min(zs)] <= q + 1e-6 and (len(zs) == 1 or p[max(zs)] >= q)
-        assert sum(w for _, w in plane) == pytest.approx(1.0)
 
 
 def test_destreak_removes_stripes_in_render(corrected_run):
@@ -277,7 +255,7 @@ def test_destreak_removes_stripes_in_render(corrected_run):
     # Tile 0-0's own area (left of tile 0-1, above tile 1-0), away from its edges.
     xe, ye = truth.tile_origin["0-1"][0], truth.tile_origin["1-0"][1]
     for k, plane in enumerate(meta["planes"]):
-        z = max(plane, key=lambda zw: zw[1])[0]
+        (z, _), = plane   # one slice per plane
         _, _, (x0, y0) = masks(truth, meta, z)
         exp = expected(truth, z, s0[k].shape, (x0, y0))[y0 + 4:y0 + ye - 4, x0 + 4:x0 + xe - 4]
         img = s0[k][y0 + 4:y0 + ye - 4, x0 + 4:x0 + xe - 4].astype(float)

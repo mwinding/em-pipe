@@ -34,7 +34,6 @@ JOBS = {
     "shading": (2, 16, None), "overlaps": (2, 8, 40), "overlaps_merge": (2, 16, None), "patchgrid": (4, 16, None),
     "zrelations": (2, 8, 30), "zrelations_merge": (2, 16, None),
     "refstats": (4, 32, 40), "refstats_merge": (2, 8, None), "intensity": (2, 16, None),
-    "zcorrect": (2, 16, 20), "zcorrect_solve": (2, 16, None),
     "render_init": (2, 16, None), "render": (8, 64, 30), "pyramid": (4, 8, 20), "export": (4, 24, None),
     "slice_quality": (2, 16, 40), "slice_quality_merge": (2, 32, None), "qc_summary": (2, 8, None),
     "precomputed_init": (2, 8, None), "precomputed": (4, 16, 40), "precomputed_verify": (2, 16, None),
@@ -42,14 +41,14 @@ JOBS = {
 }
 # Expected task-seconds of a whole job per 10^9 raw pixels read (from the accounting, rounded up)
 PER_GPX = {"preview": 11, "refmask": 8, "stitch": 27, "align": 31, "overlaps": 10, "zrelations": 4,
-           "slice_quality": 6, "zcorrect": 6}
+           "slice_quality": 6}
 # ... per output plane of a 700 Mpx canvas
 PER_PLANE = {"render": 18, "pyramid": 4, "precomputed": 70, "upload": 26}
 DESTREAK_PER_GPX = 135       # render with decurtaining from a reference: added per 10^9 raw pixels
 REFSTATS_PER_GPX = (220, 310)   # per 10^9 pixels of the sampled tile slices: plain, with decurtaining
 FIXED_HOURS = {"check": 2, "preview_merge": 1, "refmask_merge": 1, "stitch_merge": 1, "align_solve": 2, "shading": 1,
                "overlaps_merge": 1, "patchgrid": 1, "zrelations_merge": 1, "refstats_merge": 1, "intensity": 1,
-               "zcorrect_solve": 1, "render_init": 1, "export": 2, "slice_quality_merge": 2, "qc_summary": 1,
+               "render_init": 1, "export": 2, "slice_quality_merge": 2, "qc_summary": 1,
                "precomputed_init": 1, "precomputed_verify": 2, "upload_finish": 2}
 NEEDED = ("slices", "tiles", "tile_px", "tile_images", "raw_gpx")
 
@@ -121,7 +120,6 @@ def auto(cfg):
         "align": math.ceil(S / int(get(cfg, "align.chunk_slices", 100))),
         "overlaps": math.ceil(S / int(get(cfg, "overlaps.chunk_slices", 100))),
         "zrelations": math.ceil(S / int(get(cfg, "zrelations.chunk_slices", 100))),
-        "zcorrect": math.ceil(S / int(get(cfg, "zcorrect.chunk_slices", 200))),
         "refstats": math.ceil(samples / int(get(cfg, "refstats.chunk_samples", 4))),
         "render": math.ceil(planes / int(get(cfg, "render.slab", 64))),
         "slice_quality": math.ceil(S / 50),

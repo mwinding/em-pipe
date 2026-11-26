@@ -1,6 +1,6 @@
 """Slice-to-slice similarity per tile, to check the zcorrect step's slice spacing between independent areas.
 
-``pipeline.zcorrect run`` keeps one NCC per slice pair: the median over its crops (one crop per tile). A change
+``zcorrect run`` (``../zcorrect_step/zcorrect.py``) keeps one NCC per slice pair: the median over its crops (one crop per tile). A change
 in slice thickness is shared by the whole slice; a change in what a crop shows is not. This script measures the
 same pairs with the same crops (zcorrect's own functions), but keeps every tile's NCC, so the spacing can be
 solved per tile and compared (step_stats.py).
@@ -17,7 +17,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from pipeline import zcorrect  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "zcorrect_step"))   # the step, since it left pipeline/
+import zcorrect  # noqa: E402
 from pipeline.cli import atomic_write, base_parser, chunks, my_chunks, setup, task_info  # noqa: E402
 from pipeline.config import qc_path  # noqa: E402
 from pipeline.slices import StackCache, load_slices, z_values  # noqa: E402

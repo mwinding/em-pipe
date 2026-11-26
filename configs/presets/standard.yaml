@@ -67,10 +67,6 @@ destreak:
   band_zone_px: 256
   band_max_px: 768
 
-# Slice-thickness correction was tested and is not used (dev/2026-11_zstep_correction).
-zcorrect:
-  enabled: false
-
 # Tiles joined with a sharp cut. The plain volume has no CLAHE; the CLAHE volume is a second config that
 # only switches it on (clip limit 1.5, 256 px tiles).
 render:

@@ -1,1 +1,1 @@
-"""FIB-SEM processing pipeline: check, preview, stitch, align, intensity, zcorrect, render."""
+"""FIB-SEM processing pipeline: check, preview, stitch, align, intensity, render."""

@@ -53,7 +53,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from pipeline import render  # noqa: E402
 from pipeline.cli import atomic_write  # noqa: E402
-from pipeline.config import load_config, step_defaults, step_path  # noqa: E402
+from pipeline.config import REMOVED_STEPS, load_config, step_defaults, step_path  # noqa: E402
 
 LIMITS = {
     "stitch_failed_samples": 0,        # stitched samples without a solution
@@ -67,6 +67,10 @@ LIMITS = {
     "major_flag_share": 0.01,          # share of slices with a major slice-quality flag
 }
 PASS, ATTN, NOTRUN, INFO = "pass", "attention", "not run", "info"
+# Shown only where an earlier run left the step's results (work/zcorrect/positions.csv, qc/zcorrect.png) or a
+# volume's render.json says the correction was applied.
+ZCORRECT_REMOVED = ("the slice-thickness step (zcorrect) is no longer part of the pipeline "
+                    f"({REMOVED_STEPS['zcorrect'][1]})")
 FIGURE_WIDTH = 1400
 
 
@@ -187,11 +191,12 @@ def settings_section(cfg, R):
              ("swap from a second detector" if ds.get("reference_from") else "wavelet-FFT filter")
              + f", levels {ds.get('levels')}, stripe_px {ds.get('stripe_px')}, core_threshold {ds.get('core_threshold')}, "
                f"band_match {ds.get('band_match')}" + (f" (bands up to {ds.get('band_max_px')} px)" if ds.get("band_match") else "")),
-            ("Slice-thickness correction (zcorrect)", "applied" if r.get("zcorrected") else "not applied"),
             ("Render", f"downsample {rs.get('downsample')}, blend {rs.get('blend')}, rotation {rs.get('rotate_deg', 0)} deg, "
                        f"{rs.get('num_scales')} scales, compression {rs.get('compression')}"),
             ("CLAHE", (f"on (clip {rs['clahe'].get('clip_limit')}, {rs['clahe'].get('tile_px')} px)" if (rs.get("clahe") or {}).get("enabled") else "off")),
             ("em-pipe commit that wrote this page", R["commit"])]
+    if r.get("zcorrected"):   # only a volume made while the step existed: render no longer applies it
+        rows.insert(-3, ("Slice-thickness correction (zcorrect)", f"applied when this volume was rendered; {ZCORRECT_REMOVED}"))
     return table(["setting", "value"], [[esc(k), esc(v)] for k, v in rows], "facts")
 
 
@@ -333,17 +338,15 @@ def checks(cfg, R, facts):
             out.append(("Flicker along z", esc(f"{len(fl_rows)} series in {len(fl_dirs)} folders; which of them is this volume was not "
                                                "given (--flicker), so they are listed without a mark"),
                         f"slice-wide sd <= {LIMITS['flicker_common_sd']:g} grey", INFO, det))
-    # slice thickness
+    # slice thickness: only what an earlier run of the former zcorrect step left; no row otherwise
     pos = read_csv(step_path(cfg, "zcorrect", "positions.csv"))
-    if pos is None:
-        out.append(("Slice thickness", "", "", NOTRUN, cmd("./run_pipeline.sh CONFIG --steps zcorrect") + " (with zcorrect.enabled: true)"))
-    else:
+    if pos is not None and len(pos) > 1:
         sp = np.diff(pos["position_nm"].to_numpy(float)) / np.maximum(np.diff(pos["z"].to_numpy(float)), 1)
-        nominal = float(np.median(sp)) if len(sp) else np.nan
-        cv = float(1.4826 * np.median(np.abs(sp - nominal)) / nominal) if len(sp) and nominal else np.nan
+        nominal = float(np.median(sp))
+        cv = float(1.4826 * np.median(np.abs(sp - nominal)) / nominal) if nominal else np.nan
         txt = (f"estimated spacing: median {fmt(nominal)} nm, 5th-95th percentile {fmt(np.percentile(sp, 5))}-{fmt(np.percentile(sp, 95))} nm, "
                f"robust scatter {100 * cv:.1f} % of the median; " + ("applied in this volume" if (R.get("render") or {}).get("zcorrected") else "not applied in this volume"))
-        out.append(("Slice thickness", esc(txt), "no limit set: listed for information", INFO, ""))
+        out.append(("Slice thickness (from an earlier run)", esc(txt), "no limit set: listed for information", INFO, esc(ZCORRECT_REMOVED)))
     # curtains and slice quality
     sq = read_json(qc / "slice_quality" / "summary.json")
     sq_cmd = ("A=$(sbatch --parsable --array=0-19 slurm/slice_quality.sbatch CONFIG); "
@@ -425,7 +428,8 @@ def figures_section(cfg, R):
               (f"intensity_{i}.png" if i else "intensity.png", "Display levels over z"),
               (f"intensity_reference_{i}.png" if i else "intensity_reference.png", "Contrast standard: predicted neuropil grey and width"),
               (f"refstats_{rs}.png" if rs else "refstats.png", "Neuropil statistics at the sampled slices"),
-              ("zcorrect.png", "Slice thickness"), ("slice_quality.png", "Slice quality metrics over z")]
+              ("zcorrect.png", "Slice thickness, from an earlier run: " + ZCORRECT_REMOVED),
+              ("slice_quality.png", "Slice quality metrics over z")]
     if fl is not None:
         wanted.insert(6, (rel(Path(fl) / "zflicker.png", qc), "Flicker along z"))
     out = []

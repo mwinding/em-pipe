@@ -73,7 +73,7 @@ def select(df, selection, timezone=None):
 def voxel_size_nm(cfg, files):
     """Raw (z, y, x) voxel size in nm: per axis the median over ``files`` in check/files.csv, else 8.
 
-    render spaces its planes by this and zcorrect's positions are in units of it, so both use it.
+    render spaces its planes by this.
     """
     path = step_path(cfg, "check", "files.csv")
     df = pd.read_csv(path, dtype={"file": str}) if path.exists() else pd.DataFrame({"file": []})

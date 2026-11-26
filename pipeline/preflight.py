@@ -8,6 +8,9 @@ run_pipeline.sh runs it first and submits nothing when it reports an error. It c
 - the file reads as YAML and its ``base:`` chain resolves; raw_dir and output_dir are set;
 - every key in every section is one em-pipe knows (a misspelled key is otherwise ignored silently and the
   default used instead), with the nearest known key as a suggestion;
+- what the config still says about a step that was removed from the pipeline (zcorrect, the slice-thickness
+  correction): switched off, or a Slurm entry of one of its jobs, is accepted with a note that it has no
+  effect; switched on, or with settings, is an error;
 - settings that only work together (the conditions the steps themselves raise, hours into a run): e.g.
   intensity.balance_z_distance > 0 needs overlaps.enabled, balance_source: overlaps and per_slice: false;
   patchgrid needs overlaps.patch_grid > 0; window: reference needs refmask and refstats;
@@ -90,7 +93,8 @@ def unknown_keys(user, tree=None):
             elif isinstance(value, dict) and isinstance(known[key], dict) and known[key]:
                 walk(value, known[key], here)
 
-    top = {k: v for k, v in user.items() if k not in ("base", "slurm", "selection")}
+    # sections and Slurm entries of steps no longer in the pipeline: removed_entries says what to do with them
+    top = {k: v for k, v in user.items() if k not in ("base", "slurm", "selection", *config_mod.REMOVED_STEPS)}
     walk(top, tree, "")
     sel = user.get("selection") or {}
     if not isinstance(sel, dict):
@@ -104,7 +108,7 @@ def unknown_keys(user, tree=None):
     job_keys = ("array", *config_mod._SBATCH)
     top_keys = (*config_mod.SLURM_KEYS, *config_mod.JOBS)
     for job, opts in slurm.items():
-        if job in config_mod.SLURM_KEYS:
+        if job in config_mod.SLURM_KEYS or job in config_mod.REMOVED_JOBS:
             continue
         if job not in config_mod.JOBS:
             out.append(f"unknown job 'slurm.{job}'{_suggest(job, top_keys)}")
@@ -116,6 +120,38 @@ def unknown_keys(user, tree=None):
                 out.append(f"slurm.{job}.time must be a quoted string such as \"04:00:00\" (YAML reads an "
                            "unquoted time as a number)")
     return out
+
+
+def removed_entries(user):
+    """(errors, notes) for what a config (after its base chain) still says about steps that are no longer
+    part of the pipeline (config.REMOVED_STEPS: zcorrect, the slice-thickness correction).
+
+    Configs written while the step existed carry its switch and sometimes Slurm settings for its jobs.
+    Accepted, with a note that they have no effect: a section that is empty or only says ``enabled: false``,
+    and ``slurm.<job>`` entries of the step's jobs. Refused: ``enabled: true`` and any other key of the
+    section, because such a config asks for a step the run would silently leave out."""
+    E, N = [], []
+    for step in config_mod.REMOVED_STEPS:
+        if step not in user:
+            continue
+        section, gone = user[step], config_mod.removed_note(step)
+        if section is None or (isinstance(section, dict) and not section):
+            N.append(f"{step}: {gone}; the empty section has no effect and can be deleted")
+        elif not isinstance(section, dict):
+            E.append(f"{step}: {section!r}: {gone}; delete the entry")
+        elif section.get("enabled", False) is not False:
+            E.append(f"{step}.enabled: {str(section['enabled']).lower()}: {gone}, so a run would leave it out; "
+                     f"delete the {step} section")
+        elif set(section) - {"enabled"}:
+            keys = ", ".join(f"{step}.{k}" for k in section if k != "enabled")
+            E.append(f"{keys}: {gone}, so these settings are not used; delete the {step} section")
+        else:
+            N.append(f"{step}.enabled: false: {gone}; the section has no effect and can be deleted")
+    slurm = user.get("slurm")
+    for job, step in config_mod.REMOVED_JOBS.items():
+        if isinstance(slurm, dict) and job in slurm:
+            N.append(f"slurm.{job}: {config_mod.removed_note(step)}; the entry has no effect and can be deleted")
+    return E, N
 
 
 def combinations(cfg):
@@ -240,6 +276,9 @@ def validate(path, raw=True, esb=True):
         return res
     tree = known_tree()
     res.errors += unknown_keys(user, tree)
+    gone_errors, gone_notes = removed_entries(user)
+    res.errors += gone_errors
+    res.notes += gone_notes
     for key in ("raw", "check", "intensity", "render", "destreak", "slurm"):
         if user.get(key) is not None and not isinstance(user[key], dict):
             res.errors.append(f"{key} must be a group of settings, not {user[key]!r}")

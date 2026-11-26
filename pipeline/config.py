@@ -38,7 +38,7 @@ DEFAULTS = {
     # from slurm/site.sh, else the cluster's default).
     # Jobs: check, preview, preview_merge, refmask, refmask_merge, stitch, stitch_merge, align, align_solve,
     # shading, overlaps, overlaps_merge, patchgrid, zrelations, zrelations_merge, refstats, refstats_merge, intensity,
-    # zcorrect, zcorrect_solve, render_init, render, pyramid (one job per scale), export.
+    # render_init, render, pyramid (one job per scale), export.
     "slurm": {
         "mail_user": None,          # sbatch --mail-user (failure mails); null: Slurm's default
         # true: every job's array size, cpus, mem and time from the dataset's size (the detected: section;
@@ -51,7 +51,6 @@ DEFAULTS = {
         "align": {"array": 20},
         "overlaps": {"array": 20},
         "zrelations": {"array": 10},
-        "zcorrect": {"array": 10},
         "render_init": {"mem": "16G"},   # render.sbatch's 160G is sized for render run
         "render": {"array": 20},
         "pyramid": {"array": 10},
@@ -61,23 +60,34 @@ DEFAULTS = {
 # Step modules, in pipeline order; each has a DEFAULTS section of the same name.
 STEPS = ("check", "preview", "refmask", "stitch", "align", "shading", "overlaps", "patchgrid", "zrelations", "refstats",
          "intensity",
-         "destreak", "zcorrect",
+         "destreak",
          "render", "pyramid", "export", "precomputed", "upload", "serve", "movie")
 # run_pipeline.sh's steps, in its order (quality: tools/slice_quality.py; summary: tools/qc_summary.py)
 STEPS_IN_ORDER = ("check", "preview", "refmask", "stitch", "align", "shading", "overlaps", "patchgrid", "zrelations",
-                  "refstats", "intensity", "zcorrect", "render", "pyramid", "export", "quality", "summary", "precomputed",
+                  "refstats", "intensity", "render", "pyramid", "export", "quality", "summary", "precomputed",
                   "upload")
 JOBS = ("check", "preview", "preview_merge", "refmask", "refmask_merge", "stitch", "stitch_merge", "align",
         "align_solve", "shading", "overlaps", "overlaps_merge", "patchgrid", "zrelations", "zrelations_merge", "refstats",
         "refstats_merge", "intensity",
-        "zcorrect", "zcorrect_solve", "render_init", "render", "pyramid", "export", "slice_quality",
+        "render_init", "render", "pyramid", "export", "slice_quality",
         "slice_quality_merge", "qc_summary", "precomputed_init",
         "precomputed", "precomputed_verify", "upload", "upload_finish")
-ARRAY_JOBS = ("preview", "refmask", "stitch", "align", "overlaps", "zrelations", "refstats", "zcorrect", "render", "pyramid",
+ARRAY_JOBS = ("preview", "refmask", "stitch", "align", "overlaps", "zrelations", "refstats", "render", "pyramid",
               "slice_quality", "precomputed", "upload")
+# Steps that are no longer part of the pipeline: when each was removed and the folder it is kept in, with its
+# tests. Configs written before then still name them: pipeline/preflight.py accepts a section that only says
+# enabled: false and the Slurm entries of the step's jobs (neither has an effect), and refuses anything else.
+REMOVED_STEPS = {"zcorrect": ("26 Nov 2026", "dev/2026-11_zstep_correction/zcorrect_step")}
+REMOVED_JOBS = {"zcorrect": "zcorrect", "zcorrect_solve": "zcorrect"}   # job: its step
 SLURM_KEYS = ("mail_user", "auto")   # keys of the slurm: section that are not jobs
 _SBATCH = {"cpus": "--cpus-per-task", "mem": "--mem", "time": "--time", "partition": "--partition",
            "gres": "--gres"}
+
+
+def removed_note(step):
+    """A clause for messages: that ``step`` is no longer part of the pipeline, since when, and where it is kept."""
+    when, where = REMOVED_STEPS[step]
+    return f"the {step} step was removed from the pipeline on {when} (it is kept in {where})"
 
 
 def deep_merge(base, override):
@@ -218,7 +228,7 @@ def merged(path):
 def _main(argv=None):
     """Config values and sbatch options for run_pipeline.sh (two calls cover a whole submission).
 
-    python -m pipeline.config --config C --get output_dir zcorrect.enabled
+    python -m pipeline.config --config C --get output_dir upload.enabled
         one value per line, step defaults included; JSON for non-strings (e.g. true, 7)
     python -m pipeline.config --config C --sbatch-args [JOB ...]
         one line per job (default: every job): the job, then its sbatch options, tab-separated
@@ -233,7 +243,7 @@ def _main(argv=None):
     what.add_argument("--validate", action="store_true",
                       help="check the config before a run (pipeline/preflight.py): unknown keys, settings that do "
                            "not work together, raw_dir, EsB files; exit code 1 on errors")
-    what.add_argument("--get", nargs="+", metavar="KEY", help="dotted keys, e.g. zcorrect.enabled")
+    what.add_argument("--get", nargs="+", metavar="KEY", help="dotted keys, e.g. upload.enabled")
     what.add_argument("--sbatch-args", nargs="*", metavar="JOB", choices=JOBS, help=f"jobs: {', '.join(JOBS)}")
     what.add_argument("--dump", action="store_true",
                       help="the config as every step sees it: the file (after its base chain) over every default, as "

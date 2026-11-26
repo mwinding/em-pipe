@@ -92,6 +92,66 @@ def test_settings_that_need_each_other(tmp_path):
     assert "upload.destination" in errors(upload={"enabled": True}, precomputed={"enabled": True})
 
 
+WHERE = "dev/2026-11_zstep_correction/zcorrect_step"
+
+
+def test_removed_zcorrect_step_switched_off_is_accepted_with_notes(tmp_path):
+    """Configs written while the slice-thickness step existed: its switch (off) and Slurm entries for its jobs
+    pass, each with a note that it has no effect and where the step is kept."""
+    path = cfg(tmp_path, zcorrect={"enabled": False},
+               slurm={"zcorrect": {"array": 30, "time": "02:00:00"}, "zcorrect_solve": {"mem": "8G"},
+                      "render": {"array": 3}})
+    res = preflight.validate(path)
+    assert res.ok and not res.warnings, res.text()
+    assert len(res.notes) == 3
+    for entry, note in zip(("zcorrect.enabled: false", "slurm.zcorrect:", "slurm.zcorrect_solve:"), res.notes):
+        assert note.startswith(entry) and "removed from the pipeline on 26 Nov 2026" in note
+        assert WHERE in note and "has no effect" in note
+    assert preflight.unknown_keys(yaml.safe_load(path.read_text())) == []
+    # the jobs' options are only asked for jobs that exist: the old entries do not get in the way
+    loaded = config.load_config(path, step_defaults=config.step_defaults())
+    assert "zcorrect" not in config.JOBS and "zcorrect_solve" not in config.JOBS and "zcorrect" not in config.STEPS
+    for job in config.JOBS:
+        config.sbatch_args(loaded, job)
+    assert config.sbatch_args(loaded, "render")[1] == "--array=0-2"
+    assert preflight.main([str(path)]) == 0
+    # an empty section says nothing: accepted too; a config without any of it gets no note
+    res = preflight.validate(cfg(tmp_path, zcorrect={}))
+    assert res.ok and len(res.notes) == 1 and WHERE in res.notes[0]
+    assert preflight.validate(cfg(tmp_path)).notes == []
+    # with slurm.auto the automatic sizes cover the pipeline's jobs only, and the old entries change nothing
+    facts = {"slices": 100, "tiles": 4, "tile_px": [1000, 1000], "tile_images": 400, "raw_gpx": 0.4}
+    path = cfg(tmp_path, zcorrect={"enabled": False}, detected=facts, slurm={"auto": True, "zcorrect": {"array": 30}})
+    assert preflight.validate(path).ok
+    loaded = config.load_config(path, step_defaults=config.step_defaults())
+    assert all(config.sbatch_args(loaded, job) for job in config.JOBS)
+
+
+def test_removed_zcorrect_step_switched_on_or_with_settings_is_refused(tmp_path, capsys):
+    """Switched on, the config asks for a correction the run would leave out; with other keys it carries
+    settings nothing reads: both are errors that say where the step is kept."""
+    res = preflight.validate(cfg(tmp_path, zcorrect={"enabled": True}))
+    assert not res.ok and len(res.errors) == 1 and not res.notes
+    assert res.errors[0].startswith("zcorrect.enabled: true") and WHERE in res.errors[0]
+    assert "removed from the pipeline on 26 Nov 2026" in res.errors[0]
+    res = preflight.validate(cfg(tmp_path, zcorrect={"enabled": False, "chunk_slices": 100, "max_distance": 4}))
+    assert not res.ok and len(res.errors) == 1
+    assert res.errors[0].startswith("zcorrect.chunk_slices, zcorrect.max_distance:") and WHERE in res.errors[0]
+    res = preflight.validate(cfg(tmp_path, zcorrect={"crop_px": 512}))            # no switch, but settings
+    assert not res.ok and res.errors[0].startswith("zcorrect.crop_px:") and WHERE in res.errors[0]
+    res = preflight.validate(cfg(tmp_path, zcorrect=True))                        # not a section at all
+    assert not res.ok and WHERE in res.errors[0]
+    # other keys are still checked as before: a job that never existed stays unknown
+    res = preflight.validate(cfg(tmp_path, zcorrect={"enabled": False}, slurm={"zcorrect_run": {"array": 2}}))
+    assert not res.ok and "unknown job 'slurm.zcorrect_run'" in res.errors[0]
+    # on the command line: a message, no traceback
+    path = cfg(tmp_path, zcorrect={"enabled": True})
+    assert preflight.main([str(path)]) == 1
+    err = capsys.readouterr().err
+    assert "ERROR: zcorrect.enabled: true" in err and WHERE in err and "nothing was submitted" in err
+    assert "Traceback" not in err
+
+
 def test_raw_dir_messages(tmp_path):
     res = preflight.validate(cfg(tmp_path, raw=tmp_path / "nowhere"))
     assert not res.ok and "does not exist" in res.errors[0]

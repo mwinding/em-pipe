@@ -12,8 +12,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import step_stats  # noqa: E402
-from pipeline import zcorrect  # noqa: E402
+import step_stats  # noqa: E402  (puts the repository root and ../zcorrect_step on sys.path)
+import zcorrect  # noqa: E402
 
 zc = zcorrect.DEFAULTS["zcorrect"]
 rng = np.random.default_rng(0)

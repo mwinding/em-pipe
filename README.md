@@ -6,7 +6,7 @@ slice-to-slice drift, normalises intensity and writes a multi-resolution volume 
 [neuroglancer](https://github.com/google/neuroglancer). It runs as Slurm jobs on an HPC cluster.
 
 ```
-check → preview → [refmask] → stitch → align → [shading] → [overlaps] → [patchgrid] → [zrelations] → [refstats] → intensity → [zcorrect] → render → pyramid
+check → preview → [refmask] → stitch → align → [shading] → [overlaps] → [patchgrid] → [zrelations] → [refstats] → intensity → render → pyramid
 ```
 
 A plain-language walk through the whole pipeline, with pictures: `docs/pipeline_explainer.html`.
@@ -24,7 +24,6 @@ A plain-language walk through the whole pipeline, with pictures: `docs/pipeline_
 | zrelations | Optional (for `intensity.balance_z_distance` > 0): each tile against itself in the next slice(s), from the tissue of the preview thumbnails, flat-fielded and shape-corrected as render corrects the tile, by matching the two slices' tissue percentiles (`qc/zrelations.png`). |
 | refstats | Optional (for `intensity.window: reference`): the reference tissue's histogram (median, 5th–95th percentiles) at every `refstats.every`-th slice, measured inside the refmask on the 8 nm tiles with every correction render applies (flat-field, patch shapes, tile balance, and decurtaining when destreak is on), before any contrast window (`qc/refstats.png`). |
 | intensity | Per-tile contrast levels (the raw values render maps to 0 and 255), balanced across tile overlaps and smoothed over time. The balance comes from the preview thumbnails every few slices (`balance_source: thumbnails`) or from the overlaps step, slice by slice (`balance_source: overlaps`; with patchgrid, from the patch relations). With `balance_z_distance` > 0 the tiles of all slices are balanced in one solve, with each tile also matched to itself in the next slice (zrelations), as Janelia's render does with `--zDistance` (after TrakEM2's "Match intensities"): this removes the brightness jumps a slice's tiles share, which a slice-by-slice balance leaves as flicker along z. The window: `median` (the tissue's median at a set grey), `percentile`, or `reference` (the reference tissue at a set grey and width, so volumes match; below). |
-| zcorrect | Optional slice-thickness correction (off by default). |
 | render | Applies everything in one pass and writes OME-Zarr (Zarr v3, sharded), optionally downsampled; CLAHE; optional destreaking (filter, or swap from a second detector). |
 | pyramid | Lower-resolution scales of the volume. |
 | export | Quick-look TIFF of the volume for Fiji (finest scale under `export.max_gb`). |
@@ -148,10 +147,7 @@ A local export serves like any volume: `python3 -m pipeline.serve FOLDER` lists 
   from a single global alignment (`init --overwrite`).
 - **Several volumes** (e.g. a 32 nm overview and a full-resolution `render.bbox` region) can share
   one `output_dir` if they have different `render.name`s.
-- **zcorrect is off by default and not recommended as it stands:** on two volumes its per-slice estimate mostly
-  followed how different a slice looks (noise, streaks), not its thickness (tiles of the same slices disagreed),
-  and applying it blended nearly every plane from two slices without making shapes more even
-  (`dev/2026-11_zstep_correction/`). The real thick cuts, after long pauses, are breaks it leaves alone.
+- **Slice-thickness correction (zcorrect)** was removed from the pipeline on 26 Nov 2026; the step is kept in `dev/2026-11_zstep_correction/zcorrect_step` with its tests and its test results on two volumes.
 - **destreak** is off by default; tune it with
   `python -m pipeline.destreak test --config C --z Z --tile 0-0` first. If the microscope recorded a
   second detector that doesn't see the curtains (e.g. backscatter next to in-lens SE, the same scan),

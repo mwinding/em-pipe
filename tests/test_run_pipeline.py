@@ -119,7 +119,7 @@ def test_dry_run_prints_without_submitting(tmp_path, env):
     assert any(w.startswith("--dependency=afterany:<em-check>:<em-preview-run>:") for w in shlex.split(lines[-1]))
 
 
-def test_steps_from_and_zcorrect(tmp_path, env):
+def test_steps_from_to_and_summary(tmp_path, env):
     env, log = env
     cfg = write_cfg(tmp_path)
     jobs = calls(run(cfg, env, "--steps", "align,render", "--dry-run").stdout.splitlines())
@@ -136,9 +136,28 @@ def test_steps_from_and_zcorrect(tmp_path, env):
     assert [j["job-name"] for j in jobs] == ["em-render-init", "em-render-run", "em-qc-summary"]
     assert jobs[0]["dependency"] == "afterok:77"
     assert jobs[2]["dependency"] == "afterany:<em-render-init>:<em-render-run>:88:99"
-    cfg = write_cfg(tmp_path, zcorrect={"enabled": True})
-    assert names(run(cfg, env, "--from", "intensity", "--dry-run").stdout)[:4] == [
-        "em-intensity", "em-zcorrect-run", "em-zcorrect-solve", "em-render-init"]
+    assert not log.exists()
+
+
+def test_config_from_before_zcorrect_was_removed(tmp_path, env):
+    """The slice-thickness step (zcorrect) is no longer part of the pipeline. A config written while it existed,
+    with the step switched off and Slurm settings for its jobs, still submits the same chain, with notes that
+    those entries have no effect; one that switches it on is refused before anything is submitted."""
+    env, log = env
+    old = {"zcorrect": {"array": 30, "time": "02:00:00"}, "zcorrect_solve": {"mem": "8G"}}
+    cfg = write_cfg(tmp_path, zcorrect={"enabled": False}, slurm_extra=old)
+    p = run(cfg, env, "--dry-run")
+    assert names(p.stdout) == CHAIN and not any("zcorrect" in line for line in p.stdout.splitlines())
+    notes = [line for line in p.stderr.splitlines() if line.startswith("note: ")]
+    assert len(notes) == 3 and all("has no effect" in n and "dev/2026-11_zstep_correction/zcorrect_step" in n
+                                   for n in notes)
+    check_dataset_config(cfg)
+    p = run(cfg, env, "--steps", "zcorrect", "--dry-run", check=False)
+    assert p.returncode == 1 and "unknown step: zcorrect" in p.stderr and not p.stdout
+    p = run(write_cfg(tmp_path, zcorrect={"enabled": True}), env, "--from", "intensity", "--dry-run", check=False)
+    assert p.returncode == 1 and not p.stdout and "Traceback" not in p.stderr
+    assert "zcorrect.enabled: true" in p.stderr and "removed from the pipeline on 26 Nov 2026" in p.stderr
+    assert "dev/2026-11_zstep_correction/zcorrect_step" in p.stderr and "nothing was submitted" in p.stderr
     assert not log.exists()
 
 
@@ -155,14 +174,14 @@ def test_bad_arguments(tmp_path, env):
     assert "unknown step" in run(cfg, env, "--steps", "check,nope", check=False).stderr
     assert run(cfg, env, "--from", "align", "--steps", "check", check=False).returncode == 1
     assert run(cfg.with_name("missing.yaml"), env, check=False).returncode == 1
-    p = run(cfg, env, "--steps", "zcorrect", check=False)   # disabled: nothing to submit
-    assert p.returncode == 1 and "zcorrect skipped" in p.stderr
+    p = run(cfg, env, "--steps", "upload", check=False)   # disabled: nothing to submit
+    assert p.returncode == 1 and "upload skipped" in p.stderr
     assert not log.exists()
 
 
 def test_config_cli(tmp_path, capsys):
     cfg = write_cfg(tmp_path)
-    keys = ["zcorrect.enabled", "render.num_scales", "render.blend_px", "nothing.here"]   # blend_px: a step default
+    keys = ["upload.enabled", "render.num_scales", "render.blend_px", "nothing.here"]   # blend_px: a step default
     assert config._main(["--config", str(cfg), "--get", *keys, "--default", "x"]) == 0
     assert capsys.readouterr().out.splitlines() == ["false", "3", "256", "x"]
     assert config._main(["--config", str(cfg), "--sbatch-args", "check", "render"]) == 0
@@ -200,10 +219,17 @@ DATASET_CONFIGS = [ROOT / "configs" / "example.yaml"] + sorted(
 
 @pytest.mark.parametrize("path", DATASET_CONFIGS, ids=lambda p: p.name)
 def test_dataset_configs_are_valid(path):
-    from pipeline import movie_build, movie_tissue
+    check_dataset_config(path)
+
+
+def check_dataset_config(path):
+    from pipeline import movie_build, movie_tissue, preflight
     tools = {**movie_build.DEFAULTS, **movie_tissue.DEFAULTS}   # sections of the movie tools (not steps)
     cfg = config.load_config(path, step_defaults=config.step_defaults())
-    assert set(cfg) <= set(config.DEFAULTS) | set(config.STEPS) | set(tools) | {"config_path"}
+    # A step that was removed from the pipeline (zcorrect) may still be named, switched off, in a config written
+    # while it existed, and its jobs may still have Slurm entries: neither has an effect. Switched on is an error.
+    assert preflight.removed_entries(config._read_user(path))[0] == []
+    assert set(cfg) <= set(config.DEFAULTS) | set(config.STEPS) | set(tools) | set(config.REMOVED_STEPS) | {"config_path"}
     for section in config.STEPS:   # no misspelt keys: every key is one the steps know
         assert set(cfg[section]) <= set(config.step_defaults(section)[section]), section
     for section in set(cfg) & set(tools):
