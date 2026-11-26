@@ -245,3 +245,21 @@ pyramid run --scale s for s = 1..num_scales-1. Job names are `em-<step>[-<sub>]`
 intensity, render_init, render, pyramid` (array sizes apply to the array
 jobs `preview, stitch, align, render, pyramid`), plus `slurm.mail_user`. `time` must be a
 quoted string. `EM_PIPE_SKIP_ENV=1` skips sourcing `slurm/env.sh` in the script itself.
+
+Since 26 Nov 2026 (the README's Quick start and Running sections describe the use):
+
+- **Before a chain:** `pipeline/preflight.py` checks the config (unknown keys, settings that only work
+  together, raw_dir, and with decurtaining from a reference the EsB file of every raw file,
+  `pipeline/esb.py`); `run_pipeline.sh` runs it first and submits nothing on an error.
+- **After export:** `quality` (`tools/slice_quality.py`, array + merge) and `summary`
+  (`tools/qc_summary.py`). The summary job depends on every job of the chain with `afterany`, so it also
+  runs when a job failed and the rest were cancelled; `run_pipeline.sh` writes the chain's job list to
+  `work/logs/chain_<time>_<config>.tsv` and the page reads the jobs' states from `sacct`. Nothing waits
+  for the summary; precomputed and upload follow the quality merge.
+- **Resources:** with `slurm.auto: true`, `pipeline/resources.py` sizes every job from the config's
+  `detected:` section (slices, tiles per slice, tile size); a job's explicit keys win.
+- **One command:** `em-pipe RAW_DIR OUTPUT_DIR` (`pipeline/onecommand.py`) writes
+  `OUTPUT_DIR/config.yaml` on `configs/presets/standard.yaml` after the EsB check and the curtain direction
+  (`pipeline/curtains.py`), and submits the chain and the CLAHE volume's.
+- **Defaults:** `load_config` merges every step's defaults whichever step runs, so one step asking
+  another step's setting gets that step's default.
