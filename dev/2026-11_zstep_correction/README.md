@@ -173,6 +173,9 @@ SD would fall.
 
 Keep `zcorrect.enabled: false` for deliveries of these datasets.
 
+**Decision (26 Nov 2026): not used.** Slice-thickness correction stays off for these volumes: the corrected
+slabs look worse for a segmentation model (blended planes, smears at the pause) and no more even.
+
 - Measured: the per-slice estimate is not reproducible between areas of the same slices, is mostly
   explained by per-slice image differences, and its largest steps are known bad slices; applying it
   does not make shapes measurably more even, and it blends nearly every plane.

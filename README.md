@@ -148,7 +148,11 @@ A local export serves like any volume: `python3 -m pipeline.serve FOLDER` lists 
   from a single global alignment (`init --overwrite`).
 - **Several volumes** (e.g. a 32 nm overview and a full-resolution `render.bbox` region) can share
   one `output_dir` if they have different `render.name`s.
-- **destreak and zcorrect** are off by default; tune destreak with
+- **zcorrect is off by default and not recommended as it stands:** on two volumes its per-slice estimate mostly
+  followed how different a slice looks (noise, streaks), not its thickness (tiles of the same slices disagreed),
+  and applying it blended nearly every plane from two slices without making shapes more even
+  (`dev/2026-11_zstep_correction/`). The real thick cuts, after long pauses, are breaks it leaves alone.
+- **destreak** is off by default; tune it with
   `python -m pipeline.destreak test --config C --z Z --tile 0-0` first. If the microscope recorded a
   second detector that doesn't see the curtains (e.g. backscatter next to in-lens SE, the same scan),
   `destreak.reference_from` / `reference_to` swap the stripe part from it instead of removing it, so
