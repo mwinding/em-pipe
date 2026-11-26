@@ -128,6 +128,43 @@ def _on_grid(cells, cell_px, thumb_shape, shape):
     return cv2.resize(px.astype(np.int32), (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
 
 
+def inputs_digest(cfg, go, zs, dsettings):
+    """Identifies what a chunk of sampled slices ``zs`` is measured with: refstats' settings, the masks, the
+    corrections (flat-field, patch shapes, decurtaining ``dsettings``) and the gain and offset of every tile
+    of those slices on the common scale (``go``: {(z, tile): (g, o)}, from intensity.balanced_scale)."""
+    rows = sorted((z, t, round(float(g), 6), round(float(o), 3)) for (z, t), (g, o) in go.items()
+                  if z in zs and np.isfinite(g))
+    h = hashlib.sha256(json.dumps([settings_of(cfg), refmask.digest(refmask.settings_of(cfg)), shading.digest(cfg),
+                                   patchgrid.digest(cfg), dsettings, rows], sort_keys=True, default=str).encode())
+    return h.hexdigest()[:16]
+
+
+def stale(cfg, balance, stats=None):
+    """Sampled slices of stats.csv that were measured with other inputs than this config gives now.
+
+    ``balance``: intensity.balanced_scale(cfg), the tiles' gains and offsets as intensity is about to use
+    them. The statistics are only valid on the scale they were measured on: with other gains and offsets
+    (another balance, e.g. balance_z_distance switched on), other corrections or another mask, a window set
+    from them puts the reference tissue at the wrong grey. Returns (stale z, sampled z compared); (None,
+    None) when stats.csv records no digests to compare (written by hand or by an old version)."""
+    from .render import _destreak_settings
+    st = stats if stats is not None else pd.read_csv(stats_path(cfg, "stats.csv"))
+    if "digest" not in st.columns:
+        return None, None
+    have = {int(z): str(d) for z, d in zip(st["z"], st["digest"])}
+    go = {(int(z), t): (g, o) for z, t, g, o in zip(balance["z"], balance["tile"], balance["g"], balance["o"])}
+    dsettings = _destreak_settings(cfg)
+    bad, compared = [], []
+    for zs in _chunks(cfg):
+        dg = inputs_digest(cfg, go, zs, dsettings)
+        for z in zs:
+            if z in have:
+                compared.append(z)
+                if have[z] != dg:
+                    bad.append(z)
+    return bad, compared
+
+
 class Measurer:
     """Everything a task needs once: tile balance, corrections, masks, the volume frame."""
 
@@ -166,12 +203,7 @@ class Measurer:
 
     def digest(self, zs):
         """Identifies a chunk's inputs: settings, masks, corrections and the tiles' gain/offset."""
-        go = sorted((z, t, round(float(g), 6), round(float(o), 3)) for (z, t), (g, o) in self.go.items()
-                    if z in zs and np.isfinite(g))
-        h = hashlib.sha256(json.dumps([self.s, refmask.digest(refmask.settings_of(self.cfg)), shading.digest(self.cfg),
-                                       patchgrid.digest(self.cfg), self.dsettings, go], sort_keys=True,
-                                      default=str).encode())
-        return h.hexdigest()[:16]
+        return inputs_digest(self.cfg, self.go, zs, self.dsettings)
 
     def corrected(self, row):
         """A tile slice's values as render corrects them (before the window), float32."""

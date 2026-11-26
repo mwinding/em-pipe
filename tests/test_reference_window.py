@@ -194,3 +194,64 @@ def test_follow_samples_follows_a_step_without_smearing_it():
     assert np.abs(curve[far] - truth(allp[far])).max() < 0.02
     fixed = intensity.smooth_samples(pos, v, allp, 2001, 129)
 
+
+
+# ----- refstats must be measured on the scale the levels are set on ---------------------------------------
+
+def _stale_setup(tmp_path, monkeypatch):
+    """A config with 40 slices of 2 tiles, the tiles' balance, and stats.csv as refstats would write it."""
+    import synth
+    from pipeline.config import load_config
+    rows = [{"z": z, "timestamp": f"2026-10-06T00:{z:02d}:00", "tile": t, "tile_row": 0, "tile_col": c,
+             "file": f"M10_D06_tile{t}.tif", "index": z, "height": 64, "width": 64, "segment": 0, "seam": False,
+             "excluded": False, "exclude_reason": "", "label": ""} for z in range(40) for c, t in enumerate(("0-0", "0-1"))]
+    synth.save_slices(tmp_path / "out", pd.DataFrame(rows))
+    path = synth.write_config(tmp_path / "c.yaml", tmp_path / "raw", tmp_path / "out", refstats={"every": 8},
+                              intensity={"window": "reference", "reference": {"median": 150, "contrast": 130}})
+    cfg = load_config(path, step_defaults=intensity.DEFAULTS)
+    monkeypatch.setattr(refstats.refmask, "digest", lambda s: "mask")
+    bal = pd.DataFrame({"z": [r["z"] for r in rows], "tile": [r["tile"] for r in rows], "g": 1.0, "o": 0.0})
+    bal.loc[bal["tile"] == "0-1", "g"] = 1.05
+    go = {(int(z), t): (g, o) for z, t, g, o in zip(bal["z"], bal["tile"], bal["g"], bal["o"])}
+    recs = [{"z": z, "n_cells": 50, "digest": refstats.inputs_digest(cfg, go, zs, None)}
+            for zs in refstats._chunks(cfg) for z in zs]
+    refstats.stats_path(cfg, "stats.csv").parent.mkdir(parents=True)
+    pd.DataFrame(recs).to_csv(refstats.stats_path(cfg, "stats.csv"), index=False)
+    return cfg, bal
+
+
+def test_refstats_measured_with_this_balance_are_current(tmp_path, monkeypatch):
+    cfg, bal = _stale_setup(tmp_path, monkeypatch)
+    bad, compared = refstats.stale(cfg, bal)
+    assert bad == [] and compared == [0, 8, 16, 24, 32, 39]
+    intensity.check_refstats_current(cfg, bal, intensity.reference_settings(cfg),
+                                     pd.read_csv(refstats.stats_path(cfg, "stats.csv")))   # no error
+
+
+def test_refstats_from_another_balance_are_refused(tmp_path, monkeypatch, caplog):
+    cfg, bal = _stale_setup(tmp_path, monkeypatch)
+    st = pd.read_csv(refstats.stats_path(cfg, "stats.csv"))
+    other = bal.copy()
+    other.loc[(other["z"] == 16) & (other["tile"] == "0-0"), "o"] = 12.0     # one tile of one sampled slice
+    bad, compared = refstats.stale(cfg, other)
+    assert bad == [0, 8, 16, 24] and len(compared) == 6                      # the chunk holding z 16
+    r = intensity.reference_settings(cfg)
+    with pytest.raises(ValueError, match="other tile gains and offsets") as e:
+        intensity.check_refstats_current(cfg, other, r, st)
+    assert "4 of 6 sampled slices differ" in str(e.value) and "--steps refstats,intensity" in str(e.value)
+    assert "allow_stale_refstats" in str(e.value)
+    # another correction (decurtaining switched on) is a difference too
+    cfg2 = {**cfg, "destreak": {"enabled": True, "mode": "filter"}}
+    assert len(refstats.stale(cfg2, bal)[0]) == 6
+    # the deliberate reuse: a warning, no error
+    caplog.set_level("WARNING")
+    intensity.check_refstats_current(cfg, other, {**r, "allow_stale_refstats": True}, st)
+    assert "USING THEM ANYWAY" in caplog.text
+
+
+def test_refstats_without_digests_cannot_be_checked(tmp_path, monkeypatch):
+    cfg, bal = _stale_setup(tmp_path, monkeypatch)
+    st = pd.read_csv(refstats.stats_path(cfg, "stats.csv")).drop(columns="digest")
+    assert refstats.stale(cfg, bal, st) == (None, None)
+    with pytest.raises(ValueError, match="records no digest"):
+        intensity.check_refstats_current(cfg, bal, intensity.reference_settings(cfg), st)

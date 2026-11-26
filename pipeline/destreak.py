@@ -50,7 +50,13 @@ log = logging.getLogger(__name__)
 DEFAULTS = {
     "destreak": {
         "enabled": False,       # apply inside render
-        "direction": "vertical",  # stripes run along y (vertical) or along x (horizontal)
+        "direction": "vertical",  # stripes run along y (vertical) or along x (horizontal); pipeline/curtains.py
+                                  # measures it on sampled raw tiles
+        # reference: swap from the reference detector (reference_from / reference_to must be set) | filter: the
+        # filter-only path, stated as a choice (no reference may be set) | null: the swap when a reference is
+        # set, else the filter, with a warning: the filter also removes the image's own structure along the
+        # stripes, so it should be chosen, not fallen back to
+        "mode": None,
         "wavelet": "db4",       # pywt wavelet name
         "levels": 6,            # wavelet decomposition levels (capped by the image size); level L holds
                                 # structure ~2^L px across, so 8 reaches bands ~500 px wide
@@ -81,6 +87,8 @@ DEFAULTS = {
                                 # (regions the detectors show differently) are left (e.g. 768)
     },
 }
+
+MODES = (None, "reference", "filter")
 
 # direction -> (index of the detail band in pywt's (cH, cV, cD), axis along which stripes are constant)
 _BANDS = {"vertical": (1, 0), "horizontal": (0, 1)}
@@ -364,6 +372,17 @@ def settings(cfg):
     p = {**DEFAULTS["destreak"], **given}
     if (p["reference_from"] is None) != (p["reference_to"] is None):
         raise ValueError("destreak.reference_from and destreak.reference_to go together")
+    if p["direction"] not in _BANDS:
+        raise ValueError(f"destreak.direction must be one of {sorted(_BANDS)}, got {p['direction']!r}")
+    if p["mode"] not in MODES:
+        raise ValueError(f"destreak.mode must be reference, filter or null, got {p['mode']!r}")
+    if p["mode"] == "reference" and p["reference_from"] is None:
+        raise ValueError("destreak.mode: reference needs destreak.reference_from / reference_to (how to get from a "
+                         "raw file to its EsB file; the em-pipe command and `python -m pipeline.esb RAW_DIR` find "
+                         "them). Without EsB data, state the choice: destreak.mode: filter, or destreak.enabled: false")
+    if p["mode"] == "filter" and p["reference_from"] is not None:
+        raise ValueError("destreak.mode: filter, but destreak.reference_from / reference_to are set: remove them, "
+                         "or set mode: reference")
     for key in ("stripe_px", "stripe_aspect"):
         if p[key] is not None and not float(p[key]) > 0:
             raise ValueError(f"destreak.{key} must be > 0 or null, got {p[key]!r}")
@@ -472,7 +491,9 @@ def make_test_images(cfg, args):
 
 
 def main(argv=None):
-    p = base_parser(__doc__.splitlines()[0])
+    p = base_parser("Curtain (stripe) removal test images: before/after PNGs of one tile slice (whole tile, crop, "
+                    "spectrum) in work/destreak/, with the config's destreak settings or the overrides below. "
+                    "In a run, destreak is applied inside render and refstats.")
     p.add_argument("command", choices=["test"])
     p.add_argument("--z", type=int, required=True, help="global slice index")
     p.add_argument("--tile", required=True, help="tile id r-c")

@@ -313,7 +313,17 @@ def _destreak_settings(cfg):
     if not get(cfg, "destreak.enabled", False):
         return None
     from . import destreak
-    return deep_merge(getattr(destreak, "DEFAULTS", {}), {"destreak": cfg["destreak"]})["destreak"]
+    p = deep_merge(getattr(destreak, "DEFAULTS", {}), {"destreak": cfg["destreak"]})["destreak"]
+    if hasattr(destreak, "settings"):
+        destreak.settings({"destreak": p})
+    if p.get("reference_from") is None and p.get("mode") is None:
+        log.warning("destreak is enabled without a reference (destreak.reference_from / reference_to): the "
+                    "FILTER-ONLY path is used, which also removes the image's own structure along the stripes. "
+                    "Set destreak.mode: filter to state that choice, or give the reference detector's files")
+    # mode says how the path was chosen, not what is done to the pixels: left out so plan and refstats
+    # digests stay those of volumes made before the setting existed
+    p.pop("mode", None)
+    return p
 
 
 def _check_references(cfg, plan, settings):

@@ -189,6 +189,9 @@ intensity:
     adapt_sigmas: 2.5        # adapt: how many standard errors a longer window's estimate may differ by
     ramp_slices: 129         # running mean over z after interpolation (no kinks at the samples)
     min_cells: 20            # samples with fewer reference cells don't count
+    allow_stale_refstats: false   # intensity refuses refstats measured with other tile gains and offsets,
+                             # corrections or masks than this config gives now (re-run refstats) | true: reuse
+                             # them deliberately, with a warning
     boundary_slices: 300     # QC: samples within this many slices each side of a segment change
     band_pct: 5.0            # QC: target band, +- % of median and contrast
     clip_warn: 0.01          # QC: warn when more than this fraction of tissue is at 0 or at 255
@@ -252,7 +255,12 @@ refstats:                    # reference tissue median and lc32 on the common sc
 #   reference_to: '\1Backscatter/\2_EsB\3'
 destreak:
   enabled: false             # apply inside render
-  direction: vertical        # stripes run along y (vertical) or along x (horizontal)
+  direction: vertical        # stripes run along y (vertical) or along x (horizontal); python -m pipeline.curtains
+                             # measures it on sampled raw tiles
+  mode: null                 # reference: swap from the reference detector (reference_from / reference_to must be
+                             # set) | filter: the filter-only path, stated as a choice | null: the swap when a
+                             # reference is set, else the filter, with a warning (the filter also removes the
+                             # image's own structure along the stripes)
   wavelet: db4               # pywt wavelet name
   levels: 6                  # wavelet decomposition levels (capped by the image size); level L holds
                              # structure ~2^L px across, so 8 reaches bands ~500 px wide
@@ -341,12 +349,6 @@ serve:
   port: 8000                 # HTTP port (--port overrides)
   bind: 127.0.0.1            # listen address (--bind overrides); 0.0.0.0 to tunnel via the login host
 
-# Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
-# string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch (partition: SBATCH_PARTITION
-# from slurm/site.sh, else the cluster's default).
-# Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, shading, overlaps, overlaps_merge,
-# patchgrid, zrelations, zrelations_merge, intensity, zcorrect, zcorrect_solve, render_init, render, pyramid (one job
-# per scale, each with this array size), export.
 precomputed:
   enabled: false             # run_pipeline.sh: Neuroglancer precomputed export after pyramid
   name: null                 # folder in output_dir; null: <volume stem>.precomputed
@@ -406,6 +408,12 @@ movie:                       # fly-through MP4 (python -m pipeline.movie; sbatch
   ffmpeg: ffmpeg
   cache_gb: 4                # decoded chunks kept in memory between frames
 
+# Slurm settings per job for run_pipeline.sh: array (number of tasks), cpus, mem, time (a quoted
+# string, e.g. "04:00:00"), partition, gres. Unset keys keep the #SBATCH defaults of slurm/<step>.sbatch (partition: SBATCH_PARTITION
+# from slurm/site.sh, else the cluster's default).
+# Jobs: check, preview, preview_merge, stitch, stitch_merge, align, align_solve, shading, overlaps, overlaps_merge,
+# patchgrid, zrelations, zrelations_merge, intensity, zcorrect, zcorrect_solve, render_init, render, pyramid (one job
+# per scale, each with this array size), export.
 slurm:
   mail_user: null            # sbatch --mail-user (failure mails); null: Slurm's default
   preview: {array: 20}

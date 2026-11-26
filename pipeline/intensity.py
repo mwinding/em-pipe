@@ -163,6 +163,10 @@ DEFAULTS = {
             "adapt_sigmas": 2.5,  # adapt: how many standard errors a longer window's estimate may differ by
             "ramp_slices": 129,   # running mean over z after interpolation (no kinks at the samples)
             "min_cells": 20,      # samples with fewer reference cells don't count
+            # intensity refuses refstats that were measured with other tile gains and offsets, corrections or
+            # masks than this config gives now (their windows would be off the standard) | true: reuse them
+            # deliberately, with a warning
+            "allow_stale_refstats": False,
             "boundary_slices": 300,   # QC: samples within this many slices each side of a segment change
             "band_pct": 5.0,      # QC: target band, +- % of median and contrast
             "clip_warn": 0.01,    # QC: warn when more than this fraction of tissue is at 0 or at 255
@@ -511,6 +515,42 @@ def load_refstats(cfg):
     return pd.read_csv(path)
 
 
+class StaleRefstats(ValueError):
+    """refstats were measured with other inputs than the levels are about to be set with."""
+
+
+def check_refstats_current(cfg, df, r, st):
+    """Refuse statistics measured on another scale than the one the levels are about to be set on.
+
+    refstats measures the reference tissue after the corrections render applies and each tile's gain and
+    offset onto the common scale; its chunks record a digest of those inputs. When the balance has changed
+    since (e.g. intensity.balance_z_distance switched on, new overlaps, another flat-field or decurtaining),
+    the statistics no longer describe the scale the windows are set on: in a test, statistics reused across
+    such a change put a whole segment 26 greys off. ``intensity.reference.allow_stale_refstats: true``
+    reuses them deliberately (a warning instead)."""
+    from . import refstats
+    path = refstats.stats_path(cfg, "stats.csv")
+    bad, compared = refstats.stale(cfg, df, st)
+    if bad is None:
+        what = f"{path} records no digest of what it was measured with, so it cannot be checked against this config"
+    elif not bad:
+        log.info("refstats are current: %d sampled slices measured with this config's tile balance and corrections",
+                 len(compared))
+        return
+    else:
+        what = (f"{path} was measured with other tile gains and offsets or other settings (mask, flat-field, patch "
+                f"shapes, decurtaining, refstats settings) than this config gives now: {len(bad)} of {len(compared)} "
+                f"sampled slices differ (e.g. z {bad[0]})")
+    if r.get("allow_stale_refstats"):
+        log.warning("%s. intensity.reference.allow_stale_refstats is true: USING THEM ANYWAY; the reference tissue "
+                    "may come out off the standard", what)
+        return
+    raise StaleRefstats(f"{what}. Windows set from it would put the reference tissue at the wrong grey. Re-run refstats "
+                        "with this config (./run_pipeline.sh CONFIG --steps refstats,intensity; a variant config "
+                        "needs its own refstats.output), or set intensity.reference.allow_stale_refstats: true to "
+                        "reuse the statistics deliberately")
+
+
 def reference_windows(cfg, df):
     """Replace the windows by the reference windows (common scale L, H per z, mapped into each tile).
 
@@ -518,6 +558,7 @@ def reference_windows(cfg, df):
     where a segment had no reference tissue and keeps the starting window)."""
     r = reference_settings(cfg)
     st = load_refstats(cfg)
+    check_refstats_current(cfg, df, r, st)
     st = st[st["n_cells"] >= int(r["min_cells"])]
     per_z = df.groupby("z").agg(segment=("segment", "first"), pos=("pos", "first")).reset_index()
     st = st.assign(spread=spread(st, r["measure"]))
@@ -1190,7 +1231,11 @@ def main(argv=None):
     base = levels_path(cfg, output="")
     prev = base if base.exists() else out
     old = pd.read_csv(prev, dtype={"tile": str}) if prev.exists() else None
-    df = compute_levels(cfg)
+    try:
+        df = compute_levels(cfg)
+    except StaleRefstats as e:   # the message is the whole story: no traceback
+        log.error("%s", e)
+        return 1
     out.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(out, lambda t: df[["z", "tile", "lo", "hi"]].to_csv(t, index=False, float_format="%.2f"))
     plot(df, qc_path(cfg, f"{_qc_name(cfg, 'intensity')}.png"))

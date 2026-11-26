@@ -656,6 +656,9 @@ def main(argv=None):
     p = base_parser("Inventory the raw files, detect faults and write the global slice list (check/).")
     args = p.parse_args(argv)
     cfg = setup(args, DEFAULTS)
+    if not Path(cfg["raw_dir"]).is_dir():
+        log.error("raw_dir %s %s", cfg["raw_dir"], "is not a folder" if Path(cfg["raw_dir"]).exists() else "does not exist")
+        return 1
     files, slices, issues, per, ignored = analyse(cfg, overwrite=args.overwrite)
 
     out = step_dir(cfg, "check")
@@ -675,10 +678,33 @@ def main(argv=None):
 
     new = issues[(issues["severity"] == "ERROR") & ~issues["known"]]
     log.info("%d slices, %d tile images; %d issues (%d unacknowledged errors); report: %s",
-             len(per), len(slices), len(issues), len(new), out / "report.md")
+             len(per), len(slices), len(issues), len(new), qc_path(cfg, "check_report.md"))
     for r in new.head(20).itertuples():
         log.error("%s %s: %s", r.code, r.file, r.message)
+    reason = no_usable_slices(cfg, files, slices)
+    if reason:
+        log.error("no usable slice: %s. Nothing can be processed, so the check fails and the later steps do not start",
+                  reason)
+        return 1
     return 1 if len(new) else 0
+
+
+def no_usable_slices(cfg, files, slices):
+    """Why no slice can be used (a sentence), or None when at least one can."""
+    if len(slices) and not slices["excluded"].all():
+        return None
+    status = files["status"].value_counts() if len(files) else {}
+    if not len(files):
+        return f"no file in {cfg['raw_dir']} matches raw.file_pattern"
+    if status.get("pending", 0) == len(files):
+        return (f"all {len(files)} files were modified less than {cfg['check']['min_age_minutes']} min ago and count "
+                "as still being written or copied (check.min_age_minutes); run check again later, or lower the setting "
+                "if the copy is complete")
+    if not len(slices):
+        return (f"none of the {len(files)} files could be read into slices ({status.get('pending', 0)} still pending, "
+                f"{status.get('error', 0)} with errors; see the issues above)")
+    why = slices["exclude_reason"].replace("", "excluded").value_counts()
+    return f"all {len(slices)} tile images are excluded ({'; '.join(f'{n} x {r}' for r, n in why.head(3).items())})"
 
 
 if __name__ == "__main__":

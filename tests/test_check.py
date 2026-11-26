@@ -413,7 +413,7 @@ def test_same_tile_in_two_folders(tmp_path):
     assert set(slices.loc[slices["tile"] == "0-0", "file"]) == {"M09_D24_tile0-0.tif"}
 
 
-def test_empty_and_all_pending(tmp_path):
+def test_empty_and_all_pending(tmp_path, caplog):
     (tmp_path / "empty").mkdir()
     cfg = config(tmp_path, tmp_path / "empty")
     assert run(cfg) == 1
@@ -422,10 +422,27 @@ def test_empty_and_all_pending(tmp_path):
 
     t = synth.make_dataset(tmp_path / "raw", n_slices=4)  # just written, so all pending
     cfg = config(tmp_path, t.raw_dir, min_age_minutes=60)
-    assert run(cfg) == 0
+    caplog.set_level("ERROR")
+    assert run(cfg) == 1   # no usable slice: the check fails, so the chain does not go on with nothing
+    assert "no usable slice" in caplog.text and "check.min_age_minutes" in caplog.text
     files, slices, issues, report = outputs(cfg)
     assert (files["status"] == "pending").all() and len(slices) == 0 and not pairs(issues, "ERROR")
     assert f"## Pending files ({len(t.files)})" in report
+
+
+def test_missing_raw_dir_is_a_message_not_a_traceback(tmp_path, caplog):
+    cfg = config(tmp_path, tmp_path / "nowhere")
+    caplog.set_level("ERROR")
+    assert run(cfg) == 1
+    assert "does not exist" in caplog.text
+
+
+def test_log_names_the_report_where_it_is(tmp_path, caplog):
+    t = synth.make_dataset(tmp_path / "raw", n_slices=4)
+    cfg = config(tmp_path, t.raw_dir)
+    caplog.set_level("INFO")
+    assert run(cfg) == 0
+    assert str(tmp_path / "out" / "qc" / "check_report.md") in caplog.text
 
 
 def test_grid_shrink_reports_missing_tiles(tmp_path):
