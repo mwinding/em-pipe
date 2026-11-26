@@ -32,7 +32,7 @@ DEFAULTS = {
         "sample_every": 50,          # stitch every n-th selected z of a segment (plus its ends and seams)
         "refine_px": 5.0,            # stitch more slices between two samples whose tiles differ by more than
                                      # this (px at a tile corner), down to adjacent slices; null = off
-        "coarse_factor": 8,          # downsampling of whole tiles for the overlap search
+        "coarse_factor": 4,          # downsampling of whole tiles for the overlap search
         "min_coarse_factor": 2,      # if tiles stay unconnected, retry the search at half the factor down to this
         "fine_factor": 2,            # downsampling of the full-res overlap strips for the final matches
         "fine_margin_px": 200,       # full-res margin added around the coarse overlap for fine matching

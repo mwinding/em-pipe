@@ -11,6 +11,10 @@ from scipy import ndimage
 import synth
 from pipeline import destreak
 
+# The settings these tests were written for: the destreak defaults before 26 Nov 2026 (off, 6 levels, no
+# reference), stated in every config; a test adds what it is about.
+OLD = synth.OLD_DEFAULTS["destreak"]
+
 
 def stripe_amp(img, axis):
     """Std of the high-passed mean profile across the stripes (mean along ``axis``)."""
@@ -53,10 +57,10 @@ def test_small_and_odd_shapes(shape):
 
 def test_from_cfg_uses_section():
     _, img, _ = striped((512, 600), "horizontal", amplitude=0.1)
-    cfg = {"destreak": {"direction": "horizontal", "sigma": 2.0, "levels": 3}}
+    cfg = {"destreak": {**OLD, "direction": "horizontal", "sigma": 2.0, "levels": 3}}
     np.testing.assert_array_equal(destreak.destreak_from_cfg(img, cfg),
                                   destreak.destreak(img, "horizontal", "db4", 3, 2.0))
-    np.testing.assert_array_equal(destreak.destreak_from_cfg(img, {}), destreak.destreak(img))
+    np.testing.assert_array_equal(destreak.destreak_from_cfg(img, {"destreak": OLD}), destreak.destreak(img))
 
 
 def test_cli_writes_before_after(tmp_path, make_config):
@@ -228,18 +232,18 @@ def test_reference_file_maps_paths():
 
 def test_settings_are_checked_and_dispatch():
     with pytest.raises(ValueError, match="go together"):
-        destreak.settings({"destreak": {"reference_from": "a"}})
+        destreak.settings({"destreak": {**OLD, "reference_from": "a"}})
     with pytest.raises(ValueError, match="needs a reference"):
-        destreak.settings({"destreak": {"core_threshold": 4}})
+        destreak.settings({"destreak": {**OLD, "core_threshold": 4}})
     with pytest.raises(ValueError, match="stripe_px"):
-        destreak.settings({"destreak": {"stripe_px": 0}})
+        destreak.settings({"destreak": {**OLD, "stripe_px": 0}})
     img = _texture((256, 256), 14)
     with pytest.raises(ValueError, match="none was given"):
         destreak.destreak_from_cfg(img, {"destreak": dict(REF)})
     ref = 0.5 * img
-    np.testing.assert_array_equal(destreak.destreak_from_cfg(img, {"destreak": {**REF, "stripe_px": 64}}, ref),
+    np.testing.assert_array_equal(destreak.destreak_from_cfg(img, {"destreak": {**OLD, **REF, "stripe_px": 64}}, ref),
                                   destreak.swap(img, ref, stripe_px=64))
-    np.testing.assert_array_equal(destreak.destreak_from_cfg(img, {"destreak": {"stripe_px": 64}}),
+    np.testing.assert_array_equal(destreak.destreak_from_cfg(img, {"destreak": {**OLD, "stripe_px": 64}}),
                                   destreak.destreak(img, stripe_px=64))
 
 
@@ -307,14 +311,14 @@ def test_band_match_takes_broad_bands_in_curtain_zones_without_lightening():
     # zone's edge, lifted whole zones), though the reference has other contrast and its own shading.
     assert left(out)[1300:2700].max() < 0.1 * abs(depth)
     np.testing.assert_array_equal(out[:, :1000], sw7[:, :1000])     # outside the curtain zones: unchanged
-    cfg = {"destreak": {**REF, "levels": 7, "stripe_px": 256, "band_match": True}}
+    cfg = {"destreak": {**OLD, **REF, "levels": 7, "stripe_px": 256, "band_match": True}}
     np.testing.assert_array_equal(destreak.destreak_from_cfg(img, cfg, ref), out)
     with pytest.raises(ValueError, match="needs a reference"):
-        destreak.settings({"destreak": {"band_match": True}})
+        destreak.settings({"destreak": {**OLD, "band_match": True}})
     with pytest.raises(ValueError, match="unknown keys"):          # the zone swap of deeper levels it replaced
-        destreak.settings({"destreak": {**REF, "levels": 8, "band_levels": 10}})
+        destreak.settings({"destreak": {**OLD, **REF, "levels": 8, "band_levels": 10}})
     with pytest.raises(ValueError, match="unknown keys"):          # tried 16 Nov 2026, replaced by band_max_px
-        destreak.settings({"destreak": {**REF, "band_match": True, "band_tolerance": 1.0}})
+        destreak.settings({"destreak": {**OLD, **REF, "band_match": True, "band_tolerance": 1.0}})
 
 
 def test_band_max_px_takes_curtain_bands_but_not_wider_regions_the_detectors_differ_on():
@@ -340,10 +344,10 @@ def test_band_max_px_takes_curtain_bands_but_not_wider_regions_the_detectors_dif
     band_lim, region_lim = check(limited)
     assert band_all < 0.15 and region_all > 0.7        # without the limit the 900 px region goes with the band
     assert band_lim < 0.15 and region_lim < 0.3        # with it the band still goes, the region stays
-    cfg = {"destreak": {**REF, "levels": 7, "stripe_px": 256, "band_match": True, "band_max_px": 768}}
+    cfg = {"destreak": {**OLD, **REF, "levels": 7, "stripe_px": 256, "band_match": True, "band_max_px": 768}}
     np.testing.assert_array_equal(destreak.destreak_from_cfg(img, cfg, ref), limited)
     with pytest.raises(ValueError, match="band_max_px must be > 0"):
-        destreak.settings({"destreak": {**REF, "band_match": True, "band_max_px": 0}})
+        destreak.settings({"destreak": {**OLD, **REF, "band_match": True, "band_max_px": 0}})
 
 
 def test_band_match_on_a_tile_all_in_one_curtain_zone():

@@ -61,7 +61,7 @@ log = logging.getLogger(__name__)
 
 DEFAULTS = {
     "overlaps": {
-        "enabled": False,      # run_pipeline.sh: measure tile overlaps after align (for balance_source: overlaps)
+        "enabled": True,       # run_pipeline.sh: measure tile overlaps after align (for balance_source: overlaps)
         "every": 1,            # measure every N-th selected slice
         "factor": 4,           # area-downsampling of the overlaps before matching (4: 32 nm at 8 nm pixels)
         "trim_px": 16,         # full-resolution px left out at each tile's border (scan edge effects)
@@ -69,7 +69,7 @@ DEFAULTS = {
         "min_pixels": 500,     # pixel pairs (downsampled) a relation needs
         "reject": 3.0,         # pairs further than this many robust sigmas off the line are dropped
         "chunk_slices": 100,   # selected z per array-task chunk (fixed blocks of global z)
-        "patch_grid": 0,       # > 0: also a relation per (patch of a, patch of b) on a patch_grid x patch_grid
+        "patch_grid": 8,       # > 0: also a relation per (patch of a, patch of b) on a patch_grid x patch_grid
                                # grid over each tile (for patchgrid); 0: off
         "patch_min_pairs": 2000,   # pixel pairs (downsampled) a patch bin needs
     },

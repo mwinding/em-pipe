@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 
 DEFAULTS = {
     "refstats": {
-        "enabled": False,         # run_pipeline.sh: refstats after patchgrid (for intensity.window: reference)
+        "enabled": True,          # run_pipeline.sh: refstats after patchgrid (for intensity.window: reference)
         "every": 32,              # measure every N-th selected slice of each segment (and its last)
         "region": None,           # [x0, y0, x1, y1] volume voxels (null sides open); null: the whole slice
         "erode_cells": 1,         # reference cells eroded by this many cells (away from the tissue's edge)
@@ -194,7 +194,8 @@ class Measurer:
         self.destreak = self.reference = None
         if self.dsettings:
             from . import destreak
-            dcfg = {**cfg, "destreak": self.dsettings}
+            from .render import _recorded
+            dcfg = {**cfg, "destreak": _recorded(self.dsettings)}
             self.destreak = lambda img, ref=None: destreak.destreak_from_cfg(img, dcfg, ref)
             if self.dsettings.get("reference_from"):
                 self.reference = lambda file: destreak.reference_file(file, dcfg)

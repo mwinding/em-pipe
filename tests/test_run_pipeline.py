@@ -312,3 +312,22 @@ def test_config_is_checked_before_anything_is_submitted(tmp_path, env):
     p = run(cfg, env, check=False)
     assert p.returncode == 1 and "no file matching raw.file_pattern" in p.stderr
     assert not log.exists() and not (tmp_path / "out").exists()
+
+
+def test_config_with_only_the_paths_runs_the_current_practice(tmp_path, env):
+    """On the defaults (since 26 Nov 2026) a config that states only the paths, and that it is without
+    decurtaining, gets the flat-field, the overlap and patch balance, the joint tile and slice balance and the
+    reference window: their steps are in the chain."""
+    env, log = env
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "raw" / "M10_D06_tile0-0.tif").touch()
+    cfg = synth.write_config(tmp_path / "cfg.yaml", tmp_path / "raw", tmp_path / "out", old_defaults=False,
+                             destreak={"enabled": False}, render={"num_scales": 2})
+    assert names(run(cfg, env, "--to", "render", "--dry-run").stdout) == [
+        "em-check", "em-preview-run", "em-preview-merge", "em-refmask-run", "em-refmask-merge", "em-stitch-run",
+        "em-stitch-merge", "em-align-run", "em-align-solve", "em-shading", "em-overlaps-run", "em-overlaps-merge",
+        "em-patchgrid", "em-zrelations-run", "em-zrelations-merge", "em-refstats-run", "em-refstats-merge",
+        "em-intensity", "em-render-init", "em-render-run"]
+    cfg = synth.write_config(tmp_path / "cfg.yaml", tmp_path / "raw", tmp_path / "out", old_defaults=False)
+    p = run(cfg, env, "--dry-run", check=False)
+    assert p.returncode == 1 and "destreak.mode: reference needs" in p.stderr and not p.stdout

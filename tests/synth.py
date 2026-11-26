@@ -266,8 +266,37 @@ def write_slices(truth, output_dir, **kw):
     return save_slices(output_dir, slice_rows(truth, **kw))
 
 
-def write_config(path, raw_dir, output_dir, **sections):
-    """Write a dataset YAML for tests. ``sections`` are merged in as top-level keys."""
-    cfg = {"name": "synthetic", "raw_dir": str(raw_dir), "output_dir": str(output_dir), **sections}
+# em-pipe's defaults as they were before 26 Nov 2026, for the settings whose default changed that day (the
+# defaults became the settings our volumes are made with: flat-field, overlap and patch balance, tiles and
+# slices balanced together, the reference window, decurtaining from EsB, cut blend, no CLAHE). The tests'
+# small synthetic datasets and their expected numbers were made for the earlier defaults, so every test
+# config states them; a test passes what it wants otherwise.
+OLD_DEFAULTS = {
+    "shading": {"enabled": False},
+    "overlaps": {"enabled": False, "patch_grid": 0},
+    "patchgrid": {"enabled": False, "gain_cnr_min": 5.0},
+    "stitch": {"coarse_factor": 8},
+    "refmask": {"enabled": False},
+    "refstats": {"enabled": False},
+    "intensity": {"window": "median", "balance_source": "thumbnails", "balance_smooth_slices": None,
+                  "balance_z_distance": 0, "per_slice": True, "reference": {"median": None, "contrast": None}},
+    "destreak": {"enabled": False, "mode": None, "levels": 6, "stripe_px": None, "core_threshold": None,
+                 "band_match": False, "band_max_px": None},
+    "render": {"blend": "seam", "clahe": {"enabled": True, "clip_limit": 2.0, "tile_px": 512}},
+}
+
+
+def _merge(base, override):
+    out = dict(base)
+    for k, v in override.items():
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def write_config(path, raw_dir, output_dir, old_defaults=True, **sections):
+    """Write a dataset YAML for tests. ``sections`` are merged in as top-level keys, over OLD_DEFAULTS
+    (``old_defaults=False``: only what is given, on today's defaults)."""
+    cfg = {"name": "synthetic", "raw_dir": str(raw_dir), "output_dir": str(output_dir),
+           **(_merge(OLD_DEFAULTS, sections) if old_defaults else sections)}
     Path(path).write_text(yaml.safe_dump(cfg, sort_keys=False))
     return Path(path)

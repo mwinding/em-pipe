@@ -116,7 +116,7 @@ def test_solve_weights_the_gain_of_low_contrast_overlaps():
     rels = [("a", "b", 1.2, 0.0, 10000, 1.0), ("a", "c", 0.5, 0.0, 10000, 1e-6), ("b", "c", 3.0, 0.0, 10000, 1e-6)]
     g = intensity.solve(rels)
     assert g["a"][0] * 1.2 == pytest.approx(g["b"][0], rel=1e-3)
-    assert shading.DEFAULTS["shading"]["enabled"] is False
+    assert shading.DEFAULTS["shading"]["enabled"] is True    # the flat-field is on by default (since 26 Nov 2026)
 
 
 def test_solve_matches_tiles_at_the_data_not_at_zero():

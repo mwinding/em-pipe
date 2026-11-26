@@ -1,6 +1,12 @@
 # em-pipe dataset config: every section and key with its default value.
 # A dataset config only needs raw_dir and output_dir plus the keys it changes; everything else
 # falls back to these defaults (defined in pipeline/config.py and each pipeline/<step>.py).
+# Since 26 Nov 2026 the defaults are the settings our volumes are made with (as configs/presets/standard.yaml):
+# flat-field, tile balance from the overlaps with patch shapes, tiles and slices balanced together, the
+# reference window (neuropil median 150, p5-p95 width 130), decurtaining from the EsB detector, cut blend, no
+# CLAHE. A config with only the two paths therefore needs the EsB files' pattern (destreak.reference_from /
+# reference_to), or says destreak.enabled: false; the check run before anything is submitted says what is
+# missing. The `em-pipe RAW_DIR OUTPUT_DIR` command writes a complete config (README, Quick start).
 # Run everything on Slurm:  ./run_pipeline.sh configs/<dataset>.yaml [--dry-run]
 
 name: null                   # dataset name: names the volume (<name>.ome.zarr), titles and OME-Zarr metadata
@@ -48,7 +54,7 @@ preview:
   edge_margin_px: 0          # stats ignore this many full-res px at tile edges (e.g. dark off-sample bands)
 
 refmask:                     # reference tissue (neuropil, tracts included) per ~2 um cell of each thumbnail
-  enabled: false             # run_pipeline.sh: after preview (for intensity.window: reference)
+  enabled: true              # run_pipeline.sh: after preview (for intensity.window: reference)
   tissue: neuropil           # the reference tissue (only neuropil so far)
   method: classifier         # classifier: trained trees on texture features | score: the texture score alone
   model: null                # classifier model JSON; null: the shipped pipeline/refmask_neuropil.json
@@ -67,7 +73,7 @@ stitch:
   sample_every: 50           # stitch every n-th selected z of a segment (plus its ends and seams)
   refine_px: 5.0             # stitch more slices between two samples whose tiles differ by more than
                              # this (px at a tile corner), down to adjacent slices; null = off
-  coarse_factor: 8           # downsampling of whole tiles for the overlap search
+  coarse_factor: 4           # downsampling of whole tiles for the overlap search
   min_coarse_factor: 2       # if tiles stay unconnected, retry the search at half the factor down to this
   fine_factor: 2             # downsampling of the full-res overlap strips for the final matches
   fine_margin_px: 200        # full-res margin added around the coarse overlap for fine matching
@@ -139,7 +145,7 @@ align:
   trend_window_slices: 2000  # lowpass: Gaussian FWHM in slices
 
 intensity:
-  window: median             # median: tissue median -> target_median, tissue p5-p95 over target_span greys
+  window: reference          # median: tissue median -> target_median, tissue p5-p95 over target_span greys
                              # (background left out) | percentile: lo/hi_percentile -> 0 / 255 |
                              # reference: every slice's reference tissue at reference.median / contrast
   target_median: 140         # median: grey of the tissue median (0-255)
@@ -151,10 +157,10 @@ intensity:
   smooth_slices: 51          # running-median window over z, in selected slices
   break_at_seams: true       # restart smoothing at seams (it always restarts at segment changes)
   balance_tiles: true        # match brightness of overlapping tiles (needs stitch/tiles.csv)
-  balance_source: thumbnails # thumbnails: preview thumbnails every balance_every slices | overlaps: the overlaps step
+  balance_source: overlaps   # thumbnails: preview thumbnails every balance_every slices | overlaps: the overlaps step
   balance_every: 10          # thumbnails: measure tile overlaps every N selected slices
   balance_tissue_only: true  # thumbnails: compare overlaps on tissue pixels only (background left out)
-  balance_smooth_slices: null  # running median of tile gains/offsets over this many slices; null: smooth_slices
+  balance_smooth_slices: 1     # running median of tile gains/offsets over this many slices; null: smooth_slices
   # Tiles and slices balanced together (as Janelia render's intensity correction with --zDistance, after TrakEM2's
   # "Match intensities"): 0: off | 1: every tile is also matched to itself in the next slice (zrelations step) and
   # the gains and offsets of all (z, tile) of a block are solved at once, removing the jumps the slice's tiles share
@@ -162,20 +168,20 @@ intensity:
   # smoothed over z (smooth_slices) and balance_smooth_slices is not used.
   # Recommended for multi-tile data: 1, with overlaps.enabled: true, balance_source: overlaps, per_slice: false
   # (README, "Flicker along z"); 0 here so this example runs without the overlaps step.
-  balance_z_distance: 0
+  balance_z_distance: 1
   balance_z_weight: 0.1      # a tile's relation to itself in another slice, relative to all its in-slice overlap
                              # relations together: the overlaps keep setting the tiles' relative levels (seams)
   balance_z_prior: 0.01      # each (z, tile)'s pull towards no change, relative to one z relation: the common scale
                              # follows the raw brightness smoothed over ~1 / prior slices (jumps from slice to slice
                              # removed, slow drift kept for the windows to follow); render uses 0.01
-  per_slice: true            # follow slice-to-slice jumps: true per tile | slice: one per slice (keeps tiles matched) | false
+  per_slice: false           # follow slice-to-slice jumps: true per tile | slice: one per slice (keeps tiles matched) | false
   slice_level: false         # last step: shift each slice's windows (all tiles alike) so its tissue median follows a
                              # slow trend: removes slice-wide flicker left when tiles jump independently (tools/zflicker.py)
   slice_level_smooth: 25     # slice_level: running-median window over z (slices) for that trend
   output: null              # variant name: levels in work/intensity/<output>/ (render reads them there)
   reference:                 # window: reference (needs refmask and refstats): the reference tissue's grey and contrast
-    median: null             # grey of the reference tissue's median (0-255)
-    contrast: null           # its spread in greys, as measured by measure
+    median: 150              # grey of the reference tissue's median (0-255)
+    contrast: 130            # its spread in greys, as measured by measure
     measure: p5_p95          # p5_p95: width between the 5th and 95th percentile of the slice's reference tissue |
                              # lc32: its local contrast, the mean SD in 8 px windows at 32 nm
     per: slice               # slice: the width (contrast) and the brightness shift follow the reference tissue slowly
@@ -201,7 +207,7 @@ intensity:
     clip_warn: 0.01          # QC: warn when more than this fraction of tissue is at 0 or at 255
 
 shading:                     # flat-field: a smooth gain field per tile position and segment, from the thumbnails
-  enabled: false             # runs in the intensity job; render divides each tile slice by its field
+  enabled: true              # runs in the intensity job; render divides each tile slice by its field
   every: 10                  # measure every N-th selected slice
   poly_degree: 2             # 2D polynomial fitted to log(brightness / tissue median)
   min_slices: 10             # (segment, tile) measured in fewer slices keep gain 1
@@ -211,7 +217,7 @@ shading:                     # flat-field: a smooth gain field per tile position
   max_gain: 1.5              # fields are clipped to [1 / max_gain, max_gain]
 
 overlaps:                    # brightness relation of every overlapping tile pair, from the raw tiles
-  enabled: false             # run_pipeline.sh: measure after align (for intensity.balance_source: overlaps)
+  enabled: true              # run_pipeline.sh: measure after align (for intensity.balance_source: overlaps)
   every: 1                   # measure every N-th selected slice
   factor: 4                  # area-downsampling of the overlaps before matching (4: 32 nm at 8 nm pixels)
   trim_px: 16                # full-resolution px left out at each tile's border (scan edge effects)
@@ -219,18 +225,18 @@ overlaps:                    # brightness relation of every overlapping tile pai
   min_pixels: 500            # pixel pairs (downsampled) a relation needs
   reject: 3.0                # pairs further than this many robust sigmas off the line are dropped
   chunk_slices: 100          # selected z per array-task chunk (fixed blocks of global z)
-  patch_grid: 0              # > 0: also a relation per (patch of a, patch of b), each tile cut into
+  patch_grid: 8              # > 0: also a relation per (patch of a, patch of b), each tile cut into
                              # patch_grid x patch_grid patches (work/overlaps/patches.csv, for patchgrid); 0: off
   patch_min_pairs: 2000      # pixel pairs (downsampled) a patch bin needs
 
 patchgrid:                   # within-tile brightness shapes per tile position and segment, from the patch bins
-  enabled: false             # run_pipeline.sh: after overlaps (needs overlaps.patch_grid > 0 and intensity
+  enabled: true              # run_pipeline.sh: after overlaps (needs overlaps.patch_grid > 0 and intensity
                              # balance_source: overlaps); intensity balances and render applies the shapes
   every: 20                  # shapes from the solves of every N-th measured slice of each segment
   smooth: 1.0                # equality of neighbouring patches, relative to the median relation weight sqrt(n)
   prior: 0.02                # pull of each tile's mean gain towards 1, relative to the same
   gain_power: 2.0            # a bin's gain equation is weighted by min(1, cnr / 10) ** gain_power
-  gain_cnr_min: 5.0          # bins with less contrast than this (resin) give no gain equation (8 for 2x2 tiles of ~13k px)
+  gain_cnr_min: 8.0          # bins with less contrast than this (resin) give no gain equation (8 for 2x2 tiles of ~13k px)
   reference: null            # R, the raw intensity at which the shapes' change c is defined; null: the median bin centre
 
 zrelations:                  # each tile against itself in the next slices (for intensity.balance_z_distance > 0), from
@@ -240,7 +246,7 @@ zrelations:                  # each tile against itself in the next slices (for 
   chunk_slices: 100          # selected z per array-task chunk
 
 refstats:                    # reference tissue median and lc32 on the common scale, at sampled slices
-  enabled: false             # run_pipeline.sh: after patchgrid (for intensity.window: reference)
+  enabled: true              # run_pipeline.sh: after patchgrid (for intensity.window: reference)
   every: 32                  # measure every N-th selected slice of each segment (and its last)
   region: null               # [x0, y0, x1, y1] volume voxels (null sides open), e.g. [7700, null, null, null]
   erode_cells: 1             # reference cells eroded by this many cells
@@ -258,18 +264,18 @@ refstats:                    # reference tissue median and lc32 on the common sc
 #   reference_from: '^(.*/)?(M\d\d_D\d\d)(.*)$'
 #   reference_to: '\1Backscatter/\2_EsB\3'
 destreak:
-  enabled: false             # apply inside render
+  enabled: true              # apply inside render
   direction: vertical        # stripes run along y (vertical) or along x (horizontal); python -m pipeline.curtains
                              # measures it on sampled raw tiles
-  mode: null                 # reference: swap from the reference detector (reference_from / reference_to must be
+  mode: reference            # reference: swap from the reference detector (reference_from / reference_to must be
                              # set) | filter: the filter-only path, stated as a choice | null: the swap when a
                              # reference is set, else the filter, with a warning (the filter also removes the
                              # image's own structure along the stripes)
   wavelet: db4               # pywt wavelet name
-  levels: 6                  # wavelet decomposition levels (capped by the image size); level L holds
+  levels: 8                  # wavelet decomposition levels (capped by the image size); level L holds
                              # structure ~2^L px across, so 8 reaches bands ~500 px wide
   sigma: 4.0                 # width of the Gaussian notch in FFT bins; larger removes more
-  stripe_px: null            # instead of sigma: what varies more slowly than this along the stripes
+  stripe_px: 256             # instead of sigma: what varies more slowly than this along the stripes
                              # (full-resolution px) is stripe, at any image size (e.g. 256)
   stripe_aspect: null        # and at least this many times longer than wide (level L: ~2^L px wide), so
                              # at coarse levels only long bands count, not cell-sized structure (e.g. 8)
@@ -277,13 +283,13 @@ destreak:
   reference_to: null         # (re.sub): the reference detector's file of the same scan; render init
                              # checks that every one exists with the same slices and size
   gain_sigma: 8.0            # swap: local gain window, Gaussian sigma in coefficients of each level
-  core_threshold: null       # swap: where the fine structure it took out (persisting along the stripes)
+  core_threshold: 2.0        # swap: where the fine structure it took out (persisting along the stripes)
                              # exceeds this many times the image's pixel noise (strong curtain cores),
                              # the reference matched to the image locally fills in; null: off
   core_dilate_px: 2          # cores widened by this many px across the stripes (curtains wander)
   core_window_px: 31         # window of the local linear match reference -> image
   core_denoise_px: 1.0       # Gaussian sigma smoothing the reference before it fills cores
-  band_match: false          # swap: the broad band a curtain cluster's own darkness leaves after the swap
+  band_match: true           # swap: the broad band a curtain cluster's own darkness leaves after the swap
                              # matched to the reference in curtain zones, fading to 0 at their edges
                              # (seamless); good tissue keeps the swap's result
   band_zone: 1.0             # curtain zone: what the swap took out (smoothed 64 px across / 256 px along the
@@ -292,7 +298,7 @@ destreak:
   band_along_px: 512         # band = image - matched reference, smoothed this much along the stripes (a band
                              # persists; the detectors' differing tissue contrast averages out)...
   band_across_px: 32         # ...and this much across them
-  band_max_px: null          # take only bands up to this wide across the stripes (a curtain cluster's band is
+  band_max_px: 768           # take only bands up to this wide across the stripes (a curtain cluster's band is
                              # a few hundred px); wider differences, e.g. a cluster of cell bodies the
                              # detectors show differently, are left; e.g. 768
 
@@ -310,7 +316,7 @@ render:
   # How overlapping tiles combine. seam: each pixel from the tile whose own edge is farthest, switching
   # along the middle of the overlap over ~seam_px (sharp; no ghosting where tiles disagree by a few px).
   # cut: the same switch with no transition at all. feather: linear crossfade over blend_px from each tile edge.
-  blend: seam
+  blend: cut
   local_blend: cut           # blend in slices of align's tile-level solve and elastic windows
   seam_px: 32                # seam: width of the switch between tiles, full-resolution px
   blend_px: 256              # feather: ramp width from each tile edge, full-resolution px
@@ -320,9 +326,9 @@ render:
   num_scales: 7              # pyramid levels s0..s{n-1}; render writes s0, pyramid the rest
   compression: gzip          # none | gzip | zstd | blosc; gzip is safe for neuroglancer
   clahe:
-    enabled: true            # local contrast equalisation of each output plane
-    clip_limit: 2.0          # cv2 CLAHE clip limit
-    tile_px: 512             # CLAHE tile size in full-resolution px
+    enabled: false           # local contrast equalisation of each output plane
+    clip_limit: 1.5          # cv2 CLAHE clip limit
+    tile_px: 256             # CLAHE tile size in full-resolution px
   threads: 8                 # tiles rendered concurrently (does not change the output)
   # Diagnostic volumes while an acquisition grows, never a final volume: when the inputs changed, render
   # init adds the new slices to the existing volume instead of refusing. Planes up to the last full slab

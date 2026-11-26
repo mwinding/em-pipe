@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULTS = {
     "shading": {
-        "enabled": False,      # flat-field each tile by a smooth gain field per (segment, tile)
+        "enabled": True,       # flat-field each tile by a smooth gain field per (segment, tile)
         "every": 10,           # measure every N-th selected slice
         "poly_degree": 2,      # degree of the 2D polynomial fitted to log(brightness / tissue median)
         "min_slices": 10,      # (segment, tile) with fewer measured slices keep gain 1

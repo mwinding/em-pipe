@@ -49,19 +49,19 @@ log = logging.getLogger(__name__)
 
 DEFAULTS = {
     "destreak": {
-        "enabled": False,       # apply inside render
+        "enabled": True,        # apply inside render and refstats
         "direction": "vertical",  # stripes run along y (vertical) or along x (horizontal); pipeline/curtains.py
                                   # measures it on sampled raw tiles
         # reference: swap from the reference detector (reference_from / reference_to must be set) | filter: the
         # filter-only path, stated as a choice (no reference may be set) | null: the swap when a reference is
         # set, else the filter, with a warning: the filter also removes the image's own structure along the
         # stripes, so it should be chosen, not fallen back to
-        "mode": None,
+        "mode": "reference",
         "wavelet": "db4",       # pywt wavelet name
-        "levels": 6,            # wavelet decomposition levels (capped by the image size); level L holds
+        "levels": 8,            # wavelet decomposition levels (capped by the image size); level L holds
                                 # structure ~2^L px across, so 8 reaches bands ~500 px wide
         "sigma": 4.0,           # width of the Gaussian notch in FFT bins; larger removes more
-        "stripe_px": None,      # instead of sigma: what varies more slowly than this along the stripes
+        "stripe_px": 256,       # instead of sigma: what varies more slowly than this along the stripes
                                 # (full-resolution px) is stripe, at any image size (e.g. 256)
         "stripe_aspect": None,  # and at least this many times longer than wide (level L: ~2^L px wide), so
                                 # at coarse levels only long bands count, not cell-sized structure (e.g. 8)
@@ -69,13 +69,13 @@ DEFAULTS = {
         "reference_to": None,    # (re.sub): the same scan from a detector without the stripes. Then the
                                  # stripe part is swapped from it (scaled by a local gain), not removed
         "gain_sigma": 8.0,      # swap: local gain window, Gaussian sigma in coefficients of each level
-        "core_threshold": None,  # swap: where the fine structure it took out (persisting along the
+        "core_threshold": 2.0,   # swap: where the fine structure it took out (persisting along the
                                  # stripes) exceeds this many times the image's pixel noise (strong
                                  # curtain cores), the reference matched to the image locally fills in
         "core_dilate_px": 2,    # cores widened by this many px across the stripes (curtains wander)
         "core_window_px": 31,   # window of the local linear match reference -> image
         "core_denoise_px": 1.0,  # Gaussian sigma smoothing the reference before it fills cores
-        "band_match": False,    # swap: the broad band a curtain cluster's own darkness leaves after the swap
+        "band_match": True,     # swap: the broad band a curtain cluster's own darkness leaves after the swap
                                 # matched to the reference in curtain zones, fading to 0 at their edges
         "band_zone": 1.0,       # curtain zone: what the swap took out (smoothed 64 px across / 256 px along
                                 # the stripes) above this many times the image's pixel noise...
@@ -83,7 +83,7 @@ DEFAULTS = {
         "band_along_px": 512,   # band = image - matched reference, smoothed this much along the stripes
                                 # (a band persists; the detectors' differing tissue contrast averages out)...
         "band_across_px": 32,   # ...and this much across them
-        "band_max_px": None,    # take only bands up to this wide across the stripes; wider differences
+        "band_max_px": 768,     # take only bands up to this wide across the stripes; wider differences
                                 # (regions the detectors show differently) are left (e.g. 768)
     },
 }

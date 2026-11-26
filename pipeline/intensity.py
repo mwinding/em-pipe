@@ -85,7 +85,9 @@ log = logging.getLogger(__name__)
 
 DEFAULTS = {
     "intensity": {
-        "window": "median",       # median: tissue median -> target_median, tissue p5-p95 over
+        "window": "reference",    # reference: the reference tissue (neuropil) at reference.median and
+                                  # reference.contrast, so volumes match (needs refmask and refstats) |
+                                  # median: tissue median -> target_median, tissue p5-p95 over
                                   # target_span greys | percentile: lo/hi_percentile -> 0 / 255
         "target_median": 140,     # median: grey of the tissue median (0-255)
         "target_span": 160,       # median: greys between the tissue p5 and p95
@@ -96,11 +98,11 @@ DEFAULTS = {
         "smooth_slices": 51,      # running-median window over z, in selected slices
         "break_at_seams": True,   # restart smoothing at seams (it always restarts at segment changes)
         "balance_tiles": True,    # match brightness of overlapping tiles (needs stitch/tiles.csv)
-        "balance_source": "thumbnails",   # thumbnails: preview thumbnails every balance_every slices |
+        "balance_source": "overlaps",     # thumbnails: preview thumbnails every balance_every slices |
                                           # overlaps: the overlaps step's relations from the raw tiles
         "balance_every": 10,      # thumbnails: measure tile overlaps every N selected slices
         "balance_tissue_only": True,   # thumbnails: compare overlaps on tissue pixels only (background left out)
-        "balance_smooth_slices": None,   # running median of the tile gains/offsets over this many selected
+        "balance_smooth_slices": 1,      # running median of the tile gains/offsets over this many selected
                                          # slices; null: smooth_slices
         # Tiles and slices balanced together (Janelia render's intensity correction with --zDistance, after
         # TrakEM2's "Match intensities"): 0: off, every slice balanced on its own as above | 1: every tile is also
@@ -108,7 +110,7 @@ DEFAULTS = {
         # (z, tile) of a block are solved at once, so the slice-wide jumps go too, not only each tile's own | 2: also
         # to the slice after next. Needs balance_source: overlaps and per_slice: false (the solve follows the jumps);
         # balance_smooth_slices is not used, and the common window is smoothed over z (smooth_slices).
-        "balance_z_distance": 0,
+        "balance_z_distance": 1,
         # balance_z_distance > 0: weight of one tile's relation to itself in another slice, relative to all its
         # overlap relations in the slice together (the median tile's): small, so the overlaps keep setting the
         # tiles' levels relative to each other (no new seams) and the z relations set what the overlaps can't see,
@@ -125,7 +127,7 @@ DEFAULTS = {
         # smoothing above would otherwise leave as flicker when scrolling through z. true: each tile
         # its own jump; slice: one jump per slice (the median over its tiles, relative to their
         # windows), which keeps tiles matched when the balance follows every slice; false: off.
-        "per_slice": True,
+        "per_slice": False,
         # A last step, after every other: shift each slice's windows (all its tiles by the same greys, widths
         # unchanged) so its tissue median comes out on a slow trend, removing the slice-wide flicker the steps
         # above can leave when the tiles jump independently (the slice's level is then estimated from a few
@@ -137,8 +139,8 @@ DEFAULTS = {
         "output": None,           # variant name: levels in work/intensity/<output>/ (render reads them there)
         # window: reference (pipeline/refmask.py, refstats): the reference tissue's grey and contrast
         "reference": {
-            "median": None,       # grey of the reference tissue's median (0-255)
-            "contrast": None,     # its spread in greys, as measured by ``measure``
+            "median": 150,        # grey of the reference tissue's median (0-255)
+            "contrast": 130,      # its spread in greys, as measured by ``measure``
             # p5_p95: the width between the 5th and 95th percentile of the slice's reference tissue (its
             # histogram's width) | lc32: its local contrast, the mean SD in 8 px windows at 32 nm
             "measure": "p5_p95",

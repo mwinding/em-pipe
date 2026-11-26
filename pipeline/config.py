@@ -121,7 +121,9 @@ def load_config(path, raw_dir=None, output_dir=None, step_defaults=None):
     step_defaults: {section_name: defaults_dict} for the step(s) being run.
     """
     user = _read_user(path)
-    defaults = deep_merge(DEFAULTS, step_defaults or {})
+    # Every step's section with its defaults, whichever step is running: a step that asks another step's
+    # setting (is the flat-field on? is decurtaining?) then gets that step's default, not a guess of its own.
+    defaults = deep_merge(deep_merge(DEFAULTS, _all_step_defaults()), step_defaults or {})
     cfg = deep_merge(defaults, user)
     if raw_dir:
         cfg["raw_dir"] = raw_dir
@@ -165,6 +167,16 @@ def get(cfg, dotted, default=None):
             return default
         node = node[part]
     return node
+
+
+_ALL = None
+
+
+def _all_step_defaults():
+    global _ALL
+    if _ALL is None:
+        _ALL = step_defaults()
+    return _ALL
 
 
 def step_defaults(*sections):

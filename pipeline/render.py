@@ -74,7 +74,7 @@ DEFAULTS = {
         # switching along the middle of the overlap over ~seam_px (sharp, no ghosting where tiles
         # disagree by a few px). cut: the same switch with no transition at all. feather: linear
         # crossfade over blend_px from each tile edge.
-        "blend": "seam",
+        "blend": "cut",
         "local_blend": "cut",       # blend in slices of align's tile-level solve and elastic windows
         "seam_px": 32,              # seam: width of the switch between tiles, full-resolution px
         "blend_px": 256,            # feather: ramp width from each tile edge, full-resolution px
@@ -84,9 +84,10 @@ DEFAULTS = {
         "num_scales": 7,            # pyramid levels s0..s{n-1}; render writes s0, pyramid the rest
         "compression": "gzip",      # none | gzip | zstd | blosc; gzip is safe for neuroglancer
         "clahe": {
-            "enabled": True,        # local contrast equalisation of each output plane
-            "clip_limit": 2.0,      # cv2 CLAHE clip limit
-            "tile_px": 512,         # CLAHE tile size in full-resolution px
+            "enabled": False,       # local contrast equalisation of each output plane (a second volume: a
+                                    # config that only switches it on)
+            "clip_limit": 1.5,      # cv2 CLAHE clip limit
+            "tile_px": 256,         # CLAHE tile size in full-resolution px
         },
         "threads": 8,               # tiles rendered concurrently (does not change the output)
         # Diagnostic volumes while an acquisition grows, never a final volume: when the inputs changed,
@@ -301,13 +302,19 @@ def _destreak_settings(cfg):
     return p
 
 
+def _recorded(settings):
+    """Destreak settings as ``_destreak_settings`` records them (without mode), for use: how the path was
+    chosen was checked when they were recorded, so no default mode is applied to them again."""
+    return {**settings, "mode": None}
+
+
 def _check_references(cfg, plan, settings):
     """With a destreak reference: every planned file's reference file exists, with its slices and size."""
     if not settings or not settings.get("reference_from"):
         return
     from . import destreak
-    destreak.settings({"destreak": settings})
-    dcfg = {"destreak": settings}
+    dcfg = {"destreak": _recorded(settings)}
+    destreak.settings(dcfg)
     cache = StackCache(cfg["raw_dir"])
     bad = []
     for file, rows in plan.groupby("file"):
@@ -653,7 +660,7 @@ class _Renderer:
         self.destreak = self.reference = None
         if meta.get("destreak"):
             from . import destreak
-            dcfg = {**cfg, "destreak": meta["destreak"]}
+            dcfg = {**cfg, "destreak": _recorded(meta["destreak"])}
             if meta["destreak"].get("reference_from"):   # swap from a second detector's same slice
                 self.reference = lambda file: destreak.reference_file(file, dcfg)
                 self.destreak = lambda img, ref: destreak.destreak_from_cfg(img, dcfg, ref)

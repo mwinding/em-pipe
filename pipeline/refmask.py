@@ -46,7 +46,7 @@ log = logging.getLogger(__name__)
 
 DEFAULTS = {
     "refmask": {
-        "enabled": False,              # run_pipeline.sh: the refmask step after preview (for intensity.window: reference)
+        "enabled": True,               # run_pipeline.sh: the refmask step after preview (for intensity.window: reference)
         "tissue": "neuropil",          # the reference tissue (only neuropil so far)
         "method": "classifier",        # classifier: trained trees on texture features | score: the texture score alone
         "model": None,                 # classifier model JSON (None: the one shipped, pipeline/refmask_<tissue>.json)

@@ -241,7 +241,8 @@ def test_refstats_from_another_balance_are_refused(tmp_path, monkeypatch, caplog
     assert "4 of 6 sampled slices differ" in str(e.value) and "--steps refstats,intensity" in str(e.value)
     assert "allow_stale_refstats" in str(e.value)
     # another correction (decurtaining switched on) is a difference too
-    cfg2 = {**cfg, "destreak": {"enabled": True, "mode": "filter"}}
+    import synth
+    cfg2 = {**cfg, "destreak": {**synth.OLD_DEFAULTS["destreak"], "enabled": True, "mode": "filter"}}
     assert len(refstats.stale(cfg2, bal)[0]) == 6
     # the deliberate reuse: a warning, no error
     caplog.set_level("WARNING")

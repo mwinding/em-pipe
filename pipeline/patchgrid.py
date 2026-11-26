@@ -73,13 +73,13 @@ log = logging.getLogger(__name__)
 
 DEFAULTS = {
     "patchgrid": {
-        "enabled": False,      # run_pipeline.sh: solve tile shapes after overlaps (needs overlaps.patch_grid > 0);
+        "enabled": True,       # run_pipeline.sh: solve tile shapes after overlaps (needs overlaps.patch_grid > 0);
                                # intensity balances and render applies them
         "every": 20,           # shapes from the solves of every N-th measured slice of each segment
         "smooth": 1.0,         # equality of neighbouring patches, relative to the median relation weight sqrt(n)
         "prior": 0.02,         # pull of each tile's mean gain towards 1, relative to the same
         "gain_power": 2.0,     # a bin's gain equation is weighted by min(1, cnr / 10) ** gain_power
-        "gain_cnr_min": 5.0,   # bins with less contrast than this (resin) give no gain equation (8 for 2x2 tiles of ~13k px)
+        "gain_cnr_min": 8.0,   # bins with less contrast than this (resin) give no gain equation
         "reference": None,     # R, the raw intensity at which c is defined; null: the median bin centre
     },
 }

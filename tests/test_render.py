@@ -393,6 +393,9 @@ def test_clahe_ignores_no_data():
     assert np.abs(out[edge].astype(float) - ref[edge]).mean() < 1.5    # zeros left in: ~10 levels
 
 
+REAL_DESTREAK = dict(__import__("pipeline.destreak", fromlist=["DEFAULTS"]).DEFAULTS["destreak"])
+
+
 def test_destreak_applied_per_tile(truth, tmp_path, monkeypatch):
     calls = []
 
@@ -408,7 +411,11 @@ def test_destreak_applied_per_tile(truth, tmp_path, monkeypatch):
     zs = list(range(4))
     cfg, out = _setup(tmp_path, truth, selection={"z_end": zs[-1]}, destreak={"enabled": True})
     _render(cfg)
-    assert _meta(out)["destreak"] == {"enabled": True, "offset": 1500.0}   # module defaults merged
+    # the fake module's defaults, the section as the config resolves it (every key of the real step, the test
+    # config's stated values over them), without mode
+    stated = {**REAL_DESTREAK, **synth.OLD_DEFAULTS["destreak"]}
+    stated.pop("mode")
+    assert _meta(out)["destreak"] == {**stated, "enabled": True, "offset": 1500.0}
     assert calls == [truth.tile_shape] * (4 * len(zs))
     vol = _read(out)
     img, cov = _aligned(truth, zs)

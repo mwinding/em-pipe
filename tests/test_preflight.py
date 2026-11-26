@@ -214,3 +214,40 @@ def test_filter_only_destreak_is_a_stated_choice(tmp_path):
     assert not res.ok and "destreak.mode: reference needs" in res.errors[0]
     res = preflight.validate(cfg(tmp_path, raw=raw, destreak={**REF, "mode": "filter"}))
     assert not res.ok and "mode: filter, but" in res.errors[0]
+
+
+# ----- the defaults are the current practice (since 26 Nov 2026): what a config with only the two paths needs -----
+
+def test_config_with_only_the_paths_is_told_what_is_missing(tmp_path):
+    raw = raw_with(tmp_path, "M10_D06_tile0-0.tif")
+    bare = lambda **sections: synth.write_config(tmp_path / "bare.yaml", raw, tmp_path / "out", old_defaults=False, **sections)
+    res = preflight.validate(bare())
+    # one thing is missing, and the message says what and how to state the alternatives
+    assert not res.ok and len(res.errors) == 1, res.text()
+    for words in ("destreak.mode: reference needs destreak.reference_from / reference_to", "pipeline.esb RAW_DIR",
+                  "destreak.mode: filter", "destreak.enabled: false"):
+        assert words in res.errors[0]
+    # stated without decurtaining: everything else the defaults switch on needs nothing from the config
+    assert preflight.validate(bare(destreak={"enabled": False})).ok
+    # with the EsB files and their pattern: passes, and the files were checked
+    raw_with(tmp_path, "Backscatter/M10_D06_EsB_tile0-0.tif")
+    res = preflight.validate(bare(destreak={"reference_from": REF["reference_from"], "reference_to": REF["reference_to"]}))
+    assert res.ok and "1 of 1 EsB files present" in res.notes[0]
+
+
+def test_preset_and_defaults_say_the_same():
+    """configs/presets/standard.yaml states the recipe; the code defaults are that recipe. Only slurm.auto
+    differs: the preset sizes the jobs from the detected dataset, a hand-written config sets them itself."""
+    preset = yaml.safe_load((ROOT / "configs" / "presets" / "standard.yaml").read_text())
+    tree = preflight.known_tree()
+
+    def leaves(node, path=()):
+        for k, v in node.items():
+            if isinstance(v, dict):
+                yield from leaves(v, (*path, k))
+            else:
+                yield (*path, k), v
+
+    differ = {".".join(p): (v, config.get(tree, ".".join(p))) for p, v in leaves(preset)
+              if config.get(tree, ".".join(p)) != v}
+    assert differ == {"slurm.auto": (True, False)}
