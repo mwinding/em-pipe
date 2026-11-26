@@ -14,7 +14,7 @@ what a person has to decide, when
 - OUTPUT_DIR already holds another config.yaml.
 
     em-pipe RAW_DIR OUTPUT_DIR [--name N] [--no-clahe] [--no-esb] [--direction vertical|horizontal]
-                               [--skip-unmatched] [--to STEP] [--dry-run]
+                               [--file-pattern REGEX] [--skip-unmatched] [--to STEP] [--dry-run]
 
 --dry-run prints the config, the detected facts, the chosen Slurm resources and the sbatch commands, and
 writes and submits nothing.
@@ -100,6 +100,7 @@ def config_text(a, preset, name, facts, n_files, esb_rep, direction):
          "# files. To change something, edit this file and run  ./run_pipeline.sh <this file>  (--dry-run first).",
          f"base: {preset}", "", f"name: {name}", f"raw_dir: {os.path.abspath(a.raw_dir)}",
          f"output_dir: {os.path.abspath(a.output_dir)}", "",
+         *([ "raw:", f"  file_pattern: {_q(a.file_pattern)}    # given with --file-pattern", ""] if a.file_pattern else []),
          f"# From the headers of the {n_files} raw files: the automatic Slurm resources are sized from these",
          "# (slurm.auto, pipeline/resources.py). tiles: the most tiles in one slice; tile_px: the largest tile.",
          "detected:"]
@@ -133,18 +134,14 @@ def clahe_text(name):
         "base: config.yaml", "", "render:", f"  name: {name}_clahe.ome.zarr", "  clahe:", "    enabled: true", ""])
 
 
-def _write(path, text, dry):
-    """Write a config; an existing file that says the same is kept, one that says something else stops the run."""
+def _write(path, text):
+    """Write a config; an existing file (which says the same: checked before) is kept."""
     if path.exists():
-        if yaml.safe_load(path.read_text()) == yaml.safe_load(text):
-            print(f"{path} exists and says the same: kept")
-            return
-        raise SystemExit(f"em-pipe: {path} exists and says something else: nothing was changed. Continue that run "
-                         f"with  ./run_pipeline.sh {path}  or choose another OUTPUT_DIR")
-    if not dry:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-        print(f"wrote {path}")
+        print(f"{path} exists and says the same: kept")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    print(f"wrote {path}")
 
 
 def _run_pipeline(cfg_path, extra, env):
@@ -162,6 +159,8 @@ def main(argv=None):
     p.add_argument("--no-esb", action="store_true", help="run without decurtaining (stated in the config)")
     p.add_argument("--direction", choices=["vertical", "horizontal"],
                    help="curtain direction, as a person's statement (not measured)")
+    p.add_argument("--file-pattern", metavar="REGEX",
+                   help="raw.file_pattern for raw files named otherwise than M10_D06_tile1-1.tif (written to the config)")
     p.add_argument("--skip-unmatched", action="store_true",
                    help="image files that do not match the raw file pattern are not part of the volume (stated)")
     p.add_argument("--preset", default="standard", help="preset name in configs/presets, or a YAML path")
@@ -185,6 +184,16 @@ def main(argv=None):
 
     # 1. the raw files
     from .check import scan
+    if a.file_pattern:
+        try:
+            ok = {"month", "day"} <= set(re.compile(a.file_pattern).groupindex)
+        except re.error as e:
+            say(f"em-pipe: --file-pattern is not a valid regular expression: {e}")
+            return 1
+        if not ok:
+            say("em-pipe: --file-pattern needs the named groups month and day (see raw.file_pattern in configs/example.yaml)")
+            return 1
+        base["raw"]["file_pattern"] = a.file_pattern
     file_re = re.compile(base["raw"]["file_pattern"])
     found, ignored = scan(raw_dir, file_re, base["raw"]["recursive"], out_dir)
     files = sorted(found)
@@ -194,16 +203,18 @@ def main(argv=None):
             "names set raw.file_pattern in a config of your own (configs/example.yaml)")
         return 1
     # Image stacks that are not read are data left out: that is a person's decision, never a silent one.
+    stop = []
     stray = [f for f in ignored if f.lower().endswith((".tif", ".tiff")) and not esb._TOKEN.search(os.path.basename(f))]
     if stray:
         say(f"{len(stray)} image files in {raw_dir} do not match the raw file pattern and would be left out, e.g. "
             f"{', '.join(stray[:4])}")
-        if not a.skip_unmatched:
-            say("If they are not part of the volume (e.g. joined copies of the per-day files), say so with "
-                "--skip-unmatched. If they are, they need a raw.file_pattern that matches them: write a config of "
-                "your own (configs/example.yaml) and use ./run_pipeline.sh.\nSTOPPED: nothing was written or submitted.")
-            return STOP
-        say("  left out, as stated with --skip-unmatched")
+        if a.skip_unmatched:
+            say("  left out, as stated with --skip-unmatched")
+        else:
+            say("  If they are not part of the volume (example images, joined copies of the per-day files), say so "
+                "with --skip-unmatched. If they are, give the pattern that matches them with --file-pattern "
+                "(raw.file_pattern, see configs/example.yaml).")
+            stop.append("image files that would be left out")
     shapes, unreadable = read_shapes(raw_dir, files)
     if not shapes:
         say(f"em-pipe: none of the {len(files)} raw files has a readable TIFF header, e.g. {files[0]}: "
@@ -228,8 +239,11 @@ def main(argv=None):
         say("\n".join(rep.lines()))
         if not rep.ok:
             say(esb.STOP_ADVICE)
-            say("STOPPED: nothing was written or submitted.")
-            return STOP
+            stop.append("EsB files missing or not matching")
+    if stop:
+        say(f"STOPPED ({'; '.join(stop)}): nothing was written or submitted.")
+        return STOP
+    if not a.no_esb:
         # 3. curtain direction
         if a.direction:
             direction = {"use": a.direction, "direction": a.direction,
@@ -242,29 +256,33 @@ def main(argv=None):
             say("STOPPED: nothing was written or submitted.")
             return STOP
 
-    # 4. the configs
-    text = config_text(a, preset, name, facts, len(files), rep, direction)
-    tmp = None
+    # 4. the configs: checked in a temporary folder first, so nothing is written that would not run
+    text, ctext = config_text(a, preset, name, facts, len(files), rep, direction), clahe_text(name)
+    targets = [(out_dir / "config.yaml", text)] + ([] if a.no_clahe else [(out_dir / "config_clahe.yaml", ctext)])
+    for path, t in targets:   # an existing config that says something else is never replaced
+        if path.exists() and yaml.safe_load(path.read_text()) != yaml.safe_load(t):
+            say(f"em-pipe: {path} exists and says something else: nothing was changed. Continue that run with  "
+                f"./run_pipeline.sh {path}  or choose another OUTPUT_DIR")
+            return 1
+    tmp = tempfile.TemporaryDirectory()
+    where = Path(tmp.name)
+    for path, t in targets:
+        (where / path.name).write_text(t)
+    # 5. the checks every run starts with (the EsB files were checked above)
+    for path, _ in targets:
+        res = preflight.validate(where / path.name, esb=False)
+        if not res.ok or res.warnings:
+            say(res.text(path))
+        if not res.ok:
+            say("STOPPED: nothing was written or submitted.")
+            return 1
     if a.dry_run:
-        tmp = tempfile.TemporaryDirectory()
-        where = Path(tmp.name)
         say(f"\n--- {out_dir / 'config.yaml'} (not written: --dry-run) ---\n{text}")
     else:
+        for path, t in targets:
+            _write(path, t)
         where = out_dir
-    cfg_path, clahe_path = where / "config.yaml", where / "config_clahe.yaml"
-    try:
-        _write(out_dir / "config.yaml", text, a.dry_run)
-        if not a.no_clahe:
-            _write(out_dir / "config_clahe.yaml", clahe_text(name), a.dry_run)
-    except SystemExit as e:
-        say(str(e))
-        return 1
-    if a.dry_run:
-        cfg_path.write_text(text)
-        clahe_path.write_text(clahe_text(name))
-
-    if not a.dry_run:   # for the QC page: what was found before the run
-        found_path = out_dir / "qc" / "em_pipe_detected.json"
+        found_path = out_dir / "qc" / "em_pipe_detected.json"     # for the QC page: what was found before the run
         found_path.parent.mkdir(parents=True, exist_ok=True)
         found_path.write_text(json.dumps({
             "written": f"{datetime.now():%Y-%m-%d %H:%M}", "raw": raw_text,
@@ -272,14 +290,7 @@ def main(argv=None):
                    f"{rep.summary()}; naming {rep.reference_to}",
             "direction": "" if direction is None else direction["message"],
             "direction_counts": None if direction is None else direction.get("counts")}, indent=1))
-
-    # 5. the checks every run starts with (the EsB files were checked above)
-    for path in [cfg_path] + ([] if a.no_clahe else [clahe_path]):
-        res = preflight.validate(path, esb=False)
-        if not res.ok or res.warnings:
-            say(res.text(path))
-        if not res.ok:
-            return 1
+    cfg_path, clahe_path = where / "config.yaml", where / "config_clahe.yaml"
     cfg = config_mod.load_config(cfg_path, step_defaults=config_mod.step_defaults())
     say("\nSlurm resources per job (automatic, from the detected sizes; explicit slurm: settings win):")
     for job in config_mod.JOBS:
@@ -335,8 +346,7 @@ def main(argv=None):
         say(f"\nsubmitted. Follow with  squeue --me ; logs in {out_dir / 'work' / 'logs'}.\n"
             f"The chain ends with the QC page {out_dir / 'qc' / f'summary_{name}.html'}: it says whether every check "
             "passed, or where the chain stopped and why.")
-    if tmp:
-        tmp.cleanup()
+    tmp.cleanup()
     return 0
 
 

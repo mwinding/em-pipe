@@ -96,8 +96,8 @@ def test_run_writes_the_config_and_submits_both_chains(tmp_path, raw, sbatch, ca
     assert jobs[-1]["job-name"] == "em-qc-summary" and jobs[-1]["dependency"].endswith(f":{1000 + k + 1}")
     assert "summary_vol.html" in text and (out / "qc" / "em_pipe_detected.json").exists()
     # again: the same config is kept and the chain can be submitted again; another name is refused
-    assert run(raw, out, "--name", "vol", "--dry-run") == 0
-    assert "exists and says the same: kept" in capsys.readouterr().out
+    assert run(raw, out, "--name", "vol", "--to", "check") == 0
+    assert "config.yaml exists and says the same: kept" in capsys.readouterr().out
     assert run(raw, out, "--name", "other", "--dry-run") == 1
     assert "exists and says something else: nothing was changed" in capsys.readouterr().out
 
@@ -109,7 +109,8 @@ def test_missing_esb_stops_before_anything_is_written(tmp_path, raw, sbatch, cap
     assert run(raw, out) == onecommand.STOP
     text = capsys.readouterr().out
     assert "4 of 8 EsB files present; 4 missing: M09_D25 (4 files)" in text and "--no-esb" in text
-    assert "STOPPED: nothing was written or submitted" in text and not out.exists() and not sbatch.exists()
+    assert "STOPPED (EsB files missing or not matching): nothing was written or submitted" in text
+    assert not out.exists() and not sbatch.exists()
     # stated: without decurtaining
     assert run(raw, out, "--no-esb", "--no-clahe") == 0
     user = yaml.safe_load((out / "config.yaml").read_text())
@@ -168,3 +169,27 @@ def test_image_files_that_would_be_left_out_stop_the_run(tmp_path, raw, sbatch, 
     assert "1 image files" in text and "M09_D24D25_tile0-0.tif" in text and "--skip-unmatched" in text
     assert run(raw, out, "--dry-run", "--skip-unmatched") == 0
     assert "left out, as stated with --skip-unmatched" in capsys.readouterr().out
+    # both reasons to stop are reported together: the EsB report is not hidden behind the first one
+    for f in (raw / "Backscatter").glob("M09_D25*"):
+        f.unlink()
+    assert run(raw, out, "--dry-run") == onecommand.STOP
+    text = capsys.readouterr().out
+    assert "4 missing: M09_D25 (4 files)" in text
+    assert "STOPPED (image files that would be left out; EsB files missing or not matching)" in text
+
+
+def test_file_pattern_for_other_names(tmp_path, sbatch, capsys):
+    """Raw files without a tile in their name (a single-tile phase) are part of the volume with the pattern given."""
+    import numpy as np
+    raw = tmp_path / "raw"
+    for name in ("M10_D16_part1.tif", "Backscatter/M10_D16_EsB_part1.tif"):
+        (raw / name).parent.mkdir(parents=True, exist_ok=True)
+        synth.write_imagej(raw / name, np.zeros((3, 8, 8), np.uint16), ["a", "b", "c"])
+    out = tmp_path / "out"
+    assert run(raw, out, "--dry-run") == 1 and "no file in" in capsys.readouterr().out
+    pattern = r"^M(?P<month>\d{2})_D(?P<day>\d{2})(?:_tile(?P<row>\d+)-(?P<col>\d+))?(?:_part(?P<part>\d+))?\.tif$"
+    assert run(raw, out, "--file-pattern", pattern, "--to", "check") == 0
+    user = yaml.safe_load((out / "config.yaml").read_text())
+    assert user["raw"] == {"file_pattern": pattern} and user["detected"]["slices"] == 3
+    assert "1 of 1 EsB files present" in capsys.readouterr().out
+    assert run(raw, out, "--file-pattern", "M(", "--dry-run") == 1

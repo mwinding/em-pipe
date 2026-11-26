@@ -73,8 +73,8 @@ def facts(shapes, groups):
 
 
 def _round(x):
-    """One decimal for real datasets, six for very small ones (so they do not round to 0)."""
-    return round(x, 1) if x >= 10 else round(x, 6)
+    """One decimal for real datasets, six significant digits for very small ones (never 0)."""
+    return round(x, 1) if x >= 10 else float(f"{x:.6g}")
 
 
 def check_facts(f):
