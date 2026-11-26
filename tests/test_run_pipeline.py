@@ -37,6 +37,9 @@ def env(tmp_path):
 def write_cfg(tmp_path, slurm_extra=None, **sections):
     slurm = {"mail_user": "someone@example.org", "preview": {"array": 4, "cpus": 2, "mem": "8G", "time": "01:00:00"},
              "render": {"array": 3, "partition": "ga100", "gres": "gpu:1"}, **(slurm_extra or {})}
+    # The config is checked before anything is submitted: raw_dir must hold a file matching raw.file_pattern.
+    (tmp_path / "raw").mkdir(exist_ok=True)
+    (tmp_path / "raw" / "M10_D06_tile0-0.tif").touch()
     return synth.write_config(tmp_path / "cfg.yaml", tmp_path / "raw", tmp_path / "out", slurm=slurm,
                               render={"num_scales": 3}, **sections)
 
@@ -229,7 +232,7 @@ def test_patchgrid_step_when_enabled(tmp_path, env):
     """patchgrid: one job between the overlaps merge and intensity, only when enabled."""
     env, log = env
     cfg = write_cfg(tmp_path, overlaps={"enabled": True, "patch_grid": 8}, patchgrid={"enabled": True},
-                    slurm_extra={"patchgrid": {"cpus": 4, "mem": "16G"}})
+                    intensity={"balance_source": "overlaps"}, slurm_extra={"patchgrid": {"cpus": 4, "mem": "16G"}})
     jobs = calls(run(cfg, env, "--from", "overlaps", "--dry-run").stdout.splitlines())
     assert [j["job-name"] for j in jobs][:4] == ["em-overlaps-run", "em-overlaps-merge", "em-patchgrid", "em-intensity"]
     pg = jobs[2]
@@ -240,3 +243,17 @@ def test_patchgrid_step_when_enabled(tmp_path, env):
     p = run(write_cfg(tmp_path, overlaps={"enabled": True}), env, "--from", "overlaps", "--dry-run")
     assert names(p.stdout)[:3] == ["em-overlaps-run", "em-overlaps-merge", "em-intensity"]
     assert "patchgrid.enabled is false: patchgrid skipped" in p.stderr
+
+
+def test_config_is_checked_before_anything_is_submitted(tmp_path, env):
+    """A misspelled key, settings that do not work together or a raw_dir without files: a message, no jobs."""
+    env, log = env
+    p = run(write_cfg(tmp_path, intensity={"balance_z_distnace": 1}), env, check=False)
+    assert p.returncode == 1 and "did you mean 'balance_z_distance'" in p.stderr and "Traceback" not in p.stderr
+    p = run(write_cfg(tmp_path, intensity={"balance_z_distance": 1}), env, "--dry-run", check=False)
+    assert p.returncode == 1 and "needs balance_tiles: true and balance_source: overlaps" in p.stderr and not p.stdout
+    cfg = write_cfg(tmp_path)
+    (tmp_path / "raw" / "M10_D06_tile0-0.tif").unlink()
+    p = run(cfg, env, check=False)
+    assert p.returncode == 1 and "no file matching raw.file_pattern" in p.stderr
+    assert not log.exists() and not (tmp_path / "out").exists()

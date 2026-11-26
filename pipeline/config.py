@@ -64,6 +64,7 @@ JOBS = ("check", "preview", "preview_merge", "refmask", "refmask_merge", "stitch
         "precomputed", "precomputed_verify", "upload", "upload_finish")
 ARRAY_JOBS = ("preview", "refmask", "stitch", "align", "overlaps", "zrelations", "refstats", "zcorrect", "render", "pyramid",
               "precomputed", "upload")
+SLURM_KEYS = ("mail_user",)   # keys of the slurm: section that are not jobs
 _SBATCH = {"cpus": "--cpus-per-task", "mem": "--mem", "time": "--time", "partition": "--partition",
            "gres": "--gres"}
 
@@ -160,6 +161,8 @@ def sbatch_args(cfg, job):
         raise ValueError(f"unknown job {job!r}; expected one of {JOBS}")
     slurm = cfg.get("slurm") or {}
     opts = slurm.get(job) or {}
+    if not isinstance(opts, dict):
+        raise ValueError(f"slurm.{job} must be a group of settings ({', '.join(('array', *_SBATCH))})")
     unknown = set(opts) - {"array", *_SBATCH}
     if unknown:
         raise ValueError(f"slurm.{job}: unknown keys {sorted(unknown)}")
@@ -183,14 +186,22 @@ def _main(argv=None):
         one value per line, step defaults included; JSON for non-strings (e.g. true, 7)
     python -m pipeline.config --config C --sbatch-args [JOB ...]
         one line per job (default: every job): the job, then its sbatch options, tab-separated
+    python -m pipeline.config --config C --validate
+        the checks run before anything is submitted (pipeline/preflight.py); exit code 1 on errors
     """
     p = argparse.ArgumentParser(description=_main.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", required=True)
     what = p.add_mutually_exclusive_group(required=True)
+    what.add_argument("--validate", action="store_true",
+                      help="check the config before a run (pipeline/preflight.py): unknown keys, settings that do "
+                           "not work together, raw_dir, EsB files; exit code 1 on errors")
     what.add_argument("--get", nargs="+", metavar="KEY", help="dotted keys, e.g. zcorrect.enabled")
     what.add_argument("--sbatch-args", nargs="*", metavar="JOB", choices=JOBS, help=f"jobs: {', '.join(JOBS)}")
     p.add_argument("--default", default="", help="--get: printed for keys that are not set")
     a = p.parse_args(argv)
+    if a.validate:
+        from . import preflight
+        return preflight.main([a.config])
     if a.sbatch_args is not None:
         cfg = load_config(a.config)
         for job in a.sbatch_args or JOBS:

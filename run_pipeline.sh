@@ -12,6 +12,8 @@
 # setting is true; zrelations only when intensity.balance_z_distance > 0.
 # Array sizes, CPUs, memory, time, partition and gres come from the config's slurm: section (see
 # configs/example.yaml); logs go to output_dir/work/logs/.
+# The config is checked first (python -m pipeline.config --config CONFIG --validate): with an unknown key, settings
+# that do not work together, a raw_dir without matching files or a missing EsB file, nothing is submitted.
 # Set EM_PIPE_SKIP_ENV=1 to skip sourcing slurm/env.sh (when the environment is already active).
 # render init exits 1 (cancelling render and pyramid) when its inputs changed since the volume was made,
 # e.g. after new data: re-create it with  sbatch slurm/render.sbatch CONFIG init --overwrite  (deletes
@@ -19,7 +21,7 @@
 set -eo pipefail
 
 STEPS="check preview refmask stitch align shading overlaps patchgrid zrelations refstats intensity zcorrect render pyramid export precomputed upload"
-usage() { sed -n '4,18p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "$1"; }
+usage() { sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//' >&2; exit "$1"; }
 
 CONFIG= SELECT= FROM= AFTER= DRY=0
 while [ $# -gt 0 ]; do
@@ -47,6 +49,10 @@ export EM_PIPE_ROOT=$PWD
 [ "${EM_PIPE_SKIP_ENV:-0}" = 1 ] || source slurm/env.sh
 
 cfg() { python -m pipeline.config --config "$CONFIG" "$@"; }
+
+# Before anything is submitted: unknown keys, settings that do not work together, raw_dir, and with
+# decurtaining from a reference detector the EsB file of every raw file (pipeline/preflight.py).
+python -m pipeline.preflight "$CONFIG" --quiet || exit 1
 
 wanted() {  # wanted STEP: is STEP selected?
   if [ -n "$SELECT" ]; then

@@ -430,8 +430,9 @@ def test_zrelations_step_when_the_joint_balance_is_on(tmp_path, env):  # noqa: F
     intensity.balance_z_distance > 0."""
     env, log = env
     cfg = write_cfg(tmp_path, overlaps={"enabled": True, "patch_grid": 8}, patchgrid={"enabled": True},
-                    refstats={"enabled": True}, intensity={"balance_source": "overlaps", "per_slice": False,
-                                                           "balance_z_distance": 1},
+                    refmask={"enabled": True}, refstats={"enabled": True},
+                    intensity={"balance_source": "overlaps", "per_slice": False,
+                               "balance_z_distance": 1},
                     slurm_extra={"zrelations": {"array": 3, "time": "00:30:00"}})
     jobs = calls(run(cfg, env, "--from", "patchgrid", "--dry-run").stdout.splitlines())
     assert [j["job-name"] for j in jobs][:6] == ["em-patchgrid", "em-zrelations-run", "em-zrelations-merge",
