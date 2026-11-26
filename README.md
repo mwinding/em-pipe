@@ -174,11 +174,20 @@ A local export serves like any volume: `python3 -m pipeline.serve FOLDER` lists 
 
   On a 487-slice 3x3-tile volume this cut the slice-wide flicker from 6.4 to 0.07 greys (rendered, measured
   with `tools/zflicker.py`), with the tiles as well matched as before and the `window: reference` standard held
-  more tightly (the reference samples no longer fall on slices that jumped). With `window: reference`, run refstats
-  after zrelations (run_pipeline.sh does), as it measures on the balanced scale. Check a dataset's flicker
-  before and after with `tools/zflicker.py --config` (no render needed) and look at x-z/y-z views
-  (`tools/ortho_views.py`). Tested on that volume; volumes of ~18,000 slices are being tested. `intensity.slice_level`
-  (a last per-slice shift) is a simpler fallback. Details: `dev/2026-11_a1001_flicker/`.
+  more tightly (the reference samples no longer fall on slices that jumped). It also runs on volumes of ~18,000
+  slices with several segments, tile-layout changes and seams (the solve takes about a minute; the zrelations
+  array under an hour): predicted slice-wide flicker 2.9 -> 0.04 and 0.9 -> 0.02 greys on two such volumes, and
+  1.8 -> 0.08 measured on a rendered test slab across a layout change, with the steps at segment changes and
+  seams no larger than with the per-slice balance.
+
+  **With `window: reference`, refstats must be run again for the z-balanced config** (its own `refstats.output`;
+  run_pipeline.sh runs it after zrelations): it measures the reference tissue on the balanced scale, and every
+  separately solved block (segment, seam) sits on its own scale. Statistics reused from a per-slice balance
+  misplace whole blocks (seen as a 26-grey step at a segment change in a test); intensity does not yet check
+  this. Check a dataset before rendering with `tools/zflicker.py --config` and
+  `dev/2026-11_a1001_flicker/scripts/breaks_flicker.py` (flicker and level steps around every break), and look
+  at x-z/y-z views (`tools/ortho_views.py`). `intensity.slice_level` (a last per-slice shift) is a simpler
+  fallback. Details: `dev/2026-11_a1001_flicker/`.
 - **patchgrid** needs `overlaps.patch_grid` > 0 (e.g. 8) and `intensity.balance_source: overlaps`.
   Setting or changing `overlaps.patch_grid` re-measures every overlap chunk; new shapes change the
   levels and the render plan (render init then asks for `--overwrite`, and render run refuses to go on). With patchgrid off and
