@@ -2,7 +2,7 @@
 counts and sizes, and whether each holds a Neuroglancer precomputed volume that looks complete (``info`` at its
 top; ``provenance`` too, as em-pipe's export writes it last). Read-only: nothing is written or deleted.
 
-    python tools/bucket_list.py gs://BUCKET[/PREFIX] [--credentials KEYFILE] [--depth 1]
+    python tools/bucket_list.py gs://BUCKET[/PREFIX] [--credentials KEYFILE] [--depth 1] [--names-only]
     python tools/bucket_list.py file:///path/to/folder                      (a local folder, e.g. for tests)
 
 --depth 2 also lists each folder's subfolders (e.g. a precomputed volume's scales). Credentials: a
@@ -42,6 +42,28 @@ def objects(location, credentials=DEFAULT_KEY):
         yield b.name[len(prefix):], int(b.size or 0)
 
 
+def top_level(location, credentials=DEFAULT_KEY):
+    """The names directly under ``location`` (folders end in /), without listing every object: quick on a
+    bucket that holds millions."""
+    if location.startswith("file://"):
+        root = Path(location.removeprefix("file://"))
+        return sorted(p.name + ("/" if p.is_dir() else "") for p in root.iterdir())
+    if not location.startswith("gs://"):
+        sys.exit(f"bucket_list: {location}: give gs://BUCKET[/PREFIX] or file:///path")
+    from google.cloud import storage
+    from google.oauth2 import service_account
+    bucket, _, prefix = location.removeprefix("gs://").partition("/")
+    prefix = prefix.strip("/") + "/" if prefix.strip("/") else ""
+    key = Path(credentials).expanduser()
+    if not key.is_file():
+        sys.exit(f"bucket_list: no key file at {key}")
+    creds = service_account.Credentials.from_service_account_file(str(key))
+    client = storage.Client(credentials=creds, project=creds.project_id)
+    it = client.list_blobs(bucket, prefix=prefix, delimiter="/")
+    names = [b.name[len(prefix):] for b in it]          # iterating fills it.prefixes page by page
+    return sorted(names + [p[len(prefix):] for p in it.prefixes])
+
+
 def summarise(items, depth=1):
     """{folder (the first ``depth`` path parts; '.' for objects at the top): [count, bytes, has info,
     has provenance]}; info / provenance count only at the folder's own top."""
@@ -72,7 +94,13 @@ def main(argv=None):
     p.add_argument("location", help="gs://BUCKET[/PREFIX] or file:///path")
     p.add_argument("--credentials", default=DEFAULT_KEY, help="service-account key file (never copied or printed)")
     p.add_argument("--depth", type=int, default=1, help="path parts that make a folder (default 1)")
+    p.add_argument("--names-only", action="store_true",
+                   help="only the names directly under the location (quick: objects are not counted)")
     a = p.parse_args(argv)
+    if a.names_only:
+        names = top_level(a.location, a.credentials)
+        print("\n".join(names) if names else f"bucket_list: nothing under {a.location}")
+        return 0
     rows = summarise(objects(a.location, a.credentials), max(1, a.depth))
     if not rows:
         print(f"bucket_list: nothing under {a.location}")

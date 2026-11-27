@@ -36,3 +36,10 @@ def test_main_prints_and_changes_nothing(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "volA" in out and "complete (info, provenance)" in out and "3 folders, 7 objects" in out
     assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before
+
+
+def test_names_only_lists_the_top_level(tmp_path, capsys):
+    _tree(tmp_path)
+    assert bl.top_level(f"file://{tmp_path}") == ["loose.txt", "volA/", "volB/"]
+    assert bl.main([f"file://{tmp_path}", "--names-only"]) == 0
+    assert capsys.readouterr().out.split() == ["loose.txt", "volA/", "volB/"]
