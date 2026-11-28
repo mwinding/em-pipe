@@ -16,9 +16,11 @@ inside it), in md5sum format, so a copy can be checked again later with
 
     cd DST && md5sum -c <manifest>
 
-It covers every file in DST (a file in DST that is not in the list fails verify), so a later run over the
-whole folder replaces it: one list per copied folder. While the chain runs, its bookkeeping (the file list
-and per-file checksums) is in DST.copy_verify/ next to DST; after a PASS that folder is removed (its
+It covers every file in DST that matches REGEX (such a file that is not in the list fails verify), so a
+later run with the same REGEX replaces it. Two runs into one DST with different patterns and manifests
+(e.g. one list per detector) keep apart. While the chain runs, its bookkeeping (the file list, REGEX and
+per-file checksums) is in DST.copy_verify/ next to DST, or, with --manifest, in <manifest name>.copy_verify/
+next to the manifest: give the same --manifest to every step. After a PASS that folder is removed (its
 checksums are in the manifest), after a FAIL it is kept to show what went wrong.
 
 Safety: it never deletes data (rsync without --delete; a failed copy leaves rsync's partial file for the
@@ -55,7 +57,11 @@ def check_paths(src, dst):
     return s, d
 
 
-def work_dir(dst):
+def work_dir(dst, manifest=None):
+    """The bookkeeping folder: named after the manifest when one is given (two runs into one DST keep apart)."""
+    if manifest:
+        m = Path(manifest).resolve()
+        return m.parent / f"{m.name.removesuffix('.md5')}.copy_verify"
     d = Path(dst).resolve()
     return d.parent / f"{d.name}.copy_verify"
 
@@ -67,21 +73,22 @@ def manifest_path(dst, manifest=None):
     return d.parent / f"{d.name}.md5"
 
 
-def plan(src, dst, pattern=r".*\.tif$"):
+def plan(src, dst, pattern=r".*\.tif$", manifest=None):
     s, d = check_paths(src, dst)
     rx = re.compile(pattern)
     files = sorted(p.relative_to(s).as_posix() for p in s.rglob("*") if p.is_file() and rx.search(p.relative_to(s).as_posix()))
     if not files:
         sys.exit(f"copy_verify: no files under {src} match {pattern!r}")
-    w = work_dir(d)
+    w = work_dir(d, manifest)
     w.mkdir(parents=True, exist_ok=True)
     (w / "files.txt").write_text("\n".join(files) + "\n")
+    (w / "pattern.txt").write_text(pattern + "\n")
     print(f"copy_verify: {len(files)} files to copy ({sum((s / f).stat().st_size for f in files) / 1e9:.1f} GB); list in {w / 'files.txt'}")
     return files
 
 
-def file_list(dst):
-    p = work_dir(dst) / "files.txt"
+def file_list(dst, manifest=None):
+    p = work_dir(dst, manifest) / "files.txt"
     if not p.exists():
         sys.exit(f"copy_verify: {p} not found: run plan first")
     return [f for f in p.read_text().splitlines() if f]
@@ -117,8 +124,8 @@ def md5_file(path):
     return h.hexdigest()
 
 
-def md5_one(src, dst, k, rel):
-    out = work_dir(dst) / "md5"
+def md5_one(src, dst, k, rel, manifest=None):
+    out = work_dir(dst, manifest) / "md5"
     out.mkdir(parents=True, exist_ok=True)
     res = {}
     threads = [threading.Thread(target=lambda side, root: res.__setitem__(side, md5_file(Path(root) / rel)), args=(side, root))
@@ -136,7 +143,9 @@ def md5_one(src, dst, k, rel):
 
 def verify(src, dst, manifest=None):
     s, d = check_paths(src, dst)
-    files, out = file_list(d), work_dir(d) / "md5"
+    w = work_dir(d, manifest)
+    files, out = file_list(d, manifest), w / "md5"
+    rx = re.compile((w / "pattern.txt").read_text().strip()) if (w / "pattern.txt").exists() else None
     problems, lines = [], []
     for k, rel in enumerate(files):
         got = {}
@@ -150,8 +159,9 @@ def verify(src, dst, manifest=None):
         else:
             lines.append(f"{got['dst']}  ./{rel}")
     listed = set(files)
-    extra = sorted(p.relative_to(d).as_posix() for p in d.rglob("*") if p.is_file() and p.relative_to(d).as_posix() not in listed)
-    problems += [f"extra file in DST, not in the list: {e}" for e in extra]
+    present = (p.relative_to(d).as_posix() for p in d.rglob("*") if p.is_file())
+    extra = sorted(r for r in present if r not in listed and (rx is None or rx.search(r)))
+    problems += [f"extra file in DST matching the pattern, not in the list: {e}" for e in extra]
     if problems:
         print("copy_verify: FAIL", *problems, "no manifest written", sep="\n  ")
         return 1
@@ -159,22 +169,23 @@ def verify(src, dst, manifest=None):
     tmp = m.with_name(m.name + ".part")
     tmp.write_text("\n".join(lines) + "\n")
     tmp.replace(m)
-    shutil.rmtree(work_dir(d))            # its checksums are in the manifest now
+    shutil.rmtree(w)                      # its checksums are in the manifest now
     print(f"copy_verify: PASS: all {len(files)} files byte-identical (md5). Manifest: {m}\n"
           f"  check again later: cd {d} && md5sum -c {m}")
     return 0
 
 
 def submit(args):
-    files = plan(args.src, args.dst, args.pattern)
+    files = plan(args.src, args.dst, args.pattern, args.manifest)
     n, here = len(files), Path(__file__).resolve().parents[1]
     sb = ["sbatch", "--parsable", "--chdir", str(here)]
     common = [str(Path(args.src).resolve()), str(Path(args.dst).resolve())]
-    vopt = ["--manifest", str(Path(args.manifest).resolve())] if args.manifest else []
+    if args.manifest:                     # every step finds the bookkeeping by it
+        common += ["--manifest", str(Path(args.manifest).resolve())]
     cpy = sb + ["--job-name=copy-verify-copy", f"--array=0-{n - 1}%{args.parallel}", "slurm/copy_verify.sbatch", "copy",
                 *common] + (["--group-rw"] if args.group_rw else [])
     md5 = sb + ["--job-name=copy-verify-md5", f"--array=0-{n - 1}%{args.parallel}", "slurm/copy_verify.sbatch", "md5", *common]
-    ver = sb + ["--job-name=copy-verify-check", "slurm/copy_verify.sbatch", "verify", *common, *vopt]
+    ver = sb + ["--job-name=copy-verify-check", "slurm/copy_verify.sbatch", "verify", *common]
     if args.dry_run:
         for c in (cpy, md5, ver):
             print(" ".join(c))
@@ -196,29 +207,30 @@ def main(argv=None):
     ap.add_argument("--group-rw", action="store_true", help="copies rw for owner and group only (0660)")
     ap.add_argument("--parallel", type=int, default=6, help="submit: array tasks running at once (default 6)")
     ap.add_argument("--dry-run", action="store_true", help="submit: print the sbatch commands only")
-    ap.add_argument("--manifest", help="where the checksum list goes (default DST.md5 next to DST)")
+    ap.add_argument("--manifest", help="where the checksum list goes (default DST.md5 next to DST); give it to every "
+                    "step: the bookkeeping is named after it")
     a = ap.parse_args(argv)
     check_paths(a.src, a.dst)
     if a.cmd == "plan":
-        plan(a.src, a.dst, a.pattern)
+        plan(a.src, a.dst, a.pattern, a.manifest)
         return 0
     if a.cmd == "submit":
         return submit(a)
     if a.cmd == "run":
-        files = plan(a.src, a.dst, a.pattern)
+        files = plan(a.src, a.dst, a.pattern, a.manifest)
         for rel in files:
             copy_one(a.src, a.dst, rel, a.group_rw)
         for k, rel in enumerate(files):
-            md5_one(a.src, a.dst, k, rel)
+            md5_one(a.src, a.dst, k, rel, a.manifest)
         return verify(a.src, a.dst, a.manifest)
-    files = file_list(a.dst)
+    files = file_list(a.dst, a.manifest)
     if a.cmd == "verify":
         return verify(a.src, a.dst, a.manifest)
     for k in indices(a, len(files)):
         if a.cmd == "copy":
             copy_one(a.src, a.dst, files[k], a.group_rw)
         else:
-            md5_one(a.src, a.dst, k, files[k])
+            md5_one(a.src, a.dst, k, files[k], a.manifest)
     return 0
 
 

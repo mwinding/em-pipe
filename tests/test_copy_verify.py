@@ -39,15 +39,43 @@ def test_run_copies_verifies_and_writes_manifest(src, tmp_path):
 def test_manifest_elsewhere_and_bookkeeping_kept_after_a_fail(src, tmp_path):
     dst = tmp_path / "raw" / "Backscatter"
     listed = tmp_path / "raw_backscatter.md5"                          # next to the raw folder, not inside it
-    cv.main(["plan", str(src), str(dst)])
-    cv.main(["copy", str(src), str(dst)])
-    cv.main(["md5", str(src), str(dst), "--index", "0"])
-    assert cv.main(["verify", str(src), str(dst), "--manifest", str(listed)]) == 1
-    assert cv.work_dir(dst).is_dir() and not listed.exists()           # kept to show what went wrong
-    cv.main(["md5", str(src), str(dst), "--index", "1"])
-    assert cv.main(["verify", str(src), str(dst), "--manifest", str(listed)]) == 0
+    m = ["--manifest", str(listed)]
+    cv.main(["plan", str(src), str(dst), *m])
+    assert cv.work_dir(dst, listed) == tmp_path / "raw_backscatter.copy_verify"
+    cv.main(["copy", str(src), str(dst), *m])
+    cv.main(["md5", str(src), str(dst), "--index", "0", *m])
+    assert cv.main(["verify", str(src), str(dst), *m]) == 1
+    assert cv.work_dir(dst, listed).is_dir() and not listed.exists()   # kept to show what went wrong
+    cv.main(["md5", str(src), str(dst), "--index", "1", *m])
+    assert cv.main(["verify", str(src), str(dst), *m]) == 0
     assert [ln.split("  ")[1] for ln in listed.read_text().splitlines()] == ["./a.tif", "./sub/b.tif"]
-    assert not cv.manifest_path(dst).exists() and not cv.work_dir(dst).exists()
+    assert not cv.manifest_path(dst).exists() and not cv.work_dir(dst, listed).exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["raw", "raw_backscatter.md5", "src"]
+
+
+def test_one_list_per_detector_in_one_folder(tmp_path):
+    raw = tmp_path / "facility" / "VOL"
+    for rel in ("M01_D01_tile0-0.tif", "Approach/M01_D02_tile0-0.tif", "Backscatter/M01_D01_EsB_tile0-0.tif",
+                "Approach/Backscatter/M01_D02_EsB_tile0-0.tif", "uCT datasets/scan.tif"):
+        (raw / rel).parent.mkdir(parents=True, exist_ok=True)
+        (raw / rel).write_bytes(rel.encode() * 50)
+    dst, inlens, esb = tmp_path / "lab" / "VOL", tmp_path / "lab" / "VOL.md5", tmp_path / "lab" / "VOL_backscatter.md5"
+    runs = [(r"^(?!(.*/)?Backscatter/).*\.tif$", inlens), (r"(^|/)Backscatter/[^/]*\.tif$", esb)]
+    for pattern, listed in runs:                                       # both planned before either verifies
+        cv.main(["plan", str(raw), str(dst), "--pattern", pattern, "--manifest", str(listed)])
+    for _, listed in runs:
+        cv.main(["copy", str(raw), str(dst), "--manifest", str(listed)])
+        cv.main(["md5", str(raw), str(dst), "--manifest", str(listed)])
+    for _, listed in runs:
+        assert cv.main(["verify", str(raw), str(dst), "--manifest", str(listed)]) == 0
+    names = lambda p: sorted(ln.split("  ")[1] for ln in p.read_text().splitlines())
+    assert names(inlens) == ["./Approach/M01_D02_tile0-0.tif", "./M01_D01_tile0-0.tif", "./uCT datasets/scan.tif"]
+    assert names(esb) == ["./Approach/Backscatter/M01_D02_EsB_tile0-0.tif", "./Backscatter/M01_D01_EsB_tile0-0.tif"]
+    assert sorted(p.name for p in dst.parent.iterdir()) == ["VOL", "VOL.md5", "VOL_backscatter.md5"]   # no folders left
+    (dst / "Backscatter" / "M01_D03_EsB_tile0-0.tif").write_bytes(b"x")   # a stray EsB file fails only the EsB list
+    cv.main(["plan", str(raw), str(dst), "--pattern", runs[1][0], "--manifest", str(esb)])
+    cv.main(["md5", str(raw), str(dst), "--manifest", str(esb)])
+    assert cv.main(["verify", str(raw), str(dst), "--manifest", str(esb)]) == 1
 
 
 def test_mismatch_is_detected_and_no_manifest(src, tmp_path):
@@ -67,11 +95,13 @@ def test_missing_checksum_and_extra_file_fail_without_deleting(src, tmp_path):
     cv.main(["md5", str(src), str(dst), "--index", "0"])               # file 1 never checksummed
     assert cv.main(["verify", str(src), str(dst)]) == 1
     cv.main(["md5", str(src), str(dst), "--index", "1"])
-    (dst / "stray.bin").write_bytes(b"x")
+    (dst / "stray.tif").write_bytes(b"x")
     assert cv.main(["verify", str(src), str(dst)]) == 1
-    assert (dst / "stray.bin").exists()                                # flagged, not deleted
-    (dst / "stray.bin").rename(tmp_path / "stray.bin")
+    assert (dst / "stray.tif").exists()                                # flagged, not deleted
+    (dst / "stray.tif").rename(tmp_path / "stray.tif")
+    (dst / "notes.txt").write_text("not a .tif: outside this list's pattern")
     assert cv.main(["verify", str(src), str(dst)]) == 0
+    assert (dst / "notes.txt").exists()
 
 
 @pytest.mark.parametrize("make_dst", [lambda s: s / "inside", lambda s: s, lambda s: s.parent])
